@@ -1,0 +1,25 @@
+{
+  "name": "pi-computer-control",
+  "version": "0.1.0",
+  "description": "Pi extension: let the AI see and operate the real desktop (screenshot, click, drag, type incl. CJK, key combos, scroll).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "computer-use",
+    "desktop-automation",
+    "windows"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "author": "Nick12138"
+}

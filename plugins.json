@@ -8,7 +8,11 @@
       "icon": "🌐",
       "version": "1.10.0",
       "author": "BetterWright Project",
-      "tags": ["浏览器", "browser", "web"],
+      "tags": [
+        "浏览器",
+        "browser",
+        "web"
+      ],
       "install": {
         "type": "npm",
         "source": "npm:betterwright"
@@ -21,7 +25,10 @@
       "icon": "🔍",
       "version": "0.1.0",
       "author": "Nick12138",
-      "tags": ["搜索", "web"],
+      "tags": [
+        "搜索",
+        "web"
+      ],
       "install": {
         "type": "repo",
         "path": "packages/pi-web"
@@ -46,9 +53,18 @@
           "default": "auto",
           "description": "auto = 有 Tavily Key 用 Tavily、失败自动回退 Exa；强制选择后不再回退，便于排查问题。",
           "options": [
-            { "value": "auto", "label": "自动（Tavily 优先，失败回退 Exa）" },
-            { "value": "tavily", "label": "仅 Tavily" },
-            { "value": "exa", "label": "仅 Exa MCP（免费）" }
+            {
+              "value": "auto",
+              "label": "自动（Tavily 优先，失败回退 Exa）"
+            },
+            {
+              "value": "tavily",
+              "label": "仅 Tavily"
+            },
+            {
+              "value": "exa",
+              "label": "仅 Exa MCP（免费）"
+            }
           ]
         }
       ]
@@ -60,7 +76,10 @@
       "icon": "📝",
       "version": "0.1.0",
       "author": "Nick12138",
-      "tags": ["OCR", "图片识别"],
+      "tags": [
+        "OCR",
+        "图片识别"
+      ],
       "install": {
         "type": "repo",
         "path": "packages/pi-ocr"
@@ -95,7 +114,11 @@
       "icon": "👁",
       "version": "0.1.0",
       "author": "Nick12138",
-      "tags": ["视觉", "图片理解", "多模态"],
+      "tags": [
+        "视觉",
+        "图片理解",
+        "多模态"
+      ],
       "install": {
         "type": "repo",
         "path": "packages/pi-vision"
@@ -140,6 +163,24 @@
           "description": "单次视觉调用超时时间，超时后自动回退下一个模型。"
         }
       ]
+    },
+    {
+      "id": "pi-computer-control",
+      "name": "电脑控制",
+      "description": "让 AI 直接操作电脑：截图看屏幕、移动/点击/双击/拖拽鼠标、输入文字（含中文等 Unicode）、组合键、滚轮滚动。零原生依赖（持久化 PowerShell 内嵌 C# 后端，SendInput + GDI 截图），物理像素坐标、支持多显示器。仅 Windows。",
+      "icon": "🖥️",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "电脑控制",
+        "computer-use",
+        "windows",
+        "自动化"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-computer-control"
+      }
     }
   ]
 }
