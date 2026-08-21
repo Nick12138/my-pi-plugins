@@ -126,12 +126,13 @@
       "config": [
         {
           "key": "visionModel",
-          "type": "text",
+          "type": "select",
           "label": "默认视觉模型",
           "env": "PI_VISION_MODEL",
           "required": false,
-          "placeholder": "provider/modelId，例如 openai/gpt-4o-mini",
-          "description": "默认使用的视觉模型（需在 models.json 中已配置且 input 包含 image）。留空则自动选择注册表中第一个可用的识图模型。"
+          "default": "",
+          "optionsSource": "pi:vision-models",
+          "description": "默认使用的视觉模型。选项由 PiDeck 根据本机已配置且支持图片输入的模型动态生成；选“自动选择”则由插件自动挑选第一个可用的识图模型。"
         },
         {
           "key": "visionFallbackModels",
