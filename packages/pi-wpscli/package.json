@@ -1,0 +1,18 @@
+{
+  "name": "pi-wpscli",
+  "version": "0.1.0",
+  "description": "WPS CLI plugin for pi: PDF→Word (scanned OCR), Office→PDF, pdfinfo/compress/watermark, photo/pdf and pdf→image/markdown conversions via local wpscli.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

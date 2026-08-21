@@ -181,6 +181,30 @@
         "type": "repo",
         "path": "packages/pi-computer-control"
       }
+    },
+    {
+      "id": "pi-wpscli",
+      "name": "WPS-CLI",
+      "description": "封装本机 WPS 命令行（wpscli）：扫描件 OCR 转可编辑 Word、Office 转 PDF、PDF 信息/压缩/水印、图片与 PDF 互转、PDF 转 Markdown。无需密钥，依赖 WPS Office 及会员能力。",
+      "icon": "🖨️",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["WPS", "PDF", "转换", "OCR"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-wpscli"
+      },
+      "config": [
+        {
+          "key": "wpscliPath",
+          "type": "text",
+          "label": "wpscli 路径（可选）",
+          "env": "WPSCLI_PATH",
+          "required": false,
+          "placeholder": "C:\\Users\\…\\WPS Office\\12.1.0.xxxxx\\clitool\\wpscli.exe",
+          "description": "留空则自动定位（PATH → 最新版 WPS 安装目录）；找不到时才需要填完整路径。"
+        }
+      ]
     }
   ]
 }
