@@ -142,26 +142,6 @@
           "required": false,
           "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
           "description": "默认模型失败时按顺序回退的备用视觉模型列表，英文逗号分隔。"
-        },
-        {
-          "key": "visionMaxTokens",
-          "type": "text",
-          "label": "最大输出 Token",
-          "env": "PI_VISION_MAX_TOKENS",
-          "required": false,
-          "placeholder": "4096",
-          "default": "4096",
-          "description": "单次视觉调用的最大输出 token 数。"
-        },
-        {
-          "key": "visionTimeoutMs",
-          "type": "text",
-          "label": "超时时间（毫秒）",
-          "env": "PI_VISION_TIMEOUT_MS",
-          "required": false,
-          "placeholder": "90000",
-          "default": "90000",
-          "description": "单次视觉调用超时时间，超时后自动回退下一个模型。"
         }
       ]
     },

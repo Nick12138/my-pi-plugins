@@ -33,12 +33,17 @@ see_image({ image, prompt, model? })
 
 | 环境变量 | 控件类型 | 说明 |
 | --- | --- | --- |
-| `PI_VISION_MODEL` | text | 默认视觉模型，格式 `provider/modelId`，如 `openai/gpt-4o-mini`；留空自动选可用的视觉模型 |
+| `PI_VISION_MODEL` | select（视觉模型动态单选） | 默认视觉模型；选“自动选择”则由插件自动挑选可用识图模型 |
 | `PI_VISION_FALLBACK_MODELS` | text | 回退视觉模型列表，英文逗号分隔，按顺序尝试 |
-| `PI_VISION_MAX_TOKENS` | text | 单次视觉调用最大输出 token，默认 4096 |
-| `PI_VISION_TIMEOUT_MS` | text | 单次视觉调用超时毫秒数，默认 90000 |
 
-配置项与仓库根目录 [plugins.json](../../plugins.json) 中的 `config` 声明一一对应。
+另有两个**仅供高级用户**的环境变量（不在配置界面显示，留空走内置默认值）：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PI_VISION_MAX_TOKENS` | 4096 | 单次视觉调用最大输出 token 数 |
+| `PI_VISION_TIMEOUT_MS` | 90000 | 单次视觉调用超时毫秒数，超时后自动回退下一个模型 |
+
+配置界面的选项与仓库根目录 [plugins.json](../../plugins.json) 中的 `config` 声明一一对应。
 工具调用的 `model` 参数优先级高于环境变量。
 
 模型需在 pi 的模型注册表中已配置（`~/.pi/agent/models.json`），且 `input` 数组包含 `"image"`。
