@@ -24,6 +24,7 @@ my-pi-plugins/
 | 插件 | 说明 |
 | --- | --- |
 | **🔍 [pi-web](packages/pi-web)** | 极简联网搜索：Tavily（需 key）优先、免费 Exa MCP 兜底，自动回退 |
+| **📝 [OCR](packages/pi-ocr)** | 百度智能云 OCR 图片文字识别（标准版）、方向检测、证照关键词提示 |
 
 ## 手动安装（不走 PiDeck 时）
 

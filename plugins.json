@@ -39,6 +39,41 @@
           ]
         }
       ]
+    },
+    {
+      "id": "pi-ocr",
+      "name": "OCR",
+      "description": "百度智能云 OCR 图片文字识别（通用识别标准版，每天 5 万次免费）：自动方向检测，证照关键词提示专用接口交叉核对。",
+      "icon": "📝",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["OCR", "图片识别"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-ocr"
+      },
+      "config": [
+        {
+          "key": "baiduOcrApiKey",
+          "type": "text",
+          "label": "API Key",
+          "env": "BAIDU_OCR_API_KEY",
+          "secret": true,
+          "required": true,
+          "placeholder": "在 console.bce.baidu.com/ai 创建 OCR 应用后获取",
+          "description": "百度智能云 OCR 应用的 API Key（文字识别 → 应用列表 → 创建应用）。"
+        },
+        {
+          "key": "baiduOcrSecretKey",
+          "type": "text",
+          "label": "Secret Key",
+          "env": "BAIDU_OCR_SECRET_KEY",
+          "secret": true,
+          "required": true,
+          "placeholder": "与 API Key 同页面获取",
+          "description": "百度智能云 OCR 应用的 Secret Key。"
+        }
+      ]
     }
   ]
 }

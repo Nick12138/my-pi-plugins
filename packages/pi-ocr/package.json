@@ -1,0 +1,18 @@
+{
+  "name": "pi-ocr",
+  "version": "0.1.0",
+  "description": "Baidu OCR plugin for pi: general text recognition (standard/accurate) with direction detection via BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
