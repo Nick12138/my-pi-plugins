@@ -1,0 +1,44 @@
+{
+  "specVersion": 1,
+  "plugins": [
+    {
+      "id": "pi-web",
+      "name": "联网搜索",
+      "description": "极简联网搜索：配置 Tavily Key 后优先用 Tavily，失败自动回退免费的 Exa MCP；什么都不配也能开箱即用。",
+      "icon": "🔍",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["搜索", "web"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-web"
+      },
+      "config": [
+        {
+          "key": "tavilyApiKey",
+          "type": "text",
+          "label": "Tavily API Key",
+          "env": "TAVILY_API_KEY",
+          "secret": true,
+          "required": false,
+          "placeholder": "tvly-...",
+          "description": "填上后默认使用 Tavily 搜索（有免费额度）；留空则使用免费的 Exa MCP，开箱即用。"
+        },
+        {
+          "key": "defaultProvider",
+          "type": "select",
+          "label": "默认搜索引擎",
+          "env": "PI_WEB_PROVIDER",
+          "required": false,
+          "default": "auto",
+          "description": "auto = 有 Tavily Key 用 Tavily、失败自动回退 Exa；强制选择后不再回退，便于排查问题。",
+          "options": [
+            { "value": "auto", "label": "自动（Tavily 优先，失败回退 Exa）" },
+            { "value": "tavily", "label": "仅 Tavily" },
+            { "value": "exa", "label": "仅 Exa MCP（免费）" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,107 +1,117 @@
 # my-pi-plugins
 
-我的 pi coding agent 插件集合仓库。一个仓库装所有插件，一次安装全部加载；
-只想要其中某个插件时，可在 `settings.json` 里按路径过滤（见下文[按需加载](#按需加载)）。
+我的 pi coding agent 插件集合仓库，同时也是 **PiDeck 插件库**的数据源：
+仓库根目录的 [`plugins.json`](plugins.json) 是机器可读的注册清单，
+PiDeck 前端直接读取它渲染卡片、执行安装/启用/禁用、自动生成配置界面。
+
+## 目录结构
+
+```
+my-pi-plugins/
+├── plugins.json            # 👈 插件注册清单（卡片元数据 + 安装源 + 配置规范）
+├── packages/
+│   └── pi-web/             # 一个插件 = packages/ 下的一个目录（标准 pi package）
+│       ├── package.json    # pi manifest（pi.extensions 指向 ./extensions）
+│       ├── extensions/
+│       │   └── pi-web.ts   # 插件实现
+│       └── README.md
+├── package.json            # 仓库级 pi manifest（glob 加载所有插件，供最简安装）
+└── README.md
+```
 
 ## 插件一览
 
-| 插件 | 文件 | 说明 |
-| --- | --- | --- |
-| **pi-web** | [extensions/pi-web.ts](extensions/pi-web.ts) | 极简联网搜索：Tavily（需 key）+ Exa MCP（免费免 key），自动选择、失败自动回退 |
+| 插件 | 说明 |
+| --- | --- |
+| **🔍 [pi-web](packages/pi-web)** | 极简联网搜索：Tavily（需 key）优先、免费 Exa MCP 兜底，自动回退 |
 
-## 安装
+## 手动安装（不走 PiDeck 时）
+
+整个仓库一次装全（随后可用 `pi config` 开关单个插件）：
 
 ```bash
 pi install git:github.com/Nick12138/my-pi-plugins
 ```
 
-更新：
-
-```bash
-pi update
-```
-
-### 按需加载
-
-在 `~/.pi/agent/settings.json`（或项目 `.pi/settings.json`）中用对象形式只启用指定插件：
+只装某个插件（`~/.pi/agent/settings.json` 对象形式 + 过滤路径，**PiDeck 的单插件安装就是生成这段**）：
 
 ```json
 {
   "packages": [
     {
       "source": "git:github.com/Nick12138/my-pi-plugins",
-      "extensions": ["extensions/pi-web.ts"]
+      "extensions": ["packages/pi-web/extensions/**"]
     }
   ]
 }
 ```
 
-也可以正常全装，然后用 `pi config` 交互式开关单个插件。
-
 ---
 
-## pi-web
+## 插件库规范（plugins.json）
 
-一个文件、零依赖的联网搜索插件。只暴露一个工具 `web_search`：
+新增插件唯一的"注册动作"：在 `plugins.json` 的 `plugins` 数组里加一条。
+前端不需要为任何插件写专属代码。
 
-```
-web_search({ query, numResults?, provider? })
-```
+### 插件条目字段
 
-| 参数 | 说明 |
-| --- | --- |
-| `query` | 搜索词（必填） |
-| `numResults` | 返回条数，1–10，默认 5 |
-| `provider` | `"auto"`（默认）/ `"tavily"` / `"exa"` |
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | ✓ | 唯一标识，小写字母/数字/连字符，如 `pi-web` |
+| `name` | string | ✓ | 卡片标题 |
+| `description` | string | ✓ | 卡片描述（一两句话） |
+| `icon` | string | ✓ | 卡片图标：emoji（如 `"🔍"`）或本仓库图片相对路径 |
+| `version` | string | ✓ | 展示用版本号 |
+| `author` | string | - | 作者 |
+| `tags` | string[] | - | 分类标签 |
+| `install` | object | ✓ | 安装源，见下 |
+| `config` | ConfigItem[] | - | **省略 = 该插件无需配置** |
 
-### 引擎选择逻辑
+### 安装源（install）
 
-```
-auto 模式：
-  配置了 TAVILY_API_KEY → 用 Tavily
-    └─ Tavily 失败 → 自动回退 Exa MCP
-  没配置 → 直接用 Exa MCP（免费，无需注册）
-```
+```jsonc
+// 代码在本仓库内（最常用）
+{ "type": "repo", "path": "packages/pi-web" }
 
-- **Exa MCP**（`https://mcp.exa.ai/mcp`）：Exa 官方的免费托管 MCP 端点，完全不用配置。
-- **Tavily**：质量更高的商业搜索 API，有免费额度；配置环境变量即自动启用。
+// npm 包
+{ "type": "npm", "source": "npm:xxx" }
 
-注意：**显式指定 `provider="tavily"` 时不会回退**，失败会直接报 Tavily 的错误——方便排查 key 是否配置正确。
-
-### 配置 Tavily
-
-```bash
-# Bash / WSL
-export TAVILY_API_KEY=tvly-...
-
-# Windows PowerShell（当前会话）
-$env:TAVILY_API_KEY = "tvly-..."
-
-# Windows（永久写入用户环境变量）
-setx TAVILY_API_KEY "tvly-..."
+// git 仓库
+{ "type": "git", "source": "git:github.com/user/repo" }
 ```
 
-不配就能用——会走免费的 Exa MCP。
+- `type: "repo"`：`path` 指向本仓库内一个标准 pi package 目录。安装 = 把本仓库以
+  git 源加入 `settings.json`，并用对象形式把 `extensions` 过滤到该 path（见上面的示例）。
+- `type: "npm" / "git"`：`source` 原样写入 `settings.json` 的 `packages`。
+- 启用/禁用 = 在 `settings.json` 中增删/调过滤条目（或调 `pi config` 等价逻辑）。
 
-### 与 pi-web-access 的冲突
+### 配置规范（config）
 
-本插件和 `pi-web-access` 都注册名为 `web_search` 的工具，**不要同时启用**。如果装过 pi-web-access，请从 settings.json 的 `packages` 中移除 `npm:pi-web-access`。
+**只有两种控件：`text`（填内容）和 `select`（单选）。**
+配置值由前端持久化、启动 pi 时以**环境变量**注入（`env` 字段决定变量名），
+插件代码内一律 `process.env[<env>]` 读取——插件之间零耦合。
 
----
+每项字段：
 
-## 添加新插件
+| 字段 | 适用 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `key` | 全部 | ✓ | 表单字段唯一键（插件内唯一） |
+| `type` | 全部 | ✓ | `"text"` 或 `"select"` |
+| `label` | 全部 | ✓ | 控件显示名 |
+| `env` | 全部 | ✓ | 注入用的环境变量名 |
+| `secret` | text | - | `true` = 密码样式输入框，界面不回显明文 |
+| `required` | 全部 | - | 是否必填（默认 false） |
+| `placeholder` | text | - | 输入框占位 |
+| `default` | 全部 | - | 默认值（select 请填某个 option 的 value） |
+| `options` | select | ✓ | `[{ "value": "...", "label": "..." }]` |
+| `description` | 全部 | - | 控件下方的帮助文字 |
 
-在 `extensions/` 下新增一个 `.ts` 文件（默认导出 `ExtensionAPI` 工厂函数）即会被自动加载：
+### 新增插件 checklist
 
-```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ /* ... */ });
-}
-```
-
-参考官方文档：[extensions.md](https://github.com/earendil-works/pi-coding-agent) · [packages.md](https://github.com/earendil-works/pi-coding-agent)
+1. `packages/<id>/` 里写插件（必须有 `package.json` 带 `pi` manifest）
+2. `plugins.json` 加一条条目（需要配置就填 `config`）
+3. 插件代码用 `process.env[...]` 读配置；参数入参的优先级应高于环境变量（用户临时覆盖）
+4. 提交推送——前端拉取清单即生效，以及仓库级 `pi update` 也能拿到
 
 ## License
 

@@ -9,6 +9,12 @@
  * If Tavily fails (network, HTTP error, bad response) it falls back to
  * Exa MCP automatically — unless the caller forced provider="tavily".
  *
+ * Configuration (environment variables, usually set from the plugin's
+ * config UI — see plugins.json in the repo root):
+ *   - TAVILY_API_KEY    : enables Tavily (text, secret)
+ *   - PI_WEB_PROVIDER   : default provider, "auto" | "tavily" | "exa" (select)
+ * The tool-call `provider` argument always overrides PI_WEB_PROVIDER.
+ *
  * Registering `web_search` conflicts with the `pi-web-access` package;
  * enable only one of them.
  */
@@ -221,7 +227,10 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal) {
 			const numResults = clampNumResults(params.numResults);
 			const tavilyKey = process.env.TAVILY_API_KEY?.trim() || null;
-			const choice = (params.provider ?? "auto") as "auto" | Provider;
+			const envProvider = process.env.PI_WEB_PROVIDER?.trim();
+			const envChoice =
+				envProvider === "tavily" || envProvider === "exa" || envProvider === "auto" ? envProvider : undefined;
+			const choice = (params.provider ?? envChoice ?? "auto") as "auto" | Provider;
 			const provider: Provider = choice === "auto" ? (tavilyKey ? "tavily" : "exa") : choice;
 
 			const rethrowIfAborted = () => {
