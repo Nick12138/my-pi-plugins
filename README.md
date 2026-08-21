@@ -23,8 +23,10 @@ my-pi-plugins/
 
 | 插件 | 说明 |
 | --- | --- |
+| **🌐 浏览器** | AI 驱动的持久浏览器（底层 BetterWright），卡片一键安装/启停 |
 | **🔍 [pi-web](packages/pi-web)** | 极简联网搜索：Tavily（需 key）优先、免费 Exa MCP 兜底，自动回退 |
 | **📝 [OCR](packages/pi-ocr)** | 百度智能云 OCR 图片文字识别（标准版）、方向检测、证照关键词提示 |
+| **👁 [pi-vision](packages/pi-vision)** | 视觉理解：让无识图能力的模型调用 `see_image` 看懂截图/图片/照片，默认视觉模型 + 回退模型两级兜底 |
 
 ## 手动安装（不走 PiDeck 时）
 

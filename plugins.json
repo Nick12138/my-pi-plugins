@@ -2,6 +2,19 @@
   "specVersion": 1,
   "plugins": [
     {
+      "id": "pi-browser",
+      "name": "浏览器",
+      "description": "AI 驱动的持久浏览器：自动打开与操作网页、跨会话保留登录态、可信密码填充（密码不进入对话）、CAPTCHA 辅助。底层引擎为 BetterWright，首次安装会下载约 517MB 的 BetterChromium。",
+      "icon": "🌐",
+      "version": "1.10.0",
+      "author": "BetterWright Project",
+      "tags": ["浏览器", "browser", "web"],
+      "install": {
+        "type": "npm",
+        "source": "npm:betterwright"
+      }
+    },
+    {
       "id": "pi-web",
       "name": "联网搜索",
       "description": "极简联网搜索：配置 Tavily Key 后优先用 Tavily，失败自动回退免费的 Exa MCP；什么都不配也能开箱即用。",
@@ -72,6 +85,59 @@
           "required": true,
           "placeholder": "与 API Key 同页面获取",
           "description": "百度智能云 OCR 应用的 Secret Key。"
+        }
+      ]
+    },
+    {
+      "id": "pi-vision",
+      "name": "视觉看图",
+      "description": "让没有识图能力的模型看懂截图、图片、照片：调用 see_image 工具把图片发给配置的视觉模型，默认模型失败自动回退备用模型。",
+      "icon": "👁",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["视觉", "图片理解", "多模态"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-vision"
+      },
+      "config": [
+        {
+          "key": "visionModel",
+          "type": "text",
+          "label": "默认视觉模型",
+          "env": "PI_VISION_MODEL",
+          "required": false,
+          "placeholder": "provider/modelId，例如 openai/gpt-4o-mini",
+          "description": "默认使用的视觉模型（需在 models.json 中已配置且 input 包含 image）。留空则自动选择注册表中第一个可用的识图模型。"
+        },
+        {
+          "key": "visionFallbackModels",
+          "type": "text",
+          "label": "回退视觉模型",
+          "env": "PI_VISION_FALLBACK_MODELS",
+          "required": false,
+          "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
+          "description": "默认模型失败时按顺序回退的备用视觉模型列表，英文逗号分隔。"
+        },
+        {
+          "key": "visionMaxTokens",
+          "type": "text",
+          "label": "最大输出 Token",
+          "env": "PI_VISION_MAX_TOKENS",
+          "required": false,
+          "placeholder": "4096",
+          "default": "4096",
+          "description": "单次视觉调用的最大输出 token 数。"
+        },
+        {
+          "key": "visionTimeoutMs",
+          "type": "text",
+          "label": "超时时间（毫秒）",
+          "env": "PI_VISION_TIMEOUT_MS",
+          "required": false,
+          "placeholder": "90000",
+          "default": "90000",
+          "description": "单次视觉调用超时时间，超时后自动回退下一个模型。"
         }
       ]
     }
