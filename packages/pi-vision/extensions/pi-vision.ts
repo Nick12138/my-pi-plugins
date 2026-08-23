@@ -11,9 +11,10 @@
  *     ↓ 缺省
  *   PI_VISION_MODEL（默认视觉模型，格式 "provider/modelId"）
  *     ↓ 缺省
- *   auto：自动选取注册表里第一个"可用且声明支持图片输入"的模型
- *     ↓ 任何一个失败（找不到模型、无 API Key、请求报错）
- *   PI_VISION_FALLBACK_MODELS（回退模型，逗号分隔，按顺序尝试）
+ *   auto：选择一个可用视觉模型，失败后自动尝试其他可用视觉模型
+ *     ↓ 成功
+ *   成功模型会提升为下一次自动调用的首选模型
+ *   PI_VISION_FALLBACK_MODELS（显式默认模型时的回退模型，逗号分隔，按顺序尝试）
  *
  * 参照实现（致谢）：
  *   - pi-vision-tool    —— describe_image 工具形态（tool 委托视觉模型）
@@ -148,6 +149,13 @@ interface VisionCandidate {
 	unusable?: string;
 }
 
+// 自动模式只在当前插件进程内记住成功模型；显式配置模型不会改变它。
+let autoPreferredModelRef: string | undefined;
+
+function modelRef(model: Model<Api>): string {
+	return `${model.provider}/${model.id}`;
+}
+
 /** 按优先级组装候选列表：调用参数 > 默认模型（PI_VISION_MODEL / auto）> 回退列表。 */
 function buildCandidates(ctx: ExtensionContext, overrideRef: string | undefined): VisionCandidate[] {
 	const candidates: VisionCandidate[] = [];
@@ -174,15 +182,30 @@ function buildCandidates(ctx: ExtensionContext, overrideRef: string | undefined)
 		return [...candidates, ...fallbacks(ctx)]; // 显式指定后仍然允许回退
 	}
 
-	// 2. 默认模型：env 指定，否则 auto 选第一个可用的视觉模型
+	// 2. 默认模型：env 指定，否则 auto 使用全部可用的视觉模型。
 	const envRef = parseModelRef(process.env.PI_VISION_MODEL);
 	if (envRef) {
 		push(`${envRef.provider}/${envRef.id}`, ctx.modelRegistry.find(envRef.provider, envRef.id));
 	} else {
-		const auto = ctx.modelRegistry
-			.getAvailable()
-			.find((m) => m.input?.includes("image"));
-		push(auto ? "auto" : "auto（无默认模型）", auto);
+		const autoModels = ctx.modelRegistry
+			.getAll()
+			.filter((m) => m.input?.includes("image"));
+		let preferred = autoPreferredModelRef
+			? autoModels.find((m) => modelRef(m) === autoPreferredModelRef)
+			: undefined;
+		if (!preferred && autoModels.length > 0) {
+			preferred = autoModels[Math.floor(Math.random() * autoModels.length)];
+			autoPreferredModelRef = modelRef(preferred);
+		}
+		const ordered = preferred
+			? [preferred, ...autoModels.filter((m) => m !== preferred)]
+			: autoModels;
+
+		if (ordered.length === 0) {
+			push("auto（无可用视觉模型）", undefined);
+		} else {
+			for (const model of ordered) push(modelRef(model), model);
+		}
 	}
 
 	return [...candidates, ...fallbacks(ctx)];
@@ -320,12 +343,12 @@ export default function (pi: ExtensionAPI) {
 			"适用于需要根据图片内容作答的任何场景：UI 截图、报错弹窗、图表、照片、扫描件等。" +
 			"image 支持本地文件路径或 data:image/...;base64 形式的 data URL。" +
 			"prompt 是你想从图片里得到什么，写得越具体越好。" +
-			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则使用配置的默认视觉模型，失败时自动按序回退到配置的备用视觉模型。",
+			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则使用自动首选视觉模型，失败时自动按序尝试其他可用视觉模型。",
 		promptSnippet: "用视觉模型解析图片内容（截图/照片/图片），支持默认模型 + 回退模型",
 		promptGuidelines: [
 			"需要看懂截图、报错弹窗、UI 界面、图表、照片等任何图片内容时，调用 see_image；在 prompt 里写明你具体要从图中获取什么。",
 			"see_image 的 image 参数接受本地文件路径（如截图文件的绝对路径）或 data:image/...;base64 的 data URL。",
-			"see_image 默认使用配置的视觉模型，失败会自动回退备用模型；仅在需要临时换模型时传 model 参数（provider/modelId）。",
+			"see_image 自动使用最近一次成功的视觉模型，失败会自动尝试其他可用模型并记住新的成功模型；仅在需要临时换模型时传 model 参数（provider/modelId）。",
 		],
 		parameters: Type.Object({
 			image: Type.String({
@@ -371,6 +394,7 @@ export default function (pi: ExtensionAPI) {
 
 			const candidates = buildCandidates(ctx, params.model);
 			const attempts: string[] = [];
+			const autoSelection = !params.model && !parseModelRef(process.env.PI_VISION_MODEL);
 
 			for (const cand of candidates) {
 				const refName = cand.model ? `${cand.model.provider}/${cand.model.id}` : cand.ref;
@@ -395,6 +419,7 @@ export default function (pi: ExtensionAPI) {
 
 				try {
 					const text = await callVisionModel(ctx, cand.model, image, params.prompt, signal);
+					if (autoSelection) autoPreferredModelRef = modelRef(cand.model);
 					const usedFallback = attempts.length > 0;
 					const prefix = usedFallback
 						? `（默认模型不可用，已由 ${refName} 回退完成。失败记录：${attempts.join("；")}）\n\n`
