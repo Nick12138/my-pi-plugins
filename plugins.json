@@ -185,7 +185,7 @@
       "id": "pi-todo",
       "name": "Agent 任务列表",
       "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
-      "icon": "✅",
+      "icon": "📋",
       "version": "0.1.0",
       "author": "Nick12138",
       "tags": [
