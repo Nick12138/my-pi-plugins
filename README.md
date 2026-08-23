@@ -27,6 +27,7 @@ my-pi-plugins/
 | **🔍 [pi-web](packages/pi-web)** | 极简联网搜索：Tavily（需 key）优先、免费 Exa MCP 兜底，自动回退 |
 | **📝 [OCR](packages/pi-ocr)** | 百度智能云 OCR 图片文字识别（标准版）、方向检测、证照关键词提示 |
 | **🖨️ [WPS-CLI](packages/pi-wpscli)** | 本机 wpscli 封装：扫描件 OCR 转 Word、Office 转 PDF、PDF 压缩/水印/转图/转 MD 等 9 合 1 |
+| **✅ [Agent 任务列表](packages/pi-todo)** | 轻量级 Agent todo：任务快照持久化到 session，供 PiDeck 等前端读取，不包含终端 UI |
 | **👁 [pi-vision](packages/pi-vision)** | 视觉理解：让无识图能力的模型调用 `see_image` 看懂截图/图片/照片，默认视觉模型 + 回退模型两级兜底 |
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
 

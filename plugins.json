@@ -182,6 +182,23 @@
       }
     },
     {
+      "id": "pi-todo",
+      "name": "Agent 任务列表",
+      "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
+      "icon": "✅",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "todo",
+        "任务管理",
+        "agent"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-todo"
+      }
+    },
+    {
       "id": "pi-wpscli",
       "name": "WPS-CLI",
       "description": "封装本机 WPS 命令行（wpscli）：扫描件 OCR 转可编辑 Word、Office 转 PDF、PDF 信息/压缩/水印、图片与 PDF 互转、PDF 转 Markdown。无需密钥，依赖 WPS Office 及会员能力。",

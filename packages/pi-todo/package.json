@@ -1,0 +1,16 @@
+{
+  "name": "pi-todo",
+  "version": "0.1.0",
+  "description": "A lightweight agent-managed task list for Pi and PiDeck, persisted in session tool results.",
+  "keywords": ["pi-package", "todo", "tasks"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
