@@ -19,6 +19,24 @@
       }
     },
     {
+      "id": "pi-subagents",
+      "name": "子代理",
+      "description": "让 Pi 委派工作给专注的子代理：支持代码侦察、研究、实现、审查、并行任务和可保存工作流。安装后即可使用，无需额外配置。",
+      "icon": "🤖",
+      "version": "0.55.0",
+      "author": "Nico Bailon",
+      "tags": [
+        "子代理",
+        "subagents",
+        "agents",
+        "delegation"
+      ],
+      "install": {
+        "type": "npm",
+        "source": "npm:pi-subagents"
+      }
+    },
+    {
       "id": "pi-web",
       "name": "联网搜索",
       "description": "极简联网搜索：配置 Tavily Key 后优先用 Tavily，失败自动回退免费的 Exa MCP；什么都不配也能开箱即用。",
