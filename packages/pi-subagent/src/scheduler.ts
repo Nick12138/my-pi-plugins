@@ -2,7 +2,7 @@
 import type { ChildHandle } from "./runner.ts";
 import { isProcessAlive, parseResult, spawnChild } from "./runner.ts";
 import { continueProcess, pauseProcess, stopProcess } from "./control.ts";
-import { ensureRunDir, eventsPath, loadAllRuns, loadRun, readStatus, readTask, runDir, writeResult, writeStatus, writeTask } from "./store.ts";
+import { ensureRunDir, eventsPath, loadAllRuns, loadRun, readStatus, readTask, runDir, stderrPath, writeResult, writeStatus, writeTask } from "./store.ts";
 import { createWorktree, isGitRepo } from "./worktree.ts";
 import type { RunRecord, RunResultData, RunTask } from "./types.ts";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_RETRY, MAX_RESUME_COUNT } from "./types.ts";
@@ -200,6 +200,8 @@ class Scheduler {
 			this.pump();
 			return;
 		}
+		// 预算/超时监控已定终态（timeoutRun），exit 回调不覆盖
+		if (status.status !== "running" && status.status !== "paused") return;
 
 		const result = parseResult(runId, exitCode ?? 0);
 		writeResult(runId, result);
@@ -213,7 +215,7 @@ class Scheduler {
 			status.startedAt = status.startedAt ?? Date.now();
 			// 模型回退：失败是模型相关且 fallback 列表还有下一个 → 换模型续跑
 			let nextModel: string | undefined;
-			if (isModelFailure(result) && task.fallbackModels?.length) {
+			if (isModelFailure(result, runId) && task.fallbackModels?.length) {
 				const idx = status.fallbackIndex ?? -1;
 				if (idx + 1 < task.fallbackModels.length) {
 					nextModel = task.fallbackModels[idx + 1]!;
@@ -406,10 +408,20 @@ function countAssistantTurns(runId: string): number {
 	return count;
 }
 
-/** 判断失败是否与模型相关（限流/超时/模型不存在/上下文过长等） */
-function isModelFailure(result: RunResultData): boolean {
+/** 判断失败是否与模型相关（限流/超时/模型不存在/上下文过长等）
+ * 注意：模型不存在等启动错误只写在 stderr.log（events 为空），需一并检查。 */
+function isModelFailure(result: RunResultData, runId?: string): boolean {
 	const text = `${result.errorMessage ?? ""} ${result.stopReason ?? ""}`.toLowerCase();
-	return /model|429|503|rate\s?limit|overload|context\s?length|invalid\s?api|timeout/i.test(text);
+	if (/model|429|503|rate\s?limit|overload|context\s?length|invalid\s?api|timeout/i.test(text)) return true;
+	if (runId) {
+		try {
+			const stderr = readFileSync(stderrPath(runId), "utf-8").toLowerCase();
+			if (/model\s+["']?[\w/.\-]+["']?\s+not\s+found|429|503|rate\s?limit|overload|context\s?length|invalid\s?api|timeout/i.test(stderr)) return true;
+		} catch {
+			/* stderr 不存在则跳过 */
+		}
+	}
+	return false;
 }
 
 export const scheduler = new Scheduler();
