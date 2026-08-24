@@ -29,6 +29,7 @@ my-pi-plugins/
 | **🖨️ [WPS-CLI](packages/pi-wpscli)** | 本机 wpscli 封装：扫描件 OCR 转 Word、Office 转 PDF、PDF 压缩/水印/转图/转 MD 等 9 合 1 |
 | **✅ [Agent 任务列表](packages/pi-todo)** | 轻量级 Agent todo：任务快照持久化到 session，供 PiDeck 等前端读取，不包含终端 UI |
 | **👁 [pi-vision](packages/pi-vision)** | 视觉理解：让无识图能力的模型调用 `see_image` 看懂截图/图片/照片，默认视觉模型 + 回退模型两级兜底 |
+| **🤖 [pi-subagent](packages/pi-subagent)** | Windows 子代理运行时：3 角色（探索/执行/审查）并行后台运行、队列排队、失败断点恢复+自动重试、完成自动回调主 agent、worktree 隔离、HTTP API 供 PiDeck 面板查看 |
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
 
 ## 手动安装（不走 PiDeck 时）

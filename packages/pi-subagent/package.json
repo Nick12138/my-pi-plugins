@@ -1,0 +1,18 @@
+{
+  "name": "pi-subagent",
+  "version": "0.1.0",
+  "description": "Windows-only subagent runtime for pi: spawn, queue, control and monitor child pi agents (scout/worker/reviewer) with async result callbacks.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

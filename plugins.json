@@ -221,6 +221,61 @@
           "description": "留空则自动定位（PATH → 最新版 WPS 安装目录）；找不到时才需要填完整路径。"
         }
       ]
+    },
+    {
+      "id": "pi-subagent",
+      "name": "子代理",
+      "description": "Windows 专用子代理运行时：3 角色（探索/执行/审查）并行后台运行，失败可恢复（自动重试+断点续跑），完成自动回调主 agent；队列排队、暂停/继续/停止、worktree 隔离、全量事件落盘 + HTTP API 供 PiDeck 面板查看。",
+      "icon": "🤖",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["子代理", "subagent", "agent", "并行"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-subagent"
+      },
+      "config": [
+        {
+          "key": "maxConcurrency",
+          "type": "text",
+          "label": "最大并发数",
+          "env": "SUBAGENT_MAX_CONCURRENCY",
+          "required": false,
+          "placeholder": "10",
+          "default": "10",
+          "description": "同时运行的子代理上限（1-20），超出自动排队。"
+        },
+        {
+          "key": "defaultModel",
+          "type": "text",
+          "label": "默认模型",
+          "env": "SUBAGENT_DEFAULT_MODEL",
+          "required": false,
+          "placeholder": "inherit",
+          "default": "inherit",
+          "description": "子代理默认模型（provider/id）。inherit = 继承主 agent 当前模型；主 agent 也可在调用时用 model 参数临时覆盖。"
+        },
+        {
+          "key": "retry",
+          "type": "text",
+          "label": "失败自动重试次数",
+          "env": "SUBAGENT_RETRY",
+          "required": false,
+          "placeholder": "1",
+          "default": "1",
+          "description": "子代理模型报错后的自动重试次数（0-3），仍失败则回调主 agent 决定是否断点恢复。"
+        },
+        {
+          "key": "httpPort",
+          "type": "text",
+          "label": "HTTP API 端口",
+          "env": "SUBAGENT_HTTP_PORT",
+          "required": false,
+          "placeholder": "18765",
+          "default": "18765",
+          "description": "PiDeck 面板读取子代理列表/事件/结果的本地端口（仅回环）。"
+        }
+      ]
     }
   ]
 }
