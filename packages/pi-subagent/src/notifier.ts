@@ -15,7 +15,7 @@ import type { RunRecord } from "./types.ts";
 export const SUBAGENT_NOTIFY_MESSAGE_TYPE = "subagent-notify";
 
 const FLUSH_INTERVAL_MS = 5000;
-const BATCH_WINDOW_MS = 300;
+const BATCH_WINDOW_MS = 1000;
 const MAX_PREVIEW = 800;
 
 export interface NotifyItem {
