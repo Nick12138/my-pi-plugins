@@ -207,30 +207,37 @@ class Scheduler {
 		writeResult(runId, result);
 		const failed = exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length";
 
-		if (failed && status.retryLeft > 0 && status.status !== "interrupted") {
-			// 自动重试（A+B）：retryLeft--，同 session-id 续跑（不重复执行已完成部分）
-			status.retryLeft -= 1;
+		if (failed && status.status !== "interrupted") {
 			status.resumeCount += 1;
 			status.lastError = result.errorMessage || result.stopReason || `退出码 ${exitCode}`;
 			status.startedAt = status.startedAt ?? Date.now();
-			// 模型回退：失败是模型相关且 fallback 列表还有下一个 → 换模型续跑；
-			// fallback 用尽 → 最后用主 agent 继承模型兜底一次（防止 fallback 全不可用时任务直接失败）
-			let nextModel: string | undefined;
-			let inheritModel = false;
+
+			// 模型回退（独立配额 fallbackModels.length+1 次，含最终主模型兜底，不消耗 retryLeft）：
+			// 主模型 → fallbackModels[0..n] → 主 agent 继承模型（兜底，不再换回坏 task.model）
 			if (isModelFailure(result, runId) && task.fallbackModels?.length) {
 				const idx = status.fallbackIndex ?? -1;
-				if (idx + 1 < task.fallbackModels.length) {
-					nextModel = task.fallbackModels[idx + 1]!;
+				if (idx + 1 < task.fallbackModels.length + 1) {
+					let nextModel: string | undefined;
+					let inheritModel = false;
+					if (idx + 1 < task.fallbackModels.length) {
+						nextModel = task.fallbackModels[idx + 1]!;
+					} else {
+						inheritModel = true;
+					}
 					status.fallbackIndex = idx + 1;
-				} else if (idx + 1 === task.fallbackModels.length) {
-					// fallback 全部尝试完 → 主模型兜底（忽略 task.model，用继承的主 agent 模型）
-					inheritModel = true;
-					status.fallbackIndex = idx + 1;
+					writeStatus(runId, status);
+					this.spawnResume(runId, task, { model: nextModel, inheritModel });
+					return;
 				}
 			}
-			writeStatus(runId, status);
-			this.spawnResume(runId, task, { model: nextModel, inheritModel });
-			return;
+
+			// 常规重试（同模型，消耗 retryLeft）
+			if (status.retryLeft > 0) {
+				status.retryLeft -= 1;
+				writeStatus(runId, status);
+				this.spawnResume(runId, task);
+				return;
+			}
 		}
 
 		const finalStatus = failed ? "failed" : "completed";
