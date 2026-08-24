@@ -15,6 +15,7 @@ import type { RunRecord } from "./types.ts";
 export const SUBAGENT_NOTIFY_MESSAGE_TYPE = "subagent-notify";
 
 const FLUSH_INTERVAL_MS = 5000;
+const BATCH_WINDOW_MS = 300;
 const MAX_PREVIEW = 800;
 
 export interface NotifyItem {
@@ -69,17 +70,28 @@ export class Notifier {
 	private pending = new Map<string, RunRecord>();
 	private flushing = false;
 	private timer: ReturnType<typeof setInterval> | null = null;
+	private batchTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(pi: ExtensionAPI) {
 		this.pi = pi;
 	}
 
-	/** 入队一个已终结的 run；立即尝试发送，失败保留重试 */
+	/** 入队一个已终结的 run；延迟一个批量窗口后合并发送，失败保留重试 */
 	queue(run: RunRecord): void {
 		const status = readStatus(run.task.id);
 		if (!status || status.notified) return;
 		this.pending.set(run.task.id, run);
-		void this.flush();
+		this.scheduleBatch();
+	}
+
+	/** 批量窗口内多次完成合并成一条通知；窗口后发送 */
+	private scheduleBatch(): void {
+		if (this.batchTimer) return;
+		this.batchTimer = setTimeout(() => {
+			this.batchTimer = null;
+			void this.flush();
+		}, BATCH_WINDOW_MS);
+		this.batchTimer.unref?.();
 	}
 
 	private async flush(): Promise<void> {
@@ -134,6 +146,8 @@ export class Notifier {
 	dispose(): void {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
+		if (this.batchTimer) clearTimeout(this.batchTimer);
+		this.batchTimer = null;
 		this.pending.clear();
 	}
 }
