@@ -22,6 +22,8 @@ interface ActiveEntry {
 }
 
 const MONITOR_INTERVAL_MS = 3000;
+const BUDGET_CHECK_INTERVAL_MS = 5000;
+const TIMEOUT_EXIT_CODE = 124;
 
 class Scheduler {
 	deps: SchedulerDeps = {

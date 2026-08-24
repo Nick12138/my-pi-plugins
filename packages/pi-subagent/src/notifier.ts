@@ -87,7 +87,7 @@ export class Notifier {
 		this.flushing = true;
 		try {
 			while (this.pending.size > 0) {
-				const items = [...this.pending.values()];
+				const items = [...this.pending.values()].map((run) => ({ run }));
 				const content = formatGrouped(items);
 				try {
 					this.pi.sendMessage(
