@@ -2,7 +2,7 @@
 import type { ChildHandle } from "./runner.ts";
 import { isProcessAlive, parseResult, spawnChild } from "./runner.ts";
 import { continueProcess, pauseProcess, stopProcess } from "./control.ts";
-import { loadAllRuns, loadRun, readStatus, readTask, runDir, writeResult, writeStatus, writeTask } from "./store.ts";
+import { ensureRunDir, loadAllRuns, loadRun, readStatus, readTask, runDir, writeResult, writeStatus, writeTask } from "./store.ts";
 import { createWorktree, isGitRepo } from "./worktree.ts";
 import type { RunRecord, RunTask } from "./types.ts";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_RETRY, MAX_RESUME_COUNT } from "./types.ts";
@@ -41,6 +41,7 @@ class Scheduler {
 
 	/** 创建 run 并排队。返回错误信息或 null。 */
 	async schedule(task: RunTask): Promise<string | null> {
+		ensureRunDir(task.id);
 		writeTask(task);
 		writeStatus(task.id, {
 			status: "pending",
