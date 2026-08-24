@@ -281,7 +281,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent Wait",
 		description: [
 			"阻塞等待子代理任务完成：",
-			"- subagent_wait({runId:"<id>"})：等单个 run 完成",
+			"- subagent_wait({runId:<id>})：等单个 run 完成",
 			"- subagent_wait({all:true})：等当前所有运行中的 run 完成",
 			"- timeoutMs：超时后返回当前进度（默认 30 分钟）；run 在后台继续不受影响",
 			"返回每个目标 run 的最终状态与输出预览。",
