@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { RunResultData, RunTask } from "./types.ts";
 import { ensureRunDir, eventsPath, runDir, sessionDir, stderrPath } from "./store.ts";
 
-const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 export interface SpawnOptions {
 	task: RunTask;
@@ -56,7 +56,7 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 	else args.push("--no-approve");
 
 	// 角色 system prompt：直接指向 agents/*.md 文件
-	const agentFile = path.join(EXTENSION_DIR, "..", "agents", `${task.agent}.md`);
+	const agentFile = path.join(MODULE_DIR, "..", "agents", `${task.agent}.md`);
 	if (fs.existsSync(agentFile)) args.push("--append-system-prompt", agentFile);
 
 	// 任务 prompt：写入 prompt.md，用 @file 传入（不依赖 stdin 生命周期，detached 安全）

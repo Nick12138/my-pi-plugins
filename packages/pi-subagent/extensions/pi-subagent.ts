@@ -13,12 +13,12 @@ import { randomUUID } from "node:crypto";
 import { StringEnum, type Static } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { scheduler } from "./scheduler.ts";
-import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "./store.ts";
-import { mergeWorktree, worktreeExists } from "./worktree.ts";
-import { startHttpServer } from "./http.ts";
-import type { RunRecord, RunTask } from "./types.ts";
-import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "./types.ts";
+import { scheduler } from "../src/scheduler.ts";
+import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "../src/store.ts";
+import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
+import { startHttpServer } from "../src/http.ts";
+import type { RunRecord, RunTask } from "../src/types.ts";
+import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
 
 const AGENTS = ["scout", "worker", "reviewer"] as const;
 type AgentName = (typeof AGENTS)[number];
