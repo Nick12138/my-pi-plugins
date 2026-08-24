@@ -1,5 +1,6 @@
 /** 子进程 runner：spawn 独立的 pi 子进程（detached），stdout 事件流落盘 events.jsonl。 */
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,11 +22,48 @@ export interface SpawnOptions {
 	projectTrusted?: boolean;
 }
 
-/** 解析出当前 pi 可执行文件的调用方式（Windows 兼容） */
+/** PATH 上是否有 pi 命令（agent CLI）。探测一次并缓存。 */
+let piOnPath: boolean | null = null;
+function hasPiCommand(): boolean {
+	if (piOnPath !== null) return piOnPath;
+	try {
+		const res = spawnSync(process.platform === "win32" ? "where" : "which", ["pi"], {
+			windowsHide: true,
+			encoding: "utf8",
+		});
+		piOnPath = res.status === 0;
+	} catch {
+		piOnPath = false;
+	}
+	return piOnPath;
+}
+
+/** 定位包内 agent CLI（cli.js），作为 PATH 无 pi 时的兜底。 */
+function resolveAgentCli(): string | undefined {
+	try {
+		const require = createRequire(import.meta.url);
+		return require.resolve("@earendil-works/pi-coding-agent/dist/cli.js");
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * 解析出当前 pi 可执行文件的调用方式（Windows 兼容）。
+ *
+ * 注意：主进程可能是 Pi host 守护进程（如 PiDeck 的 pi-host/main.js），
+ * 其入口脚本不解析 CLI 参数。只有确认当前入口是 agent CLI（cli.js）时
+ * 才复用当前解释器；否则必须用 PATH 上的 pi（agent CLI）。
+ */
 export function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
+	const isAgentCli =
+		!!currentScript &&
+		!isBunVirtualScript &&
+		fs.existsSync(currentScript) &&
+		/^cli(\.(js|mjs|cjs))?$/i.test(path.basename(currentScript));
+	if (isAgentCli) {
 		// 运行在 node/bun cli.js 下：复用当前解释器，避免依赖 PATH 上的 pi
 		return { command: process.execPath, args: [currentScript, ...args] };
 	}
@@ -35,6 +73,11 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 		// 原生可执行（pi.exe 等）
 		return { command: process.execPath, args };
 	}
+	// 解释器环境但入口不是 CLI（如 PiDeck host main.js）：优先 PATH 上的 pi
+	if (hasPiCommand()) return { command: "pi", args };
+	// 兜底：包内 cli.js
+	const cli = resolveAgentCli();
+	if (cli) return { command: process.execPath, args: [cli, ...args] };
 	return { command: "pi", args };
 }
 
