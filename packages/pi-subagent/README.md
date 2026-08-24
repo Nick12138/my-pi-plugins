@@ -43,6 +43,7 @@ pi install git:github.com/Nick12138/my-pi-plugins   # 全仓库安装后启用�
 | `SUBAGENT_DEFAULT_MODEL` | `inherit` | 子代理默认模型（`provider/id`）；`inherit` = 继承主 agent |
 | `SUBAGENT_RETRY` | `1` | 失败自动重试次数（0-3） |
 | `SUBAGENT_HTTP_PORT` | `18765` | HTTP API 端口（PiDeck 面板用） |
+| `SUBAGENT_FALLBACK_MODELS` | 空 | 全局默认回退模型列表（逗号分隔，如 `4/hy3-free,1/glm-5.2`）；任务参数 `fallbackModels` 优先 |
 | `PI_SUBAGENT_SUPERVISOR_TIMEOUT_MS` | `600000` | 子代理等主代理回复的超时（毫秒） |
 
 ## 使用
@@ -63,6 +64,9 @@ subagent(agent:"worker", task:"实现 xx", model:"openai/gpt-5", worktree:true, 
 # 预算与超时 / 模型回退
 subagent(agent:"worker", task:"长任务", maxRuntimeMs:600000, turnBudget:20, toolTimeoutMs:300000,
          fallbackModels:["4/hy3-free", "1/glm-5.2"])   # 主模型失败自动换下一个
+
+# 模型回退优先级：任务 fallbackModels > 全局 SUBAGENT_FALLBACK_MODELS
+# 回退流程：主模型 → fallbackModels[0..n] → 主 agent 继承模型（最终兜底）
 
 # 运行中引导（steering）
 subagent(action:"steer", runId:"run_xxx", message:"改用方案 B，并先读 plan.md", mode:"steer")

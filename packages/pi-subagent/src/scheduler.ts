@@ -213,17 +213,23 @@ class Scheduler {
 			status.resumeCount += 1;
 			status.lastError = result.errorMessage || result.stopReason || `退出码 ${exitCode}`;
 			status.startedAt = status.startedAt ?? Date.now();
-			// 模型回退：失败是模型相关且 fallback 列表还有下一个 → 换模型续跑
+			// 模型回退：失败是模型相关且 fallback 列表还有下一个 → 换模型续跑；
+			// fallback 用尽 → 最后用主 agent 继承模型兜底一次（防止 fallback 全不可用时任务直接失败）
 			let nextModel: string | undefined;
+			let inheritModel = false;
 			if (isModelFailure(result, runId) && task.fallbackModels?.length) {
 				const idx = status.fallbackIndex ?? -1;
 				if (idx + 1 < task.fallbackModels.length) {
 					nextModel = task.fallbackModels[idx + 1]!;
 					status.fallbackIndex = idx + 1;
+				} else if (idx + 1 === task.fallbackModels.length) {
+					// fallback 全部尝试完 → 主模型兜底（忽略 task.model，用继承的主 agent 模型）
+					inheritModel = true;
+					status.fallbackIndex = idx + 1;
 				}
 			}
 			writeStatus(runId, status);
-			this.spawnResume(runId, task, { model: nextModel });
+			this.spawnResume(runId, task, { model: nextModel, inheritModel });
 			return;
 		}
 
@@ -304,9 +310,10 @@ class Scheduler {
 	}
 
 	/** 用同 session-id 续跑（自动重试与手动恢复共用）。内部负责 active 登记 + exit 监听。 */
-	private spawnResume(runId: string, task: RunTask, opts?: { model?: string }): void {
+	private spawnResume(runId: string, task: RunTask, opts?: { model?: string; inheritModel?: boolean }): void {
 		const status = readStatus(runId)!;
-		const effectiveTask = opts?.model ? { ...task, model: opts.model } : task;
+		// inheritModel：忽略 task.model，用继承的主 agent 模型（兜底场景）
+		const effectiveTask = opts?.inheritModel ? { ...task, model: undefined } : opts?.model ? { ...task, model: opts.model } : task;
 		const { model, thinking } = this.deps.resolveModel(effectiveTask);
 		const handle = spawnChild({
 			task: effectiveTask,

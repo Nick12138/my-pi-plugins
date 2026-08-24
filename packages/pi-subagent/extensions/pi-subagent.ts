@@ -118,6 +118,12 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 	const title = (item.title ?? params.title)?.trim() || `${agent}: ${item.task.slice(0, 30)}`;
 	const retryRaw = params.retry ?? process.env.SUBAGENT_RETRY ?? DEFAULT_RETRY;
 	const retry = Math.max(0, Math.min(3, Number(retryRaw) || DEFAULT_RETRY));
+	// 回退模型列表：任务参数优先，其次全局配置 SUBAGENT_FALLBACK_MODELS（逗号分隔）
+	const fallbackRaw = params.fallbackModels?.length
+		? params.fallbackModels
+		: process.env.SUBAGENT_FALLBACK_MODELS?.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
 	return {
 		id: newRunId(),
 		title: title.slice(0, 120),
@@ -128,7 +134,7 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 		cwd,
 		worktree: params.worktree === true,
 		retry,
-		...(params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
+		...(fallbackRaw?.length ? { fallbackModels: fallbackRaw } : {}),
 		...(params.maxRuntimeMs ? { maxRuntimeMs: params.maxRuntimeMs } : {}),
 		...(params.turnBudget ? { turnBudget: params.turnBudget } : {}),
 		...(params.toolTimeoutMs ? { toolTimeoutMs: params.toolTimeoutMs } : {}),
