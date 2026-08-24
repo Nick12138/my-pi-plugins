@@ -2,6 +2,7 @@
 import * as http from "node:http";
 import { scheduler } from "./scheduler.ts";
 import { loadRun, loadAllRuns, readEvents, readResult, RUNS_ROOT, runDir } from "./store.ts";
+import { supervisorDiagnostics } from "./supervisor-channel.ts";
 import type { RunRecord } from "./types.ts";
 import { STATUS_LABEL } from "./types.ts";
 
@@ -75,6 +76,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
 	if (req.method === "GET" && parts[0] === "api" && parts[1] === "health") {
 		json(res, 200, { ok: true, runsRoot: RUNS_ROOT, active: scheduler.activeCount() });
+		return;
+	}
+
+	if (req.method === "GET" && parts[0] === "api" && parts[1] === "supervisor") {
+		json(res, 200, supervisorDiagnostics());
 		return;
 	}
 

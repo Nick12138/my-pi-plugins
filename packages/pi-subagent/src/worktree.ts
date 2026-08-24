@@ -32,11 +32,32 @@ export async function createWorktree(cwd: string, runId: string, worktreePath: s
 	return { ok: true, worktreePath };
 }
 
-/** 合并 worktree 分支回主仓库当前分支，然后移除 worktree（保留分支，便于追溯） */
+/** 合并 worktree 分支回主仓库当前分支，然后移除 worktree（保留分支，便于追溯）。
+ * 注意：子代理在 worktree 里的改动通常未提交（untracked/modified），
+ * 直接 git merge 分支只能合并已提交内容。因此合并前先把 worktree 工作树改动
+ * 以临时 identity 提交到分支上，再 merge，最后移除 worktree。 */
 export async function mergeWorktree(cwd: string, runId: string, worktreePath: string): Promise<{ ok: boolean; output: string }> {
 	const branch = `subagent/${runId}`;
+
+	// 1) 提交 worktree 内的未提交改动（若有）到分支。
+	// --ignore-errors：子代理可能留下无法索引的文件（如 Windows 设备名 nul），
+	// 此时 add 返回非 0 但正常文件仍会 stage，不应让整个 merge 失败。
+	await git(worktreePath, ["add", "-A", "--ignore-errors"]);
+	const status = await git(worktreePath, ["status", "--porcelain"]);
+	if (status.ok && status.output) {
+		const commit = await git(worktreePath, [
+			"-c", "user.name=pi-subagent",
+			"-c", "user.email=pi-subagent@local",
+			"commit", "-m", `subagent ${runId} changes`,
+		]);
+		if (!commit.ok) return { ok: false, output: `worktree 提交失败：${commit.output}` };
+	}
+
+	// 2) 合并分支到主仓库
 	const merged = await git(cwd, ["merge", branch, "--no-edit"]);
 	if (!merged.ok) return { ok: false, output: `git merge 失败：${merged.output}` };
+
+	// 3) 移除 worktree（保留分支，便于追溯）
 	const removed = await git(cwd, ["worktree", "remove", "--force", worktreePath]);
 	return {
 		ok: removed.ok,

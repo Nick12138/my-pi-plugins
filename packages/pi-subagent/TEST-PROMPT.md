@@ -61,14 +61,23 @@
 - 调用 `subagent(action:"merge", runId:"<id>")` → "已合并分支，worktree 已清理"。
 - 确认 `worktree-demo.txt` 出现在主分支工作区（git status 可看到）。
 
-### 9. HTTP API 验收
+### 9. 双向工具回调（contact_supervisor ↔ subagent_supervisor）
+- 提交任务：`subagent(agent:"worker", task:"分三步：1) bash 执行 ls packages/ | wc -l 统计插件目录数；2) 调用 contact_supervisor({reason:'need_decision', message:'统计完成，请确认是否继续'}) 并阻塞等待回复，不要提前结束；3) 收到回复后把回复内容写入 packages/pi-subagent/supervisor-reply.txt 并读取确认", title:"双向回调测试")`
+- **预期**：子代理运行中，`%TEMP%/pi-subagent-supervisor-channels/<runId>-worker-0/requests/` 下出现 `<uuid>.json`（含 `orchestratorSessionId` 与主会话 id 一致）。
+- 主 agent 调用 `subagent_supervisor({action:"pending"})` → 能看到该请求；`subagent_supervisor({action:"reply", replyTo:"<id>", message:"确认继续，验证码 X"})` → 返回“Replied to supervisor request”。
+- **预期**：子代理解除阻塞继续，`supervisor-reply.txt` 出现回复内容（含验证码 X），run 完成。
+- 可选：再测 `progress_update`（单向不等待）与 `contact_supervisor` 超时（`PI_SUBAGENT_SUPERVISOR_TIMEOUT_MS` 设小值）。
+
+### 10. HTTP API 验收
 - 依次用 curl 访问（或让用户浏览器打开）：
   - `http://127.0.0.1:18765/api/runs` → 应有本次所有测试 run 的列表
   - `http://127.0.0.1:18765/api/runs/<任意完成runId>/events?offset=0` → 原始事件流 JSON 行（含 thinking/toolCall 内容）
   - `http://127.0.0.1:18765/api/runs/<任意runId>/result` → 最终输出与用量统计
+  - `http://127.0.0.1:18765/api/supervisor` → 通道诊断（started/timer/pending/sessionId/root）
 
-### 10. 清理
-- 删除测试产物：`packages/pi-subagent/test-artifact.txt`、`worktree-demo.txt`（用 bash rm）。
+### 11. 清理
+- 删除测试产物：`packages/pi-subagent/test-artifact.txt`、`packages/pi-subagent/supervisor-reply.txt`、`worktree-demo.txt`（用 bash rm）。
+- 清理通道残留：`rm -rf %TEMP%/pi-subagent-supervisor-channels/*/`。
 - 测试中失败的 `nonexistent/model-xyz` 相关 run 记录保留在 `~/.pi/subagent/runs/` 供查看；如需清理可删除该目录下对应 run 目录。
 
 ### 最终总结

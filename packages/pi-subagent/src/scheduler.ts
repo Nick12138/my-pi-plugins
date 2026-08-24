@@ -201,7 +201,7 @@ class Scheduler {
 	}
 
 	/** 手动恢复：failed/interrupted/stopped 的 run，同 session-id 续跑 */
-	async resume(runId: string): Promise<{ ok: boolean; error?: string }> {
+	async resume(runId: string, opts?: { model?: string }): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		const task = readTask(runId);
 		if (!status || !task) return { ok: false, error: "run 不存在" };
@@ -214,7 +214,8 @@ class Scheduler {
 		status.resumeCount += 1;
 		status.lastError = status.lastError || status.errorMessage || "手动恢复";
 		writeStatus(runId, { ...status, status: "running" });
-		this.spawnResume(runId, task);
+		// resume 未显式指定模型时，忽略原 task.model（上次的模型已失败），回退继承主 agent
+		this.spawnResume(runId, opts?.model ? task : { ...task, model: undefined });
 		return { ok: true };
 	}
 

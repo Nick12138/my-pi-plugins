@@ -5,7 +5,7 @@
  * - 并行（可配上限）+ 队列排队（FIFO pending）
  * - 停止/暂停/继续/恢复（taskkill + --session-id 续跑），失败自动重试（A+B）
  * - 后台运行：子进程 detached 新进程组，主 pi 退出不影响；重启后接管 + 补发回调
- * - 回调：完成/失败/停止时 sendUserMessage 通知主 agent（不打断当前轮）
+ * - 回调：完成/失败/停止时 sendMessage(customType) 通知主 agent（投递确认 + 合并批处理 + 自动重试）
  * - 全量落盘：task/status/events.jsonl（原始 NDJSON，含 thinking/toolCall）/result/session
  * - HTTP API（127.0.0.1）供 PiDeck 面板查看与停止
  */
@@ -17,6 +17,9 @@ import { scheduler } from "../src/scheduler.ts";
 import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "../src/store.ts";
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
+import { createSupervisorChannel, registerSupervisorTool, visibleRequestText, type SupervisorChannel } from "../src/supervisor-channel.ts";
+import { ENV_ORCHESTRATOR_SESSION_ID } from "../src/supervisor-protocol.ts";
+import { Notifier, enqueueUnnotified } from "../src/notifier.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
 import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
 
@@ -30,6 +33,8 @@ const AGENT_DESC: Record<AgentName, string> = {
 
 let currentCtx: ExtensionContext | null = null;
 let initialized = false;
+let supervisorChannel: SupervisorChannel | null = null;
+let notifier: Notifier | null = null;
 
 // ── 工具参数 schema ──────────────────────────────────────────
 
@@ -90,35 +95,9 @@ function resolveModelFor(task: RunTask): { model?: string; thinking?: string } {
 
 // ── 回调 ─────────────────────────────────────────────────────
 
-function buildReportText(run: RunRecord): string {
-	const { task, status, result } = run;
-	const label = STATUS_LABEL[status.status];
-	let text = `【子代理通知】「${task.title}」（${task.agent} · ${task.id}）${label}`;
-	if (status.errorMessage) text += `\n失败原因：${status.errorMessage}`;
-	if (result?.output) {
-		const out = result.output.length > 2000 ? result.output.slice(0, 2000) + "\n…(已截断)" : result.output;
-		text += `\n\n${out}`;
-	}
-	if (status.status === "failed" || status.status === "interrupted") {
-		text += `\n\n可执行 subagent(action:"resume", runId:"${task.id}") 从断点继续（已恢复 ${status.resumeCount}/${MAX_RESUME_COUNT} 次）；或 action:"stop" 放弃。`;
-	}
-	if (status.status === "completed" && task.worktreePath) {
-		text += `\n\n（此 run 在 worktree 中运行，改动未合并到主分支。审查后执行 subagent(action:"merge", runId:"${task.id}") 合并。）`;
-	}
-	return text;
-}
-
-function makeOnSettled(pi: ExtensionAPI): (run: RunRecord) => void {
+function makeOnSettled(notifier: Notifier): (run: RunRecord) => void {
 	return (run) => {
-		const status = readStatus(run.task.id);
-		if (!status || status.notified) return;
-		writeStatus(run.task.id, { ...status, notified: true });
-		try {
-			// followUp：等当前轮结束后注入并触发新轮，不打断主 agent
-			pi.sendUserMessage(buildReportText(run), { deliverAs: "followUp" });
-		} catch {
-			/* 会话不活跃则丢弃（已标记 notified，不会重复发） */
-		}
+		notifier.queue(run);
 	};
 }
 
@@ -176,7 +155,7 @@ async function executeSpawn(params: SubagentParamsT, ctx: ExtensionContext): Pro
 	}
 	const max = scheduler.deps.maxConcurrency;
 	return text(
-		`已提交 ${runIds.length} 个子代理任务（并发上限 ${max}，超出的自动排队）：\n${runIds.map((id) => `- ${id}`).join("\n")}\n\n完成/失败时会自动通知主 agent，无需等待。查看列表：subagent(action:"list")。`,
+		`已提交 ${runIds.length} 个子代理任务（并发上限 ${max}，超出的自动排队）：\n${runIds.map((id) => `- ${id}`).join("\n")}\n\n完成/失败时会自动通知主 agent，无需等待。查看列表：subagent(action:"list")。[v3]`,
 		{ runIds, maxConcurrency: max },
 	);
 }
@@ -194,7 +173,11 @@ function executeList(): AgentToolResult<unknown> {
 	return text(`子代理列表（共 ${runs.length} 个，运行中 ${running}）：\n${lines.join("\n")}`);
 }
 
-async function executeControl(action: string, runId: string | undefined): Promise<AgentToolResult<unknown>> {
+async function executeControl(
+	action: string,
+	runId: string | undefined,
+	params: SubagentParamsT = {},
+): Promise<AgentToolResult<unknown>> {
 	if (!runId) return text("缺少 runId。");
 	const run = loadRun(runId);
 	if (!run) return text(`run ${runId} 不存在。`);
@@ -213,7 +196,7 @@ async function executeControl(action: string, runId: string | undefined): Promis
 			return text(r.ok ? `已继续「${run.task.title}」。` : `继续失败：${r.error}`);
 		}
 		case "resume": {
-			const r = await scheduler.resume(runId);
+			const r = await scheduler.resume(runId, { model: params.model });
 			return text(
 				r.ok
 					? `已恢复「${run.task.title}」，从断点继续（第 ${run.status.resumeCount + 1}/${MAX_RESUME_COUNT} 次）。`
@@ -250,6 +233,10 @@ export default function (pi: ExtensionAPI) {
 	// 避免子进程里重复注册工具、HTTP 端口冲突、restoreFromDisk 干扰）
 	if (process.env.PI_SUBAGENT_DEPTH === "1") return;
 
+	// supervisor 工具必须在扩展加载阶段注册（与 subagent 同时机），
+	// 否则会话工具列表快照不会包含它（session_start 里注册无法同步到已建会话）
+	registerSupervisorTool(pi);
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -270,7 +257,7 @@ export default function (pi: ExtensionAPI) {
 				case "list":
 					return executeList();
 				default:
-					return await executeControl(action, params.runId);
+					return await executeControl(action, params.runId, params);
 			}
 		},
 	});
@@ -310,16 +297,63 @@ export default function (pi: ExtensionAPI) {
 	// 会话初始化
 	pi.on("session_start", (_event, ctx) => {
 		currentCtx = ctx;
+		// 子代理 spawn 时继承该变量，用于 supervisor 请求的会话归属校验
+		try {
+			const sessionId = ctx.sessionManager.getSessionId();
+			if (sessionId) process.env[ENV_ORCHESTRATOR_SESSION_ID] = sessionId;
+		} catch {
+			/* 拿不到会话 id 则子代理无法使用 supervisor 通道 */
+		}
+		// 完成通知管理器：sendMessage(customType) + 投递确认 + 合并批处理
+		notifier?.dispose();
+		notifier = new Notifier(pi);
+		notifier.start();
 		scheduler.init({
 			maxConcurrency: Number(process.env.SUBAGENT_MAX_CONCURRENCY) || 10,
 			resolveModel: resolveModelFor,
 			projectTrusted: ctx.isProjectTrusted?.() ?? false,
-			onSettled: makeOnSettled(pi),
+			onSettled: makeOnSettled(notifier),
 		});
+		// supervisor 文件信箱：每次会话都重建（session_shutdown 会 dispose，
+		// 且 initialized 是进程级单次，后续会话必须重新创建通道并启动轮询）
+		supervisorChannel?.dispose();
+		supervisorChannel = createSupervisorChannel(pi, {
+			getSessionId: () => {
+				try {
+					return currentCtx?.sessionManager.getSessionId() ?? process.env[ENV_ORCHESTRATOR_SESSION_ID];
+				} catch {
+					return process.env[ENV_ORCHESTRATOR_SESSION_ID];
+				}
+			},
+			onRequest: (request, visibleText) => {
+				try {
+					pi.sendMessage(
+						{
+							customType: "subagent_supervisor_request",
+							content: visibleText,
+							display: true,
+							details: {
+								id: request.id,
+								reason: request.reason,
+								expectsReply: request.expectsReply,
+								runId: request.runId,
+								agent: request.agent,
+							},
+						},
+						{ triggerTurn: true },
+					);
+				} catch {
+					/* 会话不活跃则丢弃（请求文件仍在，下一轮扫描不会重复唤醒） */
+				}
+			},
+		});
+		supervisorChannel.start();
 		if (!initialized) {
 			initialized = true;
-			// 接管上次会话遗留的 run（主 pi 重启场景）
-			void scheduler.restoreFromDisk();
+			// 接管上次会话遗留的 run（主 pi 重启场景）：补发未通知的回调
+			void scheduler.restoreFromDisk().then(() => {
+				if (notifier) enqueueUnnotified(notifier, loadAllRuns());
+			});
 			// HTTP API（PiDeck 面板）
 			const port = Number(process.env.SUBAGENT_HTTP_PORT) || DEFAULT_HTTP_PORT;
 			startHttpServer(port);
@@ -330,5 +364,9 @@ export default function (pi: ExtensionAPI) {
 	// 主 pi 退出时不取消子代理（后台运行需求）；这里只做记录
 	pi.on("session_shutdown", () => {
 		currentCtx = null;
+		supervisorChannel?.dispose();
+		supervisorChannel = null;
+		notifier?.dispose();
+		notifier = null;
 	});
 }

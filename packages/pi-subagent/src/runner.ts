@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunResultData, RunTask } from "./types.ts";
 import { ensureRunDir, eventsPath, runDir, sessionDir, stderrPath } from "./store.ts";
+import { channelDir } from "./supervisor-protocol.ts";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,12 +41,43 @@ function hasPiCommand(): boolean {
 
 /** 定位包内 agent CLI（cli.js），作为 PATH 无 pi 时的兜底。 */
 function resolveAgentCli(): string | undefined {
+	const candidates: string[] = [];
+
+	// 1) 当前模块的解析路径（插件随 pi-coding-agent 一起安装时生效）
 	try {
 		const require = createRequire(import.meta.url);
-		return require.resolve("@earendil-works/pi-coding-agent/dist/cli.js");
+		candidates.push(require.resolve("@earendil-works/pi-coding-agent/dist/cli.js"));
 	} catch {
-		return undefined;
+		/* 插件以 repo 方式加载（node_modules 不在仓库内）时此处不可用，继续探测 */
 	}
+
+	// 2) 常见 host 安装位置：PiDeck pi-host/<hash>/node_modules（repo 加载插件时唯一可用来源）
+	const piHostCandidates = [process.env.LOCALAPPDATA, process.env.APPDATA]
+		.filter((d): d is string => !!d)
+		.map((d) => path.join(d, "com.nick12138.pideck", "pi-host"));
+	for (const root of piHostCandidates) {
+		try {
+			const dirs = fs
+				.readdirSync(root, { withFileTypes: true })
+				.filter((d) => d.isDirectory())
+				.map((d) => d.name)
+				.sort((a, b) => fs.statSync(path.join(root, b)).mtimeMs - fs.statSync(path.join(root, a)).mtimeMs);
+			for (const dir of dirs) {
+				const p = path.join(root, dir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+				if (fs.existsSync(p)) {
+					candidates.push(p);
+					break;
+				}
+			}
+		} catch {
+			/* 目录不存在/不可读则跳过 */
+		}
+	}
+
+	for (const c of candidates) {
+		if (c && fs.existsSync(c)) return c;
+	}
+	return undefined;
 }
 
 /**
@@ -93,6 +125,9 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 		"--exclude-tools", "subagent",
 		"--no-context-files",
 	];
+	// 注入子代理侧 supervisor 客户端扩展（contact_supervisor 工具，见 supervisor-client.ts）
+	const supervisorClient = path.join(MODULE_DIR, "supervisor-client.ts");
+	if (fs.existsSync(supervisorClient)) args.push("--extension", supervisorClient);
 	if (options.model) args.push("--model", options.model);
 	if (options.thinking) args.push("--thinking", options.thinking);
 	if (options.projectTrusted === true) args.push("--approve");
@@ -141,7 +176,21 @@ export function spawnChild(options: SpawnOptions): ChildHandle {
 		env: {
 			...process.env,
 			PI_SUBAGENT_DEPTH: "1",
+			// supervisor 文件信箱元数据（contact_supervisor 工具读取）
+			PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR: channelDir(options.task.id, options.task.agent),
+			PI_SUBAGENT_RUN_ID: options.task.id,
+			PI_SUBAGENT_CHILD_AGENT: options.task.agent,
 		},
+	});
+	// spawn 失败（命令不存在等）会 emit 'error'；若不处理，未捕获错误会崩溃主进程（Pi Host）。
+	// 同时补一个假的 exit，让调度器的 exit 流程正常定终态，避免 run 卡在 running。
+	proc.on("error", (err) => {
+		try {
+			fs.appendFileSync(stderrPath(options.task.id), `[spawn error] ${err.message}\n`);
+		} catch {
+			/* 写日志失败忽略 */
+		}
+		proc.emit("exit", undefined);
 	});
 	// 句柄由子进程持有，父进程这边立即释放
 	fs.closeSync(outFd);
