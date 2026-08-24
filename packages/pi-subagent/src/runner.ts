@@ -144,7 +144,13 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 		options.resume === true
 			? `\n\n--- 恢复运行 ---\n你上次执行此任务时因以下原因中断：${options.lastError ?? "未知原因"}\n已完成的工作仍然有效，会话历史已保留。请先检查当前实际进度，只继续完成剩余部分（包括最终总结），不要重复已完成的工作。`
 			: "";
-	fs.writeFileSync(promptFile, `Task: ${task.task}${resumeNote}`, "utf-8");
+	// 结果文件契约：要求子代理把最终总结写入固定文件，主代理优先读取（比解析事件流可靠）
+	const finalOutputPath = path.join(runDir(task.id), "final-output.txt");
+	fs.writeFileSync(
+		promptFile,
+		`Task: ${task.task}${resumeNote}\n\n完成后，把最终总结原样写入文件：${finalOutputPath}\n（用 write 或 bash 写入；文件内容应与你的最终回复一致）`,
+		"utf-8",
+	);
 	args.push(`@${promptFile}`);
 
 	return args;
@@ -217,6 +223,16 @@ export function parseResult(runId: string, exitCode: number): RunResultData {
 		usage: { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0 },
 		finishedAt: Date.now(),
 	};
+	// 结果文件契约：子代理按要求把最终总结写入 final-output.txt，优先读取（比解析事件流可靠）
+	try {
+		const finalOutputPath = path.join(runDir(runId), "final-output.txt");
+		if (fs.existsSync(finalOutputPath)) {
+			const fileOutput = fs.readFileSync(finalOutputPath, "utf-8").trim();
+			if (fileOutput) result.output = fileOutput;
+		}
+	} catch {
+		/* 文件读取失败则回退事件流解析 */
+	}
 	try {
 		const raw = fs.readFileSync(eventsPath(runId), "utf-8");
 		for (const line of raw.split("\n")) {
@@ -243,9 +259,9 @@ export function parseResult(runId: string, exitCode: number): RunResultData {
 					if (msg.model && !result.model) result.model = msg.model;
 					if (msg.stopReason) result.stopReason = msg.stopReason;
 					if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-					// 最后一条 assistant 文本 = 最终输出
+					// 最后一条 assistant 文本 = 最终输出（仅当结果文件缺失/为空时兜底）
 					for (const part of Array.isArray(msg.content) ? msg.content : []) {
-						if (part?.type === "text" && part.text) result.output = part.text;
+						if (part?.type === "text" && part.text && !result.output) result.output = part.text;
 					}
 				}
 			}

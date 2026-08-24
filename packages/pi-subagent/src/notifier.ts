@@ -105,7 +105,7 @@ export class Notifier {
 								})),
 							},
 						},
-						{ triggerTurn: false },
+						{ triggerTurn: true },
 					);
 					// 投递确认：sendMessage 接受后才标记 notified
 					for (const { run } of items) {
