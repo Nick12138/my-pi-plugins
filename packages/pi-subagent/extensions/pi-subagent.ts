@@ -18,7 +18,7 @@ import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } 
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
 import { createSupervisorChannel, registerSupervisorTool, visibleRequestText, type SupervisorChannel } from "../src/supervisor-channel.ts";
-import { ENV_ORCHESTRATOR_SESSION_ID, SteerRequest, channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson } from "../src/supervisor-protocol.ts";
+import { ENV_ORCHESTRATOR_SESSION_ID, channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson, type SteerRequest } from "../src/supervisor-protocol.ts";
 import { Notifier, enqueueUnnotified } from "../src/notifier.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
 import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
