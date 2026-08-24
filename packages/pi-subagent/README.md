@@ -19,6 +19,10 @@ Windows 专用的 pi 子代理运行时：把任务委托给独立的子 pi 进�
 - **后台运行**：子进程 detached 独立进程组，主 pi 退出/重启不影响；重启后自动接管 + **补发**未通知的回调
 - **回调**：完成/失败/停止时通知主 agent（不打断当前轮，空闲自动唤醒）
 - **双向工具回调**（Nico pi-subagents 风格）：子代理可主动联系主代理要决策/结构化输入/报进度，并**阻塞等待回复**；主代理用 `subagent_supervisor` 工具回复。跨进程走**文件系统信箱**（`%TEMP%/pi-subagent-supervisor-channels/`），不依赖会话消息注入
+- **Steering 运行中引导**：主代理可在子代理运行中发送引导消息（`subagent({action:"steer", runId, message, mode})`），子代理在下一安全点/回合边界收到并调整方向
+- **预算与超时**：`maxRuntimeMs` 总超时、`turnBudget` 回合数上限、`toolTimeoutMs` 无输出卡死检测，超出自动终止防失控
+- **模型自动回退**：`fallbackModels` 列表，主模型限流/超时/错误时自动换下一个续跑（同会话断点续跑）
+- **subagent_wait**：主代理可阻塞等待子代理完成（`subagent_wait({runId?|all, timeoutMs})`），适合编排依赖关系
 - **会话标题**：每个任务带标题，显示在列表与回调中
 - **全量落盘**：原始 NDJSON 事件流（含思考内容、工具调用）+ 结果 + 会话文件，前端零丢失
 - **worktree 隔离**（可选）：并行写文件的子代理在 git worktree 中运行，审查后一键 merge
@@ -56,6 +60,17 @@ subagent(tasks:[
 # 指定模型 / worktree 隔离 / 关闭自动重试
 subagent(agent:"worker", task:"实现 xx", model:"openai/gpt-5", worktree:true, retry:0)
 
+# 预算与超时 / 模型回退
+subagent(agent:"worker", task:"长任务", maxRuntimeMs:600000, turnBudget:20, toolTimeoutMs:300000,
+         fallbackModels:["4/hy3-free", "1/glm-5.2"])   # 主模型失败自动换下一个
+
+# 运行中引导（steering）
+subagent(action:"steer", runId:"run_xxx", message:"改用方案 B，并先读 plan.md", mode:"steer")
+
+# 阻塞等待完成（编排依赖）
+subagent_wait({all:true, timeoutMs:120000})
+subagent_wait({runId:"run_xxx"})
+
 # 查看 / 控制
 subagent(action:"list")
 subagent(action:"stop", runId:"run_xxx")
@@ -67,6 +82,16 @@ subagent(action:"merge", runId:"run_xxx")     # 合并 worktree 改动到主分�
 ```
 
 手动命令：`/subagents`、`/subagent-stop <id>`、`/subagent-pause`、`/subagent-continue`、`/subagent-resume`、`/subagent-result`、`/subagent-merge`。
+
+### Steering（主代理 → 运行中子代理）
+
+主代理在子代理运行中发送引导消息（写 `%TEMP%/pi-subagent-supervisor-channels/<runId>-<agent>/steer/<id>.json`），子代理侧扩展轮询后通过 `pi.sendUserMessage(..., {deliverAs})` 注入为消息，并写 ack 确认：
+
+```text
+subagent({action:"steer", runId:"run_xxx", message:"改用方案 B", mode:"steer"})      # 中断当前执行投递
+subagent({action:"steer", runId:"run_xxx", message:"完成后补充测试", mode:"follow_up"}) # 回合边界投递
+subagent({action:"steer", runId:"run_xxx", message:"...", mode:"auto"})                # 自动
+```
 
 ## 双向工具回调（子代理 ↔ 主代理）
 

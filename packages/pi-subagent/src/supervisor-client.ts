@@ -19,15 +19,22 @@ import {
 	ENV_ORCHESTRATOR_SESSION_ID,
 	ENV_RUN_ID,
 	REPLIES_DIR,
+	STEER_ACKS_DIR,
+	STEER_DIR,
 	SUPERVISOR_TOOL_CLIENT,
 	WAIT_REPLY_POLL_MS,
 	assertMessageSize,
 	channelDir,
 	ensureChannelDir,
+	ensureSteerDirs,
 	parseRequestFile,
+	parseSteerRequest,
 	replyPath,
 	requestPath,
+	steerAckPath,
+	steerRequestPath,
 	supervisorTimeoutMs,
+	type SteerRequest,
 	type SupervisorReason,
 	type SupervisorRequest,
 	type SupervisorReply,
@@ -231,4 +238,77 @@ export default function (pi: ExtensionAPI): void {
 		},
 	};
 	pi.registerTool(tool);
+
+	// 主代理 → 子代理的 steering 引导：轮询 steer inbox 并注入为消息
+	startSteerPolling(pi);
+}
+
+// ── Steering 接收 ────────────────────────────────────────────
+
+function formatSteerMessage(req: SteerRequest): string {
+	return req.mode === "follow_up" ? `Queued follow-up from the parent orchestrator:\n\n${req.message}` : `Mid-run steering from the parent orchestrator:\n\n${req.message}`;
+}
+
+function writeSteerAck(ackDir: string, requestId: string, state: "queued" | "delivered" | "failed", error?: string): void {
+	try {
+		const file = steerAckPath(ackDir, requestId);
+		const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+		fs.writeFileSync(tmp, JSON.stringify({ type: "subagent.steer.ack", requestId, state, ts: Date.now(), ...(error ? { error } : {}) }, null, "\t"), "utf-8");
+		fs.renameSync(tmp, file);
+	} catch {
+		/* best-effort */
+	}
+}
+
+function startSteerPolling(pi: ExtensionAPI): void {
+	const meta = readChildMetadata();
+	if (!meta) return;
+	const inboxDir = path.join(meta.channelDir, STEER_DIR);
+	const ackDir = path.join(meta.channelDir, STEER_ACKS_DIR);
+	try {
+		ensureSteerDirs(meta.channelDir);
+	} catch {
+		return;
+	}
+	const seen = new Set<string>();
+	const sendUserMessage = (pi as { sendUserMessage?: (content: string, options?: { deliverAs: "steer" | "followUp" }) => unknown }).sendUserMessage;
+
+	const scan = (): void => {
+		if (typeof sendUserMessage !== "function") return;
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(inboxDir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.endsWith(".tmp")) continue;
+			const file = path.join(inboxDir, entry.name);
+			if (seen.has(file)) continue;
+			const req = parseSteerRequest(file);
+			if (!req) {
+				seen.add(file);
+				continue;
+			}
+			seen.add(file);
+			// 已 ack 过则跳过（不重复注入）
+			try {
+				if (fs.existsSync(steerAckPath(ackDir, req.id))) continue;
+			} catch {
+				/* ignore */
+			}
+			const delivery = req.mode === "follow_up" ? ("followUp" as const) : ("steer" as const);
+			try {
+				sendUserMessage(formatSteerMessage(req), { deliverAs: delivery });
+				writeSteerAck(ackDir, req.id, "delivered");
+				fs.rmSync(file, { force: true });
+			} catch (error) {
+				writeSteerAck(ackDir, req.id, "failed", error instanceof Error ? error.message : String(error));
+			}
+		}
+	};
+
+	scan();
+	const timer = setInterval(scan, 500);
+	timer.unref?.();
 }

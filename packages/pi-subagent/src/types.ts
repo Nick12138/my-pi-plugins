@@ -24,6 +24,14 @@ export interface RunTask {
 	worktree: boolean;
 	/** 失败自动重试次数 */
 	retry: number;
+	/** 模型回退列表：主模型失败（限流/超时/模型错误）时依次尝试 */
+	fallbackModels?: string[];
+	/** 运行总超时（毫秒），超时自动 kill */
+	maxRuntimeMs?: number;
+	/** 回合数上限，超出自动 stop（防失控） */
+	turnBudget?: number;
+	/** 单工具调用超时（毫秒），以进程无事件输出监控近似（0=不限制） */
+	toolTimeoutMs?: number;
 	createdAt: number;
 	parentCwd: string; // 主仓库位置（merge 时用）
 	worktreePath?: string; // 创建成功后写入
@@ -41,6 +49,7 @@ export interface RunStatusData {
 	notified: boolean; // 是否已回调主 agent
 	resumeCount: number; // 已恢复次数（上限 3）
 	retryLeft: number; // 剩余自动重试次数
+	fallbackIndex?: number; // 已尝试的模型回退位置（-1/缺省=主模型）
 	pausedAt?: number;
 	lastError?: string; // 最近一次失败原因（resume prompt 用）
 }

@@ -2,10 +2,11 @@
 import type { ChildHandle } from "./runner.ts";
 import { isProcessAlive, parseResult, spawnChild } from "./runner.ts";
 import { continueProcess, pauseProcess, stopProcess } from "./control.ts";
-import { ensureRunDir, loadAllRuns, loadRun, readStatus, readTask, runDir, writeResult, writeStatus, writeTask } from "./store.ts";
+import { ensureRunDir, eventsPath, loadAllRuns, loadRun, readStatus, readTask, runDir, writeResult, writeStatus, writeTask } from "./store.ts";
 import { createWorktree, isGitRepo } from "./worktree.ts";
-import type { RunRecord, RunTask } from "./types.ts";
+import type { RunRecord, RunResultData, RunTask } from "./types.ts";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_RETRY, MAX_RESUME_COUNT } from "./types.ts";
+import { statSync, readFileSync } from "node:fs";
 
 export interface SchedulerDeps {
 	maxConcurrency: number;
@@ -34,6 +35,76 @@ class Scheduler {
 	/** 主 pi 重启后接管：需要轮询进程状态的 run */
 	private monitorSet = new Set<string>();
 	private monitorTimer: ReturnType<typeof setInterval> | null = null;
+	private budgetTimer: ReturnType<typeof setInterval> | null = null;
+
+	/** 预算/超时监控：maxRuntimeMs 总超时、turnBudget 回合上限、toolTimeoutMs 无输出卡死 */
+	private startBudgetMonitor(): void {
+		if (this.budgetTimer) return;
+		this.budgetTimer = setInterval(() => {
+			void this.checkBudgets();
+		}, BUDGET_CHECK_INTERVAL_MS);
+		this.budgetTimer.unref?.();
+	}
+
+	private async checkBudgets(): Promise<void> {
+		const now = Date.now();
+		for (const runId of [...this.active.keys()]) {
+			const task = readTask(runId);
+			const status = readStatus(runId);
+			if (!task || !status || status.status !== "running") continue;
+
+			// 1) 总运行超时
+			if (task.maxRuntimeMs && status.startedAt && now - status.startedAt > task.maxRuntimeMs) {
+				await this.timeoutRun(runId, `运行超时（超过 ${Math.round(task.maxRuntimeMs / 1000)}s）`);
+				continue;
+			}
+
+			// 2) 回合数上限
+			if (task.turnBudget) {
+				const turns = countAssistantTurns(runId);
+				if (turns > task.turnBudget) {
+					await this.timeoutRun(runId, `超出回合预算（${turns}/${task.turnBudget} turns）`);
+					continue;
+				}
+			}
+
+			// 3) 工具卡死（无事件输出超时）
+			if (task.toolTimeoutMs && task.toolTimeoutMs > 0) {
+				try {
+					const mtime = statSync(eventsPath(runId)).mtimeMs;
+					if (now - mtime > task.toolTimeoutMs) {
+						await this.timeoutRun(runId, `工具无输出超时（超过 ${Math.round(task.toolTimeoutMs / 1000)}s 无事件）`);
+					}
+				} catch {
+					/* events 文件不存在则跳过 */
+				}
+			}
+		}
+	}
+
+	/** 超时/预算触发：kill 进程并定终态 failed(timeout) */
+	private async timeoutRun(runId: string, reason: string): Promise<void> {
+		const status = readStatus(runId);
+		const task = readTask(runId);
+		if (!status || !task) return;
+		if (status.status !== "running") return;
+		if (status.pid) await stopProcess(status.pid);
+		this.active.delete(runId);
+		const result = parseResult(runId, TIMEOUT_EXIT_CODE);
+		result.errorMessage = reason;
+		result.stopReason = "timeout";
+		writeResult(runId, result);
+		this.finishStatus(runId, status, {
+			status: "failed",
+			finishedAt: Date.now(),
+			exitCode: TIMEOUT_EXIT_CODE,
+			stopReason: "timeout",
+			errorMessage: reason,
+		});
+		const run = loadRun(runId);
+		if (run) this.deps.onSettled(run);
+		this.pump();
+	}
 
 	init(deps: Partial<SchedulerDeps>): void {
 		this.deps = { ...this.deps, ...deps };
@@ -138,8 +209,17 @@ class Scheduler {
 			status.resumeCount += 1;
 			status.lastError = result.errorMessage || result.stopReason || `退出码 ${exitCode}`;
 			status.startedAt = status.startedAt ?? Date.now();
+			// 模型回退：失败是模型相关且 fallback 列表还有下一个 → 换模型续跑
+			let nextModel: string | undefined;
+			if (isModelFailure(result) && task.fallbackModels?.length) {
+				const idx = status.fallbackIndex ?? -1;
+				if (idx + 1 < task.fallbackModels.length) {
+					nextModel = task.fallbackModels[idx + 1]!;
+					status.fallbackIndex = idx + 1;
+				}
+			}
 			writeStatus(runId, status);
-			this.spawnResume(runId, task);
+			this.spawnResume(runId, task, { model: nextModel });
 			return;
 		}
 
@@ -220,11 +300,12 @@ class Scheduler {
 	}
 
 	/** 用同 session-id 续跑（自动重试与手动恢复共用）。内部负责 active 登记 + exit 监听。 */
-	private spawnResume(runId: string, task: RunTask): void {
+	private spawnResume(runId: string, task: RunTask, opts?: { model?: string }): void {
 		const status = readStatus(runId)!;
-		const { model, thinking } = this.deps.resolveModel(task);
+		const effectiveTask = opts?.model ? { ...task, model: opts.model } : task;
+		const { model, thinking } = this.deps.resolveModel(effectiveTask);
 		const handle = spawnChild({
-			task,
+			task: effectiveTask,
 			model,
 			thinking,
 			resume: true,
@@ -265,6 +346,7 @@ class Scheduler {
 			}
 		}
 		this.ensureMonitor();
+		this.startBudgetMonitor();
 		this.pump();
 	}
 
@@ -300,6 +382,32 @@ class Scheduler {
 			if (run) this.deps.onSettled(run);
 		}
 	}
+}
+
+/** 统计 events.jsonl 中 assistant 回合数（message_end 且 role=assistant） */
+function countAssistantTurns(runId: string): number {
+	let count = 0;
+	try {
+		const raw = readFileSync(eventsPath(runId), "utf-8");
+		for (const line of raw.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const event = JSON.parse(line);
+				if (event?.type === "message_end" && event.message?.role === "assistant") count++;
+			} catch {
+				/* skip bad line */
+			}
+		}
+	} catch {
+		/* events 文件不存在 */
+	}
+	return count;
+}
+
+/** 判断失败是否与模型相关（限流/超时/模型不存在/上下文过长等） */
+function isModelFailure(result: RunResultData): boolean {
+	const text = `${result.errorMessage ?? ""} ${result.stopReason ?? ""}`.toLowerCase();
+	return /model|429|503|rate\s?limit|overload|context\s?length|invalid\s?api|timeout/i.test(text);
 }
 
 export const scheduler = new Scheduler();

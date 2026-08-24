@@ -33,6 +33,57 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 
 export type SupervisorReason = "need_decision" | "interview_request" | "progress_update";
 
+// ── Steering（主代理 → 运行中子代理）─────────────────────────
+
+export const STEER_DIR = "steer";
+export const STEER_ACKS_DIR = "steer-acks";
+
+export type SteerMode = "steer" | "follow_up" | "auto";
+export type SteerAckState = "queued" | "delivered" | "failed";
+
+export interface SteerRequest {
+	type: "subagent.steer.request";
+	id: string;
+	createdAt: number;
+	expiresAt?: number;
+	message: string;
+	mode: SteerMode;
+	runId: string;
+	agent: string;
+	childIndex: number;
+}
+
+export interface SteerAck {
+	type: "subagent.steer.ack";
+	requestId: string;
+	state: SteerAckState;
+	ts: number;
+	error?: string;
+}
+
+export function steerRequestPath(dir: string, requestId: string): string {
+	return path.join(dir, STEER_DIR, `${safeSegment(requestId)}.json`);
+}
+
+export function steerAckPath(dir: string, requestId: string): string {
+	return path.join(dir, STEER_ACKS_DIR, `${safeSegment(requestId)}.json`);
+}
+
+export function ensureSteerDirs(dir: string): void {
+	fs.mkdirSync(path.join(dir, STEER_DIR), { recursive: true });
+	fs.mkdirSync(path.join(dir, STEER_ACKS_DIR), { recursive: true });
+}
+
+export function parseSteerRequest(file: string): SteerRequest | undefined {
+	const parsed = readJson<Partial<SteerRequest>>(file);
+	if (!parsed || parsed.type !== "subagent.steer.request") return undefined;
+	if (typeof parsed.id !== "string" || !parsed.id) return undefined;
+	if (typeof parsed.message !== "string" || !parsed.message) return undefined;
+	if (parsed.mode !== "steer" && parsed.mode !== "follow_up" && parsed.mode !== "auto") return undefined;
+	if (typeof parsed.runId !== "string" || typeof parsed.agent !== "string" || typeof parsed.childIndex !== "number") return undefined;
+	return parsed as SteerRequest;
+}
+
 // ── 消息结构 ────────────────────────────────────────────────
 
 export interface SupervisorRequest {

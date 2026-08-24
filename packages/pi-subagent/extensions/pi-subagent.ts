@@ -18,7 +18,7 @@ import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } 
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
 import { createSupervisorChannel, registerSupervisorTool, visibleRequestText, type SupervisorChannel } from "../src/supervisor-channel.ts";
-import { ENV_ORCHESTRATOR_SESSION_ID } from "../src/supervisor-protocol.ts";
+import { ENV_ORCHESTRATOR_SESSION_ID, SteerRequest, channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson } from "../src/supervisor-protocol.ts";
 import { Notifier, enqueueUnnotified } from "../src/notifier.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
 import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
@@ -38,7 +38,7 @@ let notifier: Notifier | null = null;
 
 // ── 工具参数 schema ──────────────────────────────────────────
 
-const Action = StringEnum(["spawn", "list", "stop", "pause", "continue", "resume", "result", "merge"] as const, {
+const Action = StringEnum(["spawn", "list", "stop", "pause", "continue", "resume", "result", "merge", "steer"] as const, {
 	description: "操作类型，默认 spawn",
 	default: "spawn",
 });
@@ -53,7 +53,7 @@ const SpawnItem = Type.Object({
 
 const SubagentParams = Type.Object({
 	action: Type.Optional(Action),
-	runId: Type.Optional(Type.String({ description: "目标 run id（stop/pause/continue/resume/result/merge 用）" })),
+	runId: Type.Optional(Type.String({ description: "目标 run id（stop/pause/continue/resume/result/merge/steer 用）" })),
 	agent: Type.Optional(Type.String({ description: "角色（spawn 单任务用）" })),
 	task: Type.Optional(Type.String({ description: "任务（spawn 单任务用）" })),
 	title: Type.Optional(Type.String({ description: "会话标题" })),
@@ -62,6 +62,12 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "子代理工作目录，默认主 agent 目录" })),
 	worktree: Type.Optional(Type.Boolean({ description: "在 git worktree 隔离目录运行（并行写文件安全），完成后用 merge 合并" })),
 	retry: Type.Optional(Type.Number({ description: "失败自动重试次数（0-3），默认取配置" })),
+	fallbackModels: Type.Optional(Type.Array(Type.String(), { description: "模型回退列表：主模型失败时依次尝试" })),
+	maxRuntimeMs: Type.Optional(Type.Number({ description: "运行总超时（毫秒），超时自动 kill" })),
+	turnBudget: Type.Optional(Type.Number({ description: "回合数上限，超出自动 stop" })),
+	toolTimeoutMs: Type.Optional(Type.Number({ description: "单工具调用超时（毫秒），0=不限制" })),
+	message: Type.Optional(Type.String({ description: "steer 时发送给运行中子代理的引导消息" })),
+	mode: Type.Optional(StringEnum(["steer", "follow_up", "auto"] as const, { description: "steer 投递模式：steer=中断当前执行投递；follow_up=回合边界投递；auto=自动", default: "steer" })),
 	tasks: Type.Optional(Type.Array(SpawnItem, { description: "一次提交多个任务（自动排队，≤并发上限同时运行）" })),
 });
 
@@ -122,6 +128,10 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 		cwd,
 		worktree: params.worktree === true,
 		retry,
+		...(params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
+		...(params.maxRuntimeMs ? { maxRuntimeMs: params.maxRuntimeMs } : {}),
+		...(params.turnBudget ? { turnBudget: params.turnBudget } : {}),
+		...(params.toolTimeoutMs ? { toolTimeoutMs: params.toolTimeoutMs } : {}),
 		createdAt: Date.now(),
 		parentCwd: cwd,
 	};
@@ -221,6 +231,34 @@ async function executeControl(
 			}
 			return text(r.ok ? `合并成功：${r.output}` : `合并失败：${r.output}`);
 		}
+		case "steer": {
+			const task = run.task;
+			const message = params.message?.trim();
+			if (!message) return text("steer 需要 message（给运行中子代理的引导消息）。");
+			if (run.status.status !== "running" && run.status.status !== "paused") {
+				return text(`run ${runId} 当前状态 ${STATUS_LABEL[run.status.status]}，无法引导。`);
+			}
+			const steerDir = channelDir(task.id, task.agent);
+			ensureSteerDirs(steerDir);
+			const request: SteerRequest = {
+				type: "subagent.steer.request",
+				id: randomUUID(),
+				createdAt: Date.now(),
+				message,
+				mode: params.mode ?? "steer",
+				runId: task.id,
+				agent: task.agent,
+				childIndex: 0,
+			};
+			try {
+				writeAtomicJson(steerRequestPath(steerDir, request.id), request);
+			} catch (error) {
+				return text(`引导失败：${error instanceof Error ? error.message : String(error)}`);
+			}
+			return text(
+				`已向「${task.title}」发送引导消息（${request.id}）。\n内容：${message}\n子代理将在${params.mode === "follow_up" ? "回合边界" : "下一安全点"}收到。`,
+			);
+		}
 		default:
 			return text(`未知操作 ${action}`);
 	}
@@ -236,6 +274,54 @@ export default function (pi: ExtensionAPI) {
 	// supervisor 工具必须在扩展加载阶段注册（与 subagent 同时机），
 	// 否则会话工具列表快照不会包含它（session_start 里注册无法同步到已建会话）
 	registerSupervisorTool(pi);
+
+	// subagent_wait：阻塞等待子代理完成（与 subagent 工具同时机注册）
+	pi.registerTool({
+		name: "subagent_wait",
+		label: "Subagent Wait",
+		description: [
+			"阻塞等待子代理任务完成：",
+			"- subagent_wait({runId:"<id>"})：等单个 run 完成",
+			"- subagent_wait({all:true})：等当前所有运行中的 run 完成",
+			"- timeoutMs：超时后返回当前进度（默认 30 分钟）；run 在后台继续不受影响",
+			"返回每个目标 run 的最终状态与输出预览。",
+		].join("\n"),
+		parameters: Type.Object({
+			runId: Type.Optional(Type.String({ description: "目标 run id（缺省且 all=false 时等全部）" })),
+			all: Type.Optional(Type.Boolean({ description: "等所有运行中的 run 完成" })),
+			timeoutMs: Type.Optional(Type.Number({ description: "超时（毫秒），默认 1800000（30 分钟）" })),
+		}),
+		async execute(_id, params) {
+			const timeoutMs = params.timeoutMs ?? 30 * 60 * 1000;
+			const deadline = Date.now() + Math.max(1000, timeoutMs);
+			const runs = loadAllRuns();
+			const targets = params.runId
+				? runs.filter((r) => r.task.id === params.runId || r.task.id.startsWith(params.runId!))
+				: runs.filter((r) => r.status.status === "running" || r.status.status === "pending" || r.status.status === "paused");
+			if (targets.length === 0) return text("没有需要等待的 run。");
+
+			const isTerminal = (s: { status: string }): boolean =>
+				s.status === "completed" || s.status === "failed" || s.status === "stopped" || s.status === "interrupted";
+
+			while (Date.now() < deadline) {
+				const done = targets.filter((r) => isTerminal(readStatus(r.task.id) ?? r.status));
+				if (done.length === targets.length) {
+					const lines = targets.map((r) => {
+						const st = readStatus(r.task.id) ?? r.status;
+						const res = readResult(r.task.id);
+						const preview = res?.output?.split("\n")[0]?.slice(0, 100) ?? "";
+						return `- 「${r.task.title}」[${STATUS_LABEL[st.status]}]${preview ? `：${preview}` : ""}`;
+					});
+					return text(`等待完成（${targets.length} 个）：\n${lines.join("\n")}`);
+				}
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+			}
+			const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
+			return text(
+				`等待超时（${Math.round(timeoutMs / 1000)}s），仍有 ${running.length} 个 run 运行中。\n可用 subagent(action:"list") 查看，或稍后 subagent_wait 再等。`,
+			);
+		},
+	});
 
 	pi.registerTool({
 		name: "subagent",
