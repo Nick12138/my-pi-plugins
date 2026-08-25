@@ -91,8 +91,6 @@ function formatGrouped(items: NotifyItem[]): string {
 export class Notifier {
 	private pi: ExtensionAPI;
 	private pending = new Map<string, RunRecord>();
-	/** 中间态通知（如暂停）：发送成功不标记 notified，不阻断终态通知 */
-	private interimPending = new Map<string, RunRecord>();
 	private flushing = false;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private batchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -106,12 +104,6 @@ export class Notifier {
 		const status = readStatus(run.task.id);
 		if (!status || status.notified) return;
 		this.pending.set(run.task.id, run);
-		this.scheduleBatch();
-	}
-
-	/** 入队一个中间态 run（如暂停）：发送成功不标记 notified，后续终态通知不受影响 */
-	queueInterim(run: RunRecord): void {
-		this.interimPending.set(run.task.id, run);
 		this.scheduleBatch();
 	}
 
@@ -129,55 +121,34 @@ export class Notifier {
 		if (this.flushing) return;
 		this.flushing = true;
 		try {
-			// 先发终态通知（标记 notified），再发中间态通知（不标记），两者互不干扰
-			await this.drainQueue(this.pending, true);
-			await this.drainQueue(this.interimPending, false);
+			await this.drainQueue(this.pending);
 		} finally {
 			this.flushing = false;
 		}
 	}
 
-	/** 清空并发送一个通知队列。markNotified=true 为终态通知（发送成功写 notified 标记）。 */
-	private async drainQueue(map: Map<string, RunRecord>, markNotified: boolean): Promise<void> {
+	/** 清空并发送终态通知队列（发送成功写 notified 标记）。
+	 * 仅终态（completed/failed/stopped/interrupted）入队；暂停等中间态不通知，
+	 * 主 agent 可通过 subagent(action:"list") 自行查看。 */
+	private async drainQueue(map: Map<string, RunRecord>): Promise<void> {
 		while (map.size > 0) {
 			// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
 			// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒其他会话，避免串扰。
 			const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
-			// run 是否已进入终态（中间态通知若已终态则无需补发）
-			const isTerminal = (run: RunRecord): boolean => {
-				const st = readStatus(run.task.id);
-				return !!st && (st.status === "completed" || st.status === "failed" || st.status === "stopped" || st.status === "interrupted");
-			};
 			const owned = [...map.values()].filter((run) => {
 				if (!run.task.sessionId) return false;
 				return run.task.sessionId === currentSessionId;
 			});
-			// 非当前会话的 run：
+			// 非当前会话的 run：标 notified 丢弃，避免下次重复补发（防跨会话串扰）
 			for (const run of map.values()) {
 				if (owned.includes(run)) continue;
-				if (markNotified) {
-					// 终态通知：标 notified 丢弃，避免下次重复补发（防跨会话串扰）
-					const st = readStatus(run.task.id);
-					if (st) writeStatus(run.task.id, { ...st, notified: true });
-					map.delete(run.task.id);
-				} else if (isTerminal(run)) {
-					// 中间态通知但 run 已终态：无需再补发暂停等，丢弃
-					map.delete(run.task.id);
-				}
-				// 否则：中间态通知保留队列，等用户切回 run 的发起会话后补发
+				const st = readStatus(run.task.id);
+				if (st) writeStatus(run.task.id, { ...st, notified: true });
+				map.delete(run.task.id);
 			}
 			if (owned.length === 0) return;
-			// 发送前再次确认：中间态通知若 run 已终态则跳过（不发“已暂停”给已完成的任务）
-			const pendingItems = owned.filter((run) => {
-				if (!markNotified && isTerminal(run)) {
-					map.delete(run.task.id);
-					return false;
-				}
-				return true;
-			});
-			if (pendingItems.length === 0) continue;
-			const items = pendingItems.map((run) => ({ run }));
-			const content = formatGrouped(items, markNotified);
+			const items = owned.map((run) => ({ run }));
+			const content = formatGrouped(items);
 			try {
 				this.pi.sendMessage(
 					{
@@ -198,12 +169,10 @@ export class Notifier {
 					},
 					{ triggerTurn: true },
 				);
-				// 投递确认：sendMessage 接受后才写状态/删除。终态才标记 notified，中间态保持可重发
+				// 投递确认：sendMessage 接受后才写 notified 标记
 				for (const { run } of items) {
-					if (markNotified) {
-						const st = readStatus(run.task.id);
-						if (st) writeStatus(run.task.id, { ...st, notified: true });
-					}
+					const st = readStatus(run.task.id);
+					if (st) writeStatus(run.task.id, { ...st, notified: true });
 					map.delete(run.task.id);
 				}
 			} catch {
@@ -230,10 +199,13 @@ export class Notifier {
 	}
 }
 
-/** 重启接管时补发：终态但未通知的 run 入队 */
+/** 重启接管时补发：仅终态（completed/failed/stopped/interrupted）且未通知的 run 入队。
+ * 暂停等中间态不通知（主 agent 可自行 subagent(action:"list") 查看状态）。 */
 export function enqueueUnnotified(notifier: Notifier, runs: RunRecord[]): void {
 	for (const run of runs) {
 		const status = readStatus(run.task.id);
-		if (status && !status.notified) notifier.queue(run);
+		if (!status || status.notified) continue;
+		if (status.status !== "completed" && status.status !== "failed" && status.status !== "stopped" && status.status !== "interrupted") continue;
+		notifier.queue(run);
 	}
 }

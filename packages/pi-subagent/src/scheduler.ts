@@ -15,8 +15,6 @@ export interface SchedulerDeps {
 	projectTrusted: boolean;
 	/** run 进入终态（completed/failed/stopped/interrupted）时通知（回调/补发） */
 	onSettled: (run: RunRecord) => void;
-	/** 中间态通知（如暂停）：发送成功不标记 notified，不阻断后续终态通知 */
-	onInterim?: (run: RunRecord) => void;
 }
 
 interface ActiveEntry {
@@ -306,10 +304,9 @@ class Scheduler {
 		// 先真正挂起进程，失败则保持 running 并返回错误，不要假装暂停成功
 		const err = await pauseProcess(status.pid);
 		if (err) return { ok: false, error: `挂起进程失败：${err}` };
+		// 暂停/继续不发通知（用户主动暂停时主 agent 可通过 subagent(action:"list") 自行查看状态；
+		// 主 agent 主动暂停时工具返回即已知）。仅停止/完成/失败/中断等终态走 onSettled 通知。
 		writeStatus(runId, { ...status, status: "paused", pausedAt: Date.now(), operator });
-		// 暂停通知（中间态）：主 agent 收到后向用户确认，不标记 notified，完成/停止时仍会正常通知
-		const run = loadRun(runId);
-		if (run) this.deps.onInterim?.(run);
 		return { ok: true };
 	}
 
@@ -400,8 +397,11 @@ class Scheduler {
 				} else {
 					this.finishStatus(task.id, status, { status: "interrupted" });
 				}
-			} else if (!status.notified) {
-				// 终态未通知 → 补发回调
+			} else if (
+				!status.notified &&
+				(status.status === "completed" || status.status === "failed" || status.status === "stopped" || status.status === "interrupted")
+			) {
+				// 终态未通知 → 补发回调（仅限终态；paused 等中间态不通知，主 agent 可自行 list 查看）
 				this.deps.onSettled(run);
 			}
 		}
