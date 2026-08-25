@@ -19,6 +19,24 @@
       }
     },
     {
+      "id": "pi-hermes-memory",
+      "name": "Hermes 记忆",
+      "description": "跨会话持久记忆 + 全文搜索：事实/偏好/教训自动沉淀并跨会话保留，SQLite FTS5 检索全部历史对话，后台每 10 轮自动学习、容量满自动整合，写入前密钥扫描拦截 API Key 等敏感信息。源自 Hermes agent。",
+      "icon": "🧠",
+      "version": "0.9.6",
+      "author": "chandra447",
+      "tags": [
+        "记忆",
+        "memory",
+        "会话搜索",
+        "agent"
+      ],
+      "install": {
+        "type": "npm",
+        "source": "npm:pi-hermes-memory"
+      }
+    },
+    {
       "id": "pi-web",
       "name": "联网搜索",
       "description": "极简联网搜索：配置 Tavily Key 后优先用 Tavily，失败自动回退免费的 Exa MCP；什么都不配也能开箱即用。",
@@ -273,24 +291,6 @@
           "description": "PiDeck 面板读取子代理列表/事件/结果的本地端口（仅回环）。"
         }
       ]
-    },
-    {
-      "id": "pi-hermes-memory",
-      "name": "Hermes 记忆",
-      "description": "跨会话持久记忆 + 全文搜索：事实/偏好/教训自动沉淀并跨会话保留，SQLite FTS5 检索全部历史对话，后台每 10 轮自动学习、容量满自动整合，写入前密钥扫描拦截 API Key 等敏感信息。源自 Hermes agent。",
-      "icon": "🧠",
-      "version": "0.9.6",
-      "author": "chandra447",
-      "tags": [
-        "记忆",
-        "memory",
-        "会话搜索",
-        "agent"
-      ],
-      "install": {
-        "type": "npm",
-        "source": "npm:pi-hermes-memory"
-      }
     }
   ]
 }
