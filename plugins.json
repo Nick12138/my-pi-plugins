@@ -37,6 +37,149 @@
       }
     },
     {
+      "id": "pi-subagent",
+      "name": "子代理",
+      "description": "Windows 专用子代理运行时：3 角色（探索/执行/审查）并行后台运行，失败可恢复（自动重试+断点续跑），完成自动回调主 agent；队列排队、暂停/继续/停止、worktree 隔离、全量事件落盘 + HTTP API 供 PiDeck 面板查看。",
+      "icon": "🤖",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "子代理",
+        "subagent",
+        "agent",
+        "并行"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-subagent"
+      },
+      "config": [
+        {
+          "key": "maxConcurrency",
+          "type": "text",
+          "label": "最大并发数",
+          "env": "SUBAGENT_MAX_CONCURRENCY",
+          "required": false,
+          "placeholder": "10",
+          "default": "10",
+          "description": "同时运行的子代理上限（1-20），超出自动排队。"
+        },
+        {
+          "key": "defaultModel",
+          "type": "select",
+          "label": "默认模型",
+          "env": "SUBAGENT_DEFAULT_MODEL",
+          "required": false,
+          "default": "",
+          "optionsSource": "pi:models",
+          "description": "子代理默认模型（provider/id）。留空 = 继承主 agent 当前模型；显式选择则固定使用该模型（仍可被调用时 model 参数临时覆盖）。选项由 PiDeck 根据本机已配置的全部模型动态生成（含纯文本模型）。"
+        },
+        {
+          "key": "fallbackModels",
+          "type": "select",
+          "label": "回退模型",
+          "env": "SUBAGENT_FALLBACK_MODELS",
+          "required": false,
+          "optionsSource": "pi:models-fallback",
+          "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
+          "description": "默认模型（显式指定时）失败后按顺序回退的模型列表：每一行一个回退模型，从上到下依次尝试（底层仍以英文逗号分隔保存）；留空则最终回退到主 agent 继承模型。任务参数 fallbackModels 优先于本配置。"
+        },
+        {
+          "key": "retry",
+          "type": "text",
+          "label": "失败自动重试次数",
+          "env": "SUBAGENT_RETRY",
+          "required": false,
+          "placeholder": "1",
+          "default": "1",
+          "description": "子代理模型报错后的自动重试次数（0-3），仍失败则回调主 agent 决定是否断点恢复。"
+        },
+        {
+          "key": "httpPort",
+          "type": "text",
+          "label": "HTTP API 端口",
+          "env": "SUBAGENT_HTTP_PORT",
+          "required": false,
+          "placeholder": "18765",
+          "default": "18765",
+          "description": "PiDeck 面板读取子代理列表/事件/结果的本地端口（仅回环）。"
+        }
+      ]
+    },
+    {
+      "id": "pi-todo",
+      "name": "Agent 任务列表",
+      "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
+      "icon": "📋",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "todo",
+        "任务管理",
+        "agent"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-todo"
+      }
+    },
+    {
+      "id": "pi-vision",
+      "name": "视觉看图",
+      "description": "让没有识图能力的模型看懂截图、图片、照片：调用 see_image 工具把图片发给配置的视觉模型，默认模型失败自动回退备用模型。",
+      "icon": "👁",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "视觉",
+        "图片理解",
+        "多模态"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-vision"
+      },
+      "config": [
+        {
+          "key": "visionModel",
+          "type": "select",
+          "label": "默认视觉模型",
+          "env": "PI_VISION_MODEL",
+          "required": false,
+          "default": "",
+          "optionsSource": "pi:vision-models",
+          "description": "默认使用的视觉模型。选项由 PiDeck 根据本机已配置且支持图片输入的模型动态生成；选“自动选择”则仅从已配置且非 OAuth 的识图模型中随机选择一个并保持（绝不会选中未配置的 OAuth/内置目录模型），失败时自动尝试其他已配置模型并记住新的成功模型。"
+        },
+        {
+          "key": "visionFallbackModels",
+          "type": "text",
+          "label": "回退视觉模型",
+          "env": "PI_VISION_FALLBACK_MODELS",
+          "required": false,
+          "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
+          "description": "显式指定默认模型时按顺序回退的备用视觉模型列表，英文逗号分隔；自动选择模式会自动尝试其他已配置视觉模型。"
+        }
+      ]
+    },
+    {
+      "id": "pi-computer-control",
+      "name": "电脑控制",
+      "description": "让 AI 直接操作电脑：截图看屏幕、移动/点击/双击/拖拽鼠标、输入文字（含中文等 Unicode）、组合键、滚轮滚动。零原生依赖（持久化 PowerShell 内嵌 C# 后端，SendInput + GDI 截图），物理像素坐标、支持多显示器。仅 Windows。",
+      "icon": "🖥️",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "电脑控制",
+        "computer-use",
+        "windows",
+        "自动化"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-computer-control"
+      }
+    },
+    {
       "id": "pi-web",
       "name": "联网搜索",
       "description": "极简联网搜索：配置 Tavily Key 后优先用 Tavily，失败自动回退免费的 Exa MCP；什么都不配也能开箱即用。",
@@ -126,79 +269,6 @@
       ]
     },
     {
-      "id": "pi-vision",
-      "name": "视觉看图",
-      "description": "让没有识图能力的模型看懂截图、图片、照片：调用 see_image 工具把图片发给配置的视觉模型，默认模型失败自动回退备用模型。",
-      "icon": "👁",
-      "version": "0.1.0",
-      "author": "Nick12138",
-      "tags": [
-        "视觉",
-        "图片理解",
-        "多模态"
-      ],
-      "install": {
-        "type": "repo",
-        "path": "packages/pi-vision"
-      },
-      "config": [
-        {
-          "key": "visionModel",
-          "type": "select",
-          "label": "默认视觉模型",
-          "env": "PI_VISION_MODEL",
-          "required": false,
-          "default": "",
-          "optionsSource": "pi:vision-models",
-          "description": "默认使用的视觉模型。选项由 PiDeck 根据本机已配置且支持图片输入的模型动态生成；选“自动选择”则仅从已配置且非 OAuth 的识图模型中随机选择一个并保持（绝不会选中未配置的 OAuth/内置目录模型），失败时自动尝试其他已配置模型并记住新的成功模型。"
-        },
-        {
-          "key": "visionFallbackModels",
-          "type": "text",
-          "label": "回退视觉模型",
-          "env": "PI_VISION_FALLBACK_MODELS",
-          "required": false,
-          "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
-          "description": "显式指定默认模型时按顺序回退的备用视觉模型列表，英文逗号分隔；自动选择模式会自动尝试其他已配置视觉模型。"
-        }
-      ]
-    },
-    {
-      "id": "pi-computer-control",
-      "name": "电脑控制",
-      "description": "让 AI 直接操作电脑：截图看屏幕、移动/点击/双击/拖拽鼠标、输入文字（含中文等 Unicode）、组合键、滚轮滚动。零原生依赖（持久化 PowerShell 内嵌 C# 后端，SendInput + GDI 截图），物理像素坐标、支持多显示器。仅 Windows。",
-      "icon": "🖥️",
-      "version": "0.1.0",
-      "author": "Nick12138",
-      "tags": [
-        "电脑控制",
-        "computer-use",
-        "windows",
-        "自动化"
-      ],
-      "install": {
-        "type": "repo",
-        "path": "packages/pi-computer-control"
-      }
-    },
-    {
-      "id": "pi-todo",
-      "name": "Agent 任务列表",
-      "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
-      "icon": "📋",
-      "version": "0.1.0",
-      "author": "Nick12138",
-      "tags": [
-        "todo",
-        "任务管理",
-        "agent"
-      ],
-      "install": {
-        "type": "repo",
-        "path": "packages/pi-todo"
-      }
-    },
-    {
       "id": "pi-wpscli",
       "name": "WPS-CLI",
       "description": "封装本机 WPS 命令行（wpscli）：扫描件 OCR 转可编辑 Word、Office 转 PDF、PDF 信息/压缩/水印、图片与 PDF 互转、PDF 转 Markdown。无需密钥，依赖 WPS Office 及会员能力。",
@@ -219,76 +289,6 @@
           "required": false,
           "placeholder": "C:\\Users\\…\\WPS Office\\12.1.0.xxxxx\\clitool\\wpscli.exe",
           "description": "留空则自动定位（PATH → 最新版 WPS 安装目录）；找不到时才需要填完整路径。"
-        }
-      ]
-    },
-    {
-      "id": "pi-subagent",
-      "name": "子代理",
-      "description": "Windows 专用子代理运行时：3 角色（探索/执行/审查）并行后台运行，失败可恢复（自动重试+断点续跑），完成自动回调主 agent；队列排队、暂停/继续/停止、worktree 隔离、全量事件落盘 + HTTP API 供 PiDeck 面板查看。",
-      "icon": "🤖",
-      "version": "0.1.0",
-      "author": "Nick12138",
-      "tags": [
-        "子代理",
-        "subagent",
-        "agent",
-        "并行"
-      ],
-      "install": {
-        "type": "repo",
-        "path": "packages/pi-subagent"
-      },
-      "config": [
-        {
-          "key": "maxConcurrency",
-          "type": "text",
-          "label": "最大并发数",
-          "env": "SUBAGENT_MAX_CONCURRENCY",
-          "required": false,
-          "placeholder": "10",
-          "default": "10",
-          "description": "同时运行的子代理上限（1-20），超出自动排队。"
-        },
-        {
-          "key": "defaultModel",
-          "type": "select",
-          "label": "默认模型",
-          "env": "SUBAGENT_DEFAULT_MODEL",
-          "required": false,
-          "default": "",
-          "optionsSource": "pi:models",
-          "description": "子代理默认模型（provider/id）。留空 = 继承主 agent 当前模型；显式选择则固定使用该模型（仍可被调用时 model 参数临时覆盖）。选项由 PiDeck 根据本机已配置的全部模型动态生成（含纯文本模型）。"
-        },
-        {
-          "key": "fallbackModels",
-          "type": "select",
-          "label": "回退模型",
-          "env": "SUBAGENT_FALLBACK_MODELS",
-          "required": false,
-          "optionsSource": "pi:models-fallback",
-          "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
-          "description": "默认模型（显式指定时）失败后按顺序回退的模型列表：每一行一个回退模型，从上到下依次尝试（底层仍以英文逗号分隔保存）；留空则最终回退到主 agent 继承模型。任务参数 fallbackModels 优先于本配置。"
-        },
-        {
-          "key": "retry",
-          "type": "text",
-          "label": "失败自动重试次数",
-          "env": "SUBAGENT_RETRY",
-          "required": false,
-          "placeholder": "1",
-          "default": "1",
-          "description": "子代理模型报错后的自动重试次数（0-3），仍失败则回调主 agent 决定是否断点恢复。"
-        },
-        {
-          "key": "httpPort",
-          "type": "text",
-          "label": "HTTP API 端口",
-          "env": "SUBAGENT_HTTP_PORT",
-          "required": false,
-          "placeholder": "18765",
-          "default": "18765",
-          "description": "PiDeck 面板读取子代理列表/事件/结果的本地端口（仅回环）。"
         }
       ]
     }
