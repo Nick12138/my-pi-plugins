@@ -11,10 +11,17 @@
  *     ↓ 缺省
  *   PI_VISION_MODEL（默认视觉模型，格式 "provider/modelId"）
  *     ↓ 缺省
- *   auto：选择一个可用视觉模型，失败后自动尝试其他可用视觉模型
+ *   auto：仅从"用户已配置且非 OAuth"的视觉模型中随机选择一个（见下），
+ *         失败后自动尝试其他已配置的视觉模型
  *     ↓ 成功
  *   成功模型会提升为下一次自动调用的首选模型
  *   PI_VISION_FALLBACK_MODELS（显式默认模型时的回退模型，逗号分隔，按顺序尝试）
+ *
+ * auto 模式的候选范围：只认"用户已配置"的模型 —— provider 有可用认证
+ * （models.json / auth.json / 运行时 key / 环境变量），且不是 OAuth 登录的
+ * provider（如 openrouter、anthropic 等内置 OAuth 模型）。这样自动选择不会
+ * 随机挑中用户根本没有配置过的 OAuth / 内置目录模型。显式配置（PI_VISION_MODEL、
+ * 回退列表、model 参数）不受此限制，仍按用户填写的内容解析。
  *
  * 参照实现（致谢）：
  *   - pi-vision-tool    —— describe_image 工具形态（tool 委托视觉模型）
@@ -152,6 +159,19 @@ interface VisionCandidate {
 // 自动模式只在当前插件进程内记住成功模型；显式配置模型不会改变它。
 let autoPreferredModelRef: string | undefined;
 
+/**
+ * auto 模式只认可"用户已配置"的视觉模型：
+ * - provider 有可用认证（models.json / auth.json / 运行时 key / 环境变量），且
+ * - 不是 OAuth 登录的 provider（内置 OAuth 目录模型一律排除）。
+ * 这样自动选择不会随机挑中用户根本没有配置过的 OAuth / 内置目录模型。
+ */
+function isUserConfiguredModel(ctx: ExtensionContext, model: Model<Api>): boolean {
+	const status = ctx.modelRegistry.getProviderAuthStatus(model.provider);
+	if (!status.configured) return false;
+	if (ctx.modelRegistry.isUsingOAuth(model)) return false;
+	return true;
+}
+
 function modelRef(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
 }
@@ -189,7 +209,8 @@ function buildCandidates(ctx: ExtensionContext, overrideRef: string | undefined)
 	} else {
 		const autoModels = ctx.modelRegistry
 			.getAll()
-			.filter((m) => m.input?.includes("image"));
+			.filter((m) => m.input?.includes("image"))
+			.filter((m) => isUserConfiguredModel(ctx, m));
 		let preferred = autoPreferredModelRef
 			? autoModels.find((m) => modelRef(m) === autoPreferredModelRef)
 			: undefined;
@@ -202,7 +223,7 @@ function buildCandidates(ctx: ExtensionContext, overrideRef: string | undefined)
 			: autoModels;
 
 		if (ordered.length === 0) {
-			push("auto（无可用视觉模型）", undefined);
+			push("auto（无已配置的视觉模型）", undefined);
 		} else {
 			for (const model of ordered) push(modelRef(model), model);
 		}
@@ -301,6 +322,9 @@ function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string 
 			return `  ${i + 1}. [${c.ref}] ${name}${c.unusable ? ` — ${c.unusable}` : ""}`;
 		}),
 		"",
+		"auto 模式说明: 只从'用户已配置且非 OAuth'的 provider 中选择视觉模型；",
+		"  未配置 / OAuth 登录的 provider（如 openrouter、anthropic 内置目录）不会被自动选中。",
+		"",
 		"配置方式（环境变量，PiDeck 配置界面注入）:",
 		"  PI_VISION_MODEL=provider/modelId            默认视觉模型",
 		"  PI_VISION_FALLBACK_MODELS=a/x,b/y           回退模型，逗号分隔",
@@ -343,7 +367,7 @@ export default function (pi: ExtensionAPI) {
 			"适用于需要根据图片内容作答的任何场景：UI 截图、报错弹窗、图表、照片、扫描件等。" +
 			"image 支持本地文件路径或 data:image/...;base64 形式的 data URL。" +
 			"prompt 是你想从图片里得到什么，写得越具体越好。" +
-			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则使用自动首选视觉模型，失败时自动按序尝试其他可用视觉模型。",
+			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则自动从已配置（非 OAuth）的视觉模型中首选，失败时自动按序尝试其他已配置模型。",
 		promptSnippet: "用视觉模型解析图片内容（截图/照片/图片），支持默认模型 + 回退模型",
 		promptGuidelines: [
 			"需要看懂截图、报错弹窗、UI 界面、图表、照片等任何图片内容时，调用 see_image；在 prompt 里写明你具体要从图中获取什么。",

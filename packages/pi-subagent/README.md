@@ -40,7 +40,7 @@ pi install git:github.com/Nick12138/my-pi-plugins   # 全仓库安装后启用�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SUBAGENT_MAX_CONCURRENCY` | `10` | 同时运行上限，超出自动排队 |
-| `SUBAGENT_DEFAULT_MODEL` | `inherit` | 子代理默认模型（`provider/id`）；`inherit` = 继承主 agent |
+| `SUBAGENT_DEFAULT_MODEL` | 空（= inherit） | 子代理默认模型（`provider/id`，配置界面为下拉选择，选项与「视觉看图」同源）；留空/`inherit` = 继承主 agent |
 | `SUBAGENT_RETRY` | `1` | 失败自动重试次数（0-3） |
 | `SUBAGENT_HTTP_PORT` | `18765` | HTTP API 端口（PiDeck 面板用） |
 | `SUBAGENT_FALLBACK_MODELS` | 空 | 全局默认回退模型列表（逗号分隔，如 `4/hy3-free,1/glm-5.2`）；任务参数 `fallbackModels` 优先 |
