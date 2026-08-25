@@ -137,20 +137,15 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 	const agentFile = path.join(MODULE_DIR, "..", "agents", `${task.agent}.md`);
 	if (fs.existsSync(agentFile)) args.push("--append-system-prompt", agentFile);
 
-	// 任务 prompt：写入 prompt.md，用 @file 传入（不依赖 stdin 生命周期，detached 安全）
+	// 任务 prompt：写入 prompt.md，用 @file 传入（不依赖 stdin 生命周期，detached 安全）。
+	// 只包含主 agent 的任务描述（+ 恢复提示），不插入额外的工具指令。
 	ensureRunDir(task.id);
 	const promptFile = path.join(runDir(task.id), "prompt.md");
 	const resumeNote =
 		options.resume === true
 			? `\n\n--- 恢复运行 ---\n你上次执行此任务时因以下原因中断：${options.lastError ?? "未知原因"}\n已完成的工作仍然有效，会话历史已保留。请先检查当前实际进度，只继续完成剩余部分（包括最终总结），不要重复已完成的工作。`
 			: "";
-	// 结果文件契约：要求子代理把最终总结写入固定文件，主代理优先读取（比解析事件流可靠）
-	const finalOutputPath = path.join(runDir(task.id), "final-output.txt");
-	fs.writeFileSync(
-		promptFile,
-		`Task: ${task.task}${resumeNote}\n\n完成后，把最终总结原样写入文件：${finalOutputPath}\n（用 write 或 bash 写入；文件内容应与你的最终回复一致）`,
-		"utf-8",
-	);
+	fs.writeFileSync(promptFile, `Task: ${task.task}${resumeNote}`, "utf-8");
 	args.push(`@${promptFile}`);
 
 	return args;
@@ -223,12 +218,17 @@ export function parseResult(runId: string, exitCode: number): RunResultData {
 		usage: { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0 },
 		finishedAt: Date.now(),
 	};
-	// 结果文件契约：子代理按要求把最终总结写入 final-output.txt，优先读取（比解析事件流可靠）
+	// 兼容旧 run：若存在 final-output.txt（旧版契约产物）则优先作为最终输出；
+	// 新 run 不再要求写文件，结果主要靠事件流里最后一条 assistant 文本。
+	let fileOutput = "";
 	try {
 		const finalOutputPath = path.join(runDir(runId), "final-output.txt");
 		if (fs.existsSync(finalOutputPath)) {
-			const fileOutput = fs.readFileSync(finalOutputPath, "utf-8").trim();
-			if (fileOutput) result.output = fileOutput;
+			const t = fs.readFileSync(finalOutputPath, "utf-8").trim();
+			if (t) {
+				fileOutput = t;
+				result.output = t;
+			}
 		}
 	} catch {
 		/* 文件读取失败则回退事件流解析 */
@@ -259,9 +259,11 @@ export function parseResult(runId: string, exitCode: number): RunResultData {
 					if (msg.model && !result.model) result.model = msg.model;
 					if (msg.stopReason) result.stopReason = msg.stopReason;
 					if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-					// 最后一条 assistant 文本 = 最终输出（仅当结果文件缺失/为空时兜底）
-					for (const part of Array.isArray(msg.content) ? msg.content : []) {
-						if (part?.type === "text" && part.text && !result.output) result.output = part.text;
+					// 无文件输出时：事件流里最后一条 assistant 文本 = 最终输出（持续覆盖取最后一条）
+					if (!fileOutput) {
+						for (const part of Array.isArray(msg.content) ? msg.content : []) {
+							if (part?.type === "text" && part.text) result.output = part.text;
+						}
 					}
 				}
 			}
