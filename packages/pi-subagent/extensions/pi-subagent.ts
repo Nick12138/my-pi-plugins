@@ -197,7 +197,7 @@ async function executeSpawn(params: SubagentParamsT, ctx: ExtensionContext): Pro
 	}
 	const max = scheduler.deps.maxConcurrency;
 	return text(
-		`已提交 ${runIds.length} 个子代理任务（并发上限 ${max}，超出的自动排队）：\n${runIds.map((id) => `- ${id}`).join("\n")}\n\n完成/失败时会自动通知主 agent，无需等待。查看列表：subagent(action:"list")。[v3]`,
+		`已提交 ${runIds.length} 个子代理任务（并发上限 ${max}，超出的自动排队）：\n${runIds.map((id) => `- ${id}`).join("\n")}\n\n完成/失败时会自动通知主 agent，无需等待。查看列表：subagent(action:"list")。`,
 		{ runIds, maxConcurrency: max },
 	);
 }
