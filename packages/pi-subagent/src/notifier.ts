@@ -91,6 +91,8 @@ function formatGrouped(items: NotifyItem[]): string {
 export class Notifier {
 	private pi: ExtensionAPI;
 	private pending = new Map<string, RunRecord>();
+	/** 中间态通知（如暂停）：发送成功不标记 notified，不阻断终态通知 */
+	private interimPending = new Map<string, RunRecord>();
 	private flushing = false;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private batchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -104,6 +106,12 @@ export class Notifier {
 		const status = readStatus(run.task.id);
 		if (!status || status.notified) return;
 		this.pending.set(run.task.id, run);
+		this.scheduleBatch();
+	}
+
+	/** 入队一个中间态 run（如暂停）：发送成功不标记 notified，后续终态通知不受影响 */
+	queueInterim(run: RunRecord): void {
+		this.interimPending.set(run.task.id, run);
 		this.scheduleBatch();
 	}
 
@@ -121,58 +129,69 @@ export class Notifier {
 		if (this.flushing) return;
 		this.flushing = true;
 		try {
-			while (this.pending.size > 0) {
-				// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
-				// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒任何会话，直接标 notified 丢弃，
-				// 避免“新会话收到别人的子代理通知并自动处理”（如自动 resume 产生额外 LLM 成本）。
-				const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
-				const owned = [...this.pending.values()].filter((run) => {
-					if (!run.task.sessionId) return false;
-					return run.task.sessionId === currentSessionId;
-				});
-				// 非当前会话的 run：丢弃（标 notified，避免下次重复补发）
-				for (const run of this.pending.values()) {
-					if (owned.includes(run)) continue;
-					const st = readStatus(run.task.id);
-					if (st) writeStatus(run.task.id, { ...st, notified: true });
-					this.pending.delete(run.task.id);
-				}
-				if (owned.length === 0) return;
-				const items = owned.map((run) => ({ run }));
-				const content = formatGrouped(items);
-				try {
-					this.pi.sendMessage(
-						{
-							customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
-							content,
-							// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
-							// 避免“工具提示”直接显示在主会话里。
-							display: false,
-							details: {
-								count: items.length,
-								runs: items.map(({ run }) => ({
-									id: run.task.id,
-									title: run.task.title,
-									agent: run.task.agent,
-									status: run.status.status,
-								})),
-							},
-						},
-						{ triggerTurn: true },
-					);
-					// 投递确认：sendMessage 接受后才标记 notified
-					for (const { run } of items) {
-						const st = readStatus(run.task.id);
-						if (st) writeStatus(run.task.id, { ...st, notified: true });
-						this.pending.delete(run.task.id);
-					}
-				} catch {
-					// 会话不活跃等：保留队列，由定时器重试
-					break;
-				}
-			}
+			// 先发终态通知（标记 notified），再发中间态通知（不标记），两者互不干扰
+			await this.drainQueue(this.pending, true);
+			await this.drainQueue(this.interimPending, false);
 		} finally {
 			this.flushing = false;
+		}
+	}
+
+	/** 清空并发送一个通知队列。markNotified=true 为终态通知（发送成功写 notified 标记）。 */
+	private async drainQueue(map: Map<string, RunRecord>, markNotified: boolean): Promise<void> {
+		while (map.size > 0) {
+			// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
+			// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒任何会话，直接丢弃，
+			// 避免“新会话收到别人的子代理通知并自动处理”（如自动 resume 产生额外 LLM 成本）。
+			const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
+			const owned = [...map.values()].filter((run) => {
+				if (!run.task.sessionId) return false;
+				return run.task.sessionId === currentSessionId;
+			});
+			// 非当前会话的 run：丢弃（终态标 notified 避免下次重复补发；中间态直接丢弃）
+			for (const run of map.values()) {
+				if (owned.includes(run)) continue;
+				if (markNotified) {
+					const st = readStatus(run.task.id);
+					if (st) writeStatus(run.task.id, { ...st, notified: true });
+				}
+				map.delete(run.task.id);
+			}
+			if (owned.length === 0) return;
+			const items = owned.map((run) => ({ run }));
+			const content = formatGrouped(items, markNotified);
+			try {
+				this.pi.sendMessage(
+					{
+						customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
+						content,
+						// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
+						// 避免“工具提示”直接显示在主会话里。
+						display: false,
+						details: {
+							count: items.length,
+							runs: items.map(({ run }) => ({
+								id: run.task.id,
+								title: run.task.title,
+								agent: run.task.agent,
+								status: run.status.status,
+							})),
+						},
+					},
+					{ triggerTurn: true },
+				);
+				// 投递确认：sendMessage 接受后才写状态/删除。终态才标记 notified，中间态保持可重发
+				for (const { run } of items) {
+					if (markNotified) {
+						const st = readStatus(run.task.id);
+						if (st) writeStatus(run.task.id, { ...st, notified: true });
+					}
+					map.delete(run.task.id);
+				}
+			} catch {
+				// 会话不活跃等：保留队列，由定时器重试
+				break;
+			}
 		}
 	}
 

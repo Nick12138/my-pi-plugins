@@ -470,6 +470,10 @@ export default function (pi: ExtensionAPI) {
 			resolveModel: resolveModelFor,
 			projectTrusted: ctx.isProjectTrusted?.() ?? false,
 			onSettled: makeOnSettled(notifier),
+			// 中间态通知（如暂停）：发送成功不标记 notified，不阻断终态通知
+			onInterim: (run) => {
+				notifier.queueInterim(run);
+			},
 		});
 		// 每次会话都接管磁盘上遗留的 running/paused run（宿主重启/崩溃兜底），
 		// tick 会轮询其子进程存活状态并在进程消失后定终态

@@ -15,6 +15,8 @@ export interface SchedulerDeps {
 	projectTrusted: boolean;
 	/** run 进入终态（completed/failed/stopped/interrupted）时通知（回调/补发） */
 	onSettled: (run: RunRecord) => void;
+	/** 中间态通知（如暂停）：发送成功不标记 notified，不阻断后续终态通知 */
+	onInterim?: (run: RunRecord) => void;
 }
 
 interface ActiveEntry {
@@ -203,6 +205,21 @@ class Scheduler {
 			this.pump();
 			return;
 		}
+		// 进程在暂停期间退出：真正挂起的进程不会退出，走到这里说明挂起失败/进程被外部终止。
+		// 按“中断”处理并通知主 agent 询问用户，不伪装成自然完成（旧逻辑会转 completed）。
+		if (status.status === "paused") {
+			this.finishStatus(runId, status, {
+				status: "interrupted",
+				finishedAt: Date.now(),
+				exitCode,
+				pausedAt: undefined,
+				stopReason: "exited-while-paused",
+				errorMessage: status.errorMessage ?? "进程在暂停期间退出（挂起失败或进程被外部终止）",
+			});
+			this.deps.onSettled(loadRun(runId)!);
+			this.pump();
+			return;
+		}
 		// 预算/超时监控已定终态（timeoutRun），exit 回调不覆盖
 		if (status.status !== "running" && status.status !== "paused") return;
 
@@ -286,8 +303,13 @@ class Scheduler {
 		const status = readStatus(runId);
 		if (!status) return { ok: false, error: "run 不存在" };
 		if (status.status !== "running" || !status.pid) return { ok: false, error: `当前状态 ${status.status} 不可暂停` };
-		await pauseProcess(status.pid);
+		// 先真正挂起进程，失败则保持 running 并返回错误，不要假装暂停成功
+		const err = await pauseProcess(status.pid);
+		if (err) return { ok: false, error: `挂起进程失败：${err}` };
 		writeStatus(runId, { ...status, status: "paused", pausedAt: Date.now(), operator });
+		// 暂停通知（中间态）：主 agent 收到后向用户确认，不标记 notified，完成/停止时仍会正常通知
+		const run = loadRun(runId);
+		if (run) this.deps.onInterim?.(run);
 		return { ok: true };
 	}
 
@@ -295,7 +317,9 @@ class Scheduler {
 		const status = readStatus(runId);
 		if (!status) return { ok: false, error: "run 不存在" };
 		if (status.status !== "paused" || !status.pid) return { ok: false, error: `当前状态 ${status.status} 不可继续` };
-		await continueProcess(status.pid);
+		// 先真正恢复进程，失败则保持 paused 并返回错误
+		const err = await continueProcess(status.pid);
+		if (err) return { ok: false, error: `恢复进程失败：${err}` };
 		writeStatus(runId, { ...status, status: "running", pausedAt: undefined, operator });
 		return { ok: true };
 	}
@@ -407,12 +431,15 @@ class Scheduler {
 			// 进程结束，exitCode 未知：以事件流判定
 			const result = parseResult(runId, 0);
 			writeResult(runId, result);
+			const wasPaused = status.status === "paused";
 			const failed = result.stopReason === "error" || result.stopReason === "aborted";
 			this.finishStatus(runId, status, {
-				status: failed ? "failed" : result.output ? "completed" : "interrupted",
+				// 暂停期间进程消失同样按中断处理（见 handleExit 的 paused 分支）
+				status: wasPaused ? "interrupted" : failed ? "failed" : result.output ? "completed" : "interrupted",
 				finishedAt: Date.now(),
-				stopReason: result.stopReason,
-				errorMessage: result.errorMessage,
+				stopReason: wasPaused ? "exited-while-paused" : result.stopReason,
+				errorMessage: wasPaused ? status.errorMessage ?? "进程在暂停期间退出（挂起失败或进程被外部终止）" : result.errorMessage,
+				pausedAt: wasPaused ? undefined : status.pausedAt,
 			});
 			const run = loadRun(runId);
 			if (run) this.deps.onSettled(run);
