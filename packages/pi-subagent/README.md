@@ -42,7 +42,7 @@ pi install git:github.com/Nick12138/my-pi-plugins   # 全仓库安装后启用�
 | `SUBAGENT_MAX_CONCURRENCY` | `10` | 同时运行上限，超出自动排队 |
 | `SUBAGENT_DEFAULT_MODEL` | 空（= inherit） | 子代理默认模型（`provider/id`，配置界面为下拉选择，选项与「视觉看图」同源）；留空/`inherit` = 继承主 agent |
 | `SUBAGENT_RETRY` | `1` | 失败自动重试次数（0-3） |
-| `SUBAGENT_HTTP_PORT` | `18765` | HTTP API 端口（PiDeck 面板用） |
+| `SUBAGENT_HTTP_PORT` | `18765` | HTTP API 端口（PiDeck 面板用）。**可选，无需配置**：不设置时固定使用默认值 `18765`；仅当该端口被本机其他程序占用时才需要设置（改端口无需改代码/重启插件） |
 | `SUBAGENT_FALLBACK_MODELS` | 空 | 全局默认回退模型列表（逗号分隔，如 `4/hy3-free,1/glm-5.2`）；任务参数 `fallbackModels` 优先 |
 | `PI_SUBAGENT_SUPERVISOR_TIMEOUT_MS` | `600000` | 子代理等主代理回复的超时（毫秒） |
 
@@ -140,7 +140,7 @@ subagent_supervisor({ action: "status" })                       # 通道状态
 
 ## HTTP API（PiDeck 面板）
 
-绑定 `127.0.0.1:<port>`，支持 CORS：
+绑定 `127.0.0.1:<port>`，支持 CORS。端口读取环境变量 `SUBAGENT_HTTP_PORT`（可选），**未设置时固定为默认值 `18765`**；如需更换端口，设置环境变量即可，例如 `SUBAGENT_HTTP_PORT=19000`。
 
 | 端点 | 说明 |
 |---|---|
