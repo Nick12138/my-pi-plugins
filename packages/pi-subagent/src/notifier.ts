@@ -29,9 +29,17 @@ export function formatRunNotice(run: RunRecord, detail: boolean): string {
 	const label = STATUS_LABEL[status.status];
 	const duration = status.startedAt && status.finishedAt ? `${Math.round((status.finishedAt - status.startedAt) / 1000)}s` : "-";
 	const model = result?.model ?? task.model ?? "继承";
-	const meta = `（${task.agent} · ${duration} · ${model}）`;
+	const who = operatorLabel(status.operator);
+	const meta = `（${task.agent} · ${duration} · ${model}${who}）`;
 	const lines = [`【子代理通知】「${task.title}」${label}${meta}`];
 	if (status.errorMessage) lines.push(`失败原因：${status.errorMessage}`);
+
+	// 用户主动停止/暂停：主 agent 必须先询问用户，不得自行恢复或重试
+	if ((status.status === "stopped" || status.status === "paused") && status.operator === "user") {
+		lines.push(
+			`\n此任务由用户手动${status.status === "stopped" ? "停止" : "暂停"}。请先向用户确认是否需要继续，不要自行 resume/continue 或重试。`,
+		);
+	}
 
 	if (detail && result?.output) {
 		const out = result.output.length > MAX_PREVIEW ? result.output.slice(0, MAX_PREVIEW) + "\n…(已截断)" : result.output;
@@ -48,6 +56,20 @@ export function formatRunNotice(run: RunRecord, detail: boolean): string {
 		lines.push(`\n（此 run 在 worktree 中运行，改动未合并。执行 subagent(action:"merge", runId:"${task.id}") 合并。）`);
 	}
 	return lines.join("\n");
+}
+
+/** 状态信息里的操作者标注 */
+function operatorLabel(operator: string | undefined): string {
+	switch (operator) {
+		case "user":
+			return "·用户操作";
+		case "agent":
+			return "·主agent操作";
+		case "system":
+			return "·异常";
+		default:
+			return "";
+	}
 }
 
 /** 合并多条通知：单条完整输出，多条紧凑列表 */
@@ -123,7 +145,9 @@ export class Notifier {
 						{
 							customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
 							content,
-							display: true,
+							// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
+							// 避免“工具提示”直接显示在主会话里。
+							display: false,
 							details: {
 								count: items.length,
 								runs: items.map(({ run }) => ({

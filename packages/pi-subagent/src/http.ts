@@ -116,25 +116,25 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 		}
 
 		if (req.method === "POST" && parts[3] === "stop") {
-			const outcome = await scheduler.stop(runId);
+			const outcome = await scheduler.stop(runId, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}
 
 		if (req.method === "POST" && parts[3] === "pause") {
-			const outcome = await scheduler.pause(runId);
+			const outcome = await scheduler.pause(runId, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}
 
 		if (req.method === "POST" && parts[3] === "continue") {
-			const outcome = await scheduler.continueRun(runId);
+			const outcome = await scheduler.continueRun(runId, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}
 
 		if (req.method === "POST" && parts[3] === "resume") {
-			const outcome = await scheduler.resume(runId);
+			const outcome = await scheduler.resume(runId, undefined, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}

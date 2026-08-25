@@ -81,6 +81,29 @@ function text(content: string, details: unknown = undefined): AgentToolResult<un
 	return { content: [{ type: "text", text: content }], details };
 }
 
+/** 状态信息里的操作者标注：用户/主 agent/系统/未知 */
+function operatorLabel(operator: string | undefined): string {
+	switch (operator) {
+		case "user":
+			return "（用户操作）";
+		case "agent":
+			return "（主 agent 操作）";
+		case "system":
+			return "（系统/异常）";
+		default:
+			return "";
+	}
+}
+
+/** 用户在等待结果时看到停止/暂停且是用户自己操作的：要求主 agent 先询问用户，不要自动恢复 */
+function userIntervenedHint(run: RunRecord): string {
+	if (run.status.operator !== "user") return "";
+	if (run.status.status === "stopped" || run.status.status === "paused") {
+		return `\n注意：该任务由用户手动${run.status.status === "stopped" ? "停止" : "暂停"}，请先向用户确认是否需要继续，不要自行恢复或重试。`;
+	}
+	return "";
+}
+
 // ── 模型解析 ─────────────────────────────────────────────────
 
 function resolveModelFor(task: RunTask): { model?: string; thinking?: string } {
@@ -186,7 +209,8 @@ function executeList(): AgentToolResult<unknown> {
 		const { task, status } = r;
 		const dur = status.startedAt ? `${Math.round((Date.now() - status.startedAt) / 1000)}s` : "-";
 		const model = r.result?.model ?? task.model ?? "继承";
-		return `- ${task.id}  [${STATUS_LABEL[status.status]}]  「${task.title}」  ${task.agent}  ${model}  ${dur}`;
+		const who = operatorLabel(status.operator);
+		return `- ${task.id}  [${STATUS_LABEL[status.status]}${who}]  「${task.title}」  ${task.agent}  ${model}  ${dur}`;
 	});
 	const running = runs.filter((r) => r.status.status === "running").length;
 	return text(`子代理列表（共 ${runs.length} 个，运行中 ${running}）：\n${lines.join("\n")}`);
@@ -203,22 +227,22 @@ async function executeControl(
 
 	switch (action) {
 		case "stop": {
-			const r = await scheduler.stop(runId);
-			return text(r.ok ? `已停止「${run.task.title}」。` : `停止失败：${r.error}`);
+			const r = await scheduler.stop(runId, "agent");
+			return text(r.ok ? `已停止「${run.task.title}」（主 agent 操作）。` : `停止失败：${r.error}`);
 		}
 		case "pause": {
-			const r = await scheduler.pause(runId);
-			return text(r.ok ? `已暂停「${run.task.title}」。可继续或停止。` : `暂停失败：${r.error}`);
+			const r = await scheduler.pause(runId, "agent");
+			return text(r.ok ? `已暂停「${run.task.title}」（主 agent 操作）。可继续或停止。` : `暂停失败：${r.error}`);
 		}
 		case "continue": {
-			const r = await scheduler.continueRun(runId);
-			return text(r.ok ? `已继续「${run.task.title}」。` : `继续失败：${r.error}`);
+			const r = await scheduler.continueRun(runId, "agent");
+			return text(r.ok ? `已继续「${run.task.title}」（主 agent 操作）。` : `继续失败：${r.error}`);
 		}
 		case "resume": {
-			const r = await scheduler.resume(runId, { model: params.model });
+			const r = await scheduler.resume(runId, { model: params.model }, "agent");
 			return text(
 				r.ok
-					? `已恢复「${run.task.title}」，从断点继续（第 ${run.status.resumeCount + 1}/${MAX_RESUME_COUNT} 次）。`
+					? `已恢复「${run.task.title}」，从断点继续（第 ${run.status.resumeCount + 1}/${MAX_RESUME_COUNT} 次）（主 agent 操作）。`
 					: `恢复失败：${r.error}`,
 			);
 		}
@@ -226,7 +250,7 @@ async function executeControl(
 			const result = readResult(runId);
 			const body = result
 				? `「${run.task.title}」输出：\n\n${result.output || "(无输出)"}\n\n用法：${result.usage.turns} turns · ↑${result.usage.input} ↓${result.usage.output} · $${result.usage.cost.toFixed(4)}${result.model ? ` · ${result.model}` : ""}${result.errorMessage ? `\n错误：${result.errorMessage}` : ""}`
-				: `run ${runId} 尚未产生结果（状态：${STATUS_LABEL[run.status.status]}）。`;
+				: `run ${runId} 尚未产生结果（状态：${STATUS_LABEL[run.status.status]}${operatorLabel(run.status.operator)}）。`;
 			return text(body);
 		}
 		case "merge": {
@@ -349,9 +373,17 @@ export default function (pi: ExtensionAPI) {
 						const st = readStatus(r.task.id) ?? r.status;
 						const res = readResult(r.task.id);
 						const preview = res?.output?.split("\n")[0]?.slice(0, 100) ?? "";
-						return `- 「${r.task.title}」[${STATUS_LABEL[st.status]}]${preview ? `：${preview}` : ""}`;
+						const who = operatorLabel(st.operator);
+						return `- 「${r.task.title}」[${STATUS_LABEL[st.status]}${who}]${preview ? `：${preview}` : ""}`;
 					});
-					return text(`等待完成（${targets.length} 个）：\n${lines.join("\n")}`);
+					const hint = targets
+						.map((r) => {
+							const st = readStatus(r.task.id) ?? r.status;
+							return userIntervenedHint({ task: r.task, status: st, result: readResult(r.task.id) ?? undefined });
+						})
+						.filter(Boolean)
+						.join("");
+					return text(`等待完成（${targets.length} 个）：\n${lines.join("\n")}${hint}`);
 				}
 				await new Promise((resolve) => setTimeout(resolve, 1000));
 			}

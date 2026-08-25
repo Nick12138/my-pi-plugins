@@ -102,6 +102,7 @@ class Scheduler {
 			exitCode: TIMEOUT_EXIT_CODE,
 			stopReason: "timeout",
 			errorMessage: reason,
+			operator: "system",
 		});
 		const run = loadRun(runId);
 		if (run) this.deps.onSettled(run);
@@ -264,7 +265,7 @@ class Scheduler {
 
 	// ── 手动控制 ──────────────────────────────────────────────
 
-	async stop(runId: string): Promise<{ ok: boolean; error?: string }> {
+	async stop(runId: string, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		if (!status) return { ok: false, error: "run 不存在" };
 		if (status.status !== "running" && status.status !== "paused" && status.status !== "pending") {
@@ -272,35 +273,35 @@ class Scheduler {
 		}
 		if (status.status === "pending") {
 			this.queue = this.queue.filter((id) => id !== runId);
-			this.finishStatus(runId, status, { status: "stopped", finishedAt: Date.now() });
+			this.finishStatus(runId, status, { status: "stopped", finishedAt: Date.now(), operator });
 			this.deps.onSettled(loadRun(runId)!);
 			return { ok: true };
 		}
-		writeStatus(runId, { ...status, status: "stopped" });
+		writeStatus(runId, { ...status, status: "stopped", operator });
 		if (status.pid) await stopProcess(status.pid);
 		return { ok: true };
 	}
 
-	async pause(runId: string): Promise<{ ok: boolean; error?: string }> {
+	async pause(runId: string, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		if (!status) return { ok: false, error: "run 不存在" };
 		if (status.status !== "running" || !status.pid) return { ok: false, error: `当前状态 ${status.status} 不可暂停` };
 		await pauseProcess(status.pid);
-		writeStatus(runId, { ...status, status: "paused", pausedAt: Date.now() });
+		writeStatus(runId, { ...status, status: "paused", pausedAt: Date.now(), operator });
 		return { ok: true };
 	}
 
-	async continueRun(runId: string): Promise<{ ok: boolean; error?: string }> {
+	async continueRun(runId: string, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		if (!status) return { ok: false, error: "run 不存在" };
 		if (status.status !== "paused" || !status.pid) return { ok: false, error: `当前状态 ${status.status} 不可继续` };
 		await continueProcess(status.pid);
-		writeStatus(runId, { ...status, status: "running", pausedAt: undefined });
+		writeStatus(runId, { ...status, status: "running", pausedAt: undefined, operator });
 		return { ok: true };
 	}
 
 	/** 手动恢复：failed/interrupted/stopped 的 run，同 session-id 续跑 */
-	async resume(runId: string, opts?: { model?: string }): Promise<{ ok: boolean; error?: string }> {
+	async resume(runId: string, opts?: { model?: string }, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		const task = readTask(runId);
 		if (!status || !task) return { ok: false, error: "run 不存在" };
@@ -312,7 +313,7 @@ class Scheduler {
 		}
 		status.resumeCount += 1;
 		status.lastError = status.lastError || status.errorMessage || "手动恢复";
-		writeStatus(runId, { ...status, status: "running" });
+		writeStatus(runId, { ...status, status: "running", operator });
 		// resume 未显式指定模型时，忽略原 task.model（上次的模型已失败），回退继承主 agent
 		this.spawnResume(runId, opts?.model ? task : { ...task, model: undefined });
 		return { ok: true };

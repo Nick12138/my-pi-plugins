@@ -42,6 +42,10 @@ export interface RunTask {
 /** 运行状态（写入 status.json，扩展是唯一 writer） */
 export interface RunStatusData {
 	status: RunStatus;
+	/** 最近一次控制操作（stop/pause/continue/resume）的发起者：
+	 * user=面板/用户操作，agent=主 agent 工具调用，system=超时/进程消失等异常。
+	 * 主 agent 收到停止/暂停信息时据此决定询问用户还是自行处理。 */
+	operator?: "user" | "agent" | "system";
 	pid?: number; // 当前（最近一次）子进程 pid
 	startedAt?: number; // 首次开始时间
 	finishedAt?: number;
