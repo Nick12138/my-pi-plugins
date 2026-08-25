@@ -32,6 +32,8 @@ export interface RunTask {
 	turnBudget?: number;
 	/** 单工具调用超时（毫秒），以进程无事件输出监控近似（0=不限制） */
 	toolTimeoutMs?: number;
+	/** 发起该 run 的主 agent 会话 id（orchestrator），面板按会话过滤用 */
+	sessionId?: string;
 	createdAt: number;
 	parentCwd: string; // 主仓库位置（merge 时用）
 	worktreePath?: string; // 创建成功后写入

@@ -25,6 +25,7 @@ function toSummary(run: RunRecord): Record<string, unknown> {
 		id: task.id,
 		title: task.title,
 		agent: task.agent,
+		sessionId: task.sessionId ?? null,
 		status: status.status,
 		statusLabel: STATUS_LABEL[status.status],
 		pid: status.pid ?? null,

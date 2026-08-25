@@ -11,6 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readResult, readStatus, writeStatus } from "./store.ts";
 import { STATUS_LABEL } from "./types.ts";
 import type { RunRecord } from "./types.ts";
+import { ENV_ORCHESTRATOR_SESSION_ID } from "./supervisor-protocol.ts";
 
 export const SUBAGENT_NOTIFY_MESSAGE_TYPE = "subagent-notify";
 
@@ -99,7 +100,23 @@ export class Notifier {
 		this.flushing = true;
 		try {
 			while (this.pending.size > 0) {
-				const items = [...this.pending.values()].map((run) => ({ run }));
+				// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
+				// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒任何会话，直接标 notified 丢弃，
+				// 避免“新会话收到别人的子代理通知并自动处理”（如自动 resume 产生额外 LLM 成本）。
+				const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
+				const owned = [...this.pending.values()].filter((run) => {
+					if (!run.task.sessionId) return false;
+					return run.task.sessionId === currentSessionId;
+				});
+				// 非当前会话的 run：丢弃（标 notified，避免下次重复补发）
+				for (const run of this.pending.values()) {
+					if (owned.includes(run)) continue;
+					const st = readStatus(run.task.id);
+					if (st) writeStatus(run.task.id, { ...st, notified: true });
+					this.pending.delete(run.task.id);
+				}
+				if (owned.length === 0) return;
+				const items = owned.map((run) => ({ run }));
 				const content = formatGrouped(items);
 				try {
 					this.pi.sendMessage(

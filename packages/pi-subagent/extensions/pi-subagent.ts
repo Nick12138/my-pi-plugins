@@ -14,6 +14,7 @@ import { StringEnum, type Static } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { scheduler } from "../src/scheduler.ts";
+import { isProcessAlive } from "../src/runner.ts";
 import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "../src/store.ts";
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
@@ -138,6 +139,8 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 		...(params.maxRuntimeMs ? { maxRuntimeMs: params.maxRuntimeMs } : {}),
 		...(params.turnBudget ? { turnBudget: params.turnBudget } : {}),
 		...(params.toolTimeoutMs ? { toolTimeoutMs: params.toolTimeoutMs } : {}),
+		// 记录发起会话，供 PiDeck 面板按当前会话过滤（跨会话历史 run 不混入）
+		sessionId: process.env[ENV_ORCHESTRATOR_SESSION_ID],
 		createdAt: Date.now(),
 		parentCwd: cwd,
 	};
@@ -297,7 +300,7 @@ export default function (pi: ExtensionAPI) {
 			all: Type.Optional(Type.Boolean({ description: "等所有运行中的 run 完成" })),
 			timeoutMs: Type.Optional(Type.Number({ description: "超时（毫秒），默认 1800000（30 分钟）" })),
 		}),
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			const timeoutMs = params.timeoutMs ?? 30 * 60 * 1000;
 			const deadline = Date.now() + Math.max(1000, timeoutMs);
 			const runs = loadAllRuns();
@@ -309,7 +312,37 @@ export default function (pi: ExtensionAPI) {
 			const isTerminal = (s: { status: string }): boolean =>
 				s.status === "completed" || s.status === "failed" || s.status === "stopped" || s.status === "interrupted";
 
+			// 僵尸兜底：status 仍 running 但子进程已消失的 run 视为中断（exit 回调可能因
+			// 宿主进程崩溃/重启而丢失）。每轮最多探测一次，避免频繁拉起 tasklist。
+			const zombieCheckedAt = new Map<string, number>();
+			const markZombieInterrupted = async (): Promise<void> => {
+				for (const r of targets) {
+					const st = readStatus(r.task.id);
+					if (!st || isTerminal(st) || st.status !== "running" || !st.pid) continue;
+					const last = zombieCheckedAt.get(r.task.id) ?? 0;
+					if (Date.now() - last < 3000) continue;
+					zombieCheckedAt.set(r.task.id, Date.now());
+					if (!(await isProcessAlive(st.pid))) {
+						writeStatus(r.task.id, {
+							...st,
+							status: "interrupted",
+							finishedAt: Date.now(),
+							pid: undefined,
+							stopReason: "zombie",
+						});
+					}
+				}
+			};
+
 			while (Date.now() < deadline) {
+				// 用户中止（abort）：立即返回当前进度，避免阻塞主 agent 无法停止
+				if (signal?.aborted) {
+					const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
+					return text(
+						`等待已中断。仍有 ${running.length} 个 run 未完成（${running.map((r) => r.task.title).join("、")}），可稍后用 subagent_wait 再等，或 subagent(action:"list") 查看。`,
+					);
+				}
+				await markZombieInterrupted();
 				const done = targets.filter((r) => isTerminal(readStatus(r.task.id) ?? r.status));
 				if (done.length === targets.length) {
 					const lines = targets.map((r) => {
@@ -406,6 +439,9 @@ export default function (pi: ExtensionAPI) {
 			projectTrusted: ctx.isProjectTrusted?.() ?? false,
 			onSettled: makeOnSettled(notifier),
 		});
+		// 每次会话都接管磁盘上遗留的 running/paused run（宿主重启/崩溃兜底），
+		// tick 会轮询其子进程存活状态并在进程消失后定终态
+		scheduler.refreshMonitor();
 		// supervisor 文件信箱：每次会话都重建（session_shutdown 会 dispose，
 		// 且 initialized 是进程级单次，后续会话必须重新创建通道并启动轮询）
 		supervisorChannel?.dispose();

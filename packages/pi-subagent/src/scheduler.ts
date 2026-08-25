@@ -175,6 +175,8 @@ class Scheduler {
 		});
 
 		this.active.set(runId, { handle });
+		// exit 监听丢失时的兜底：纳入进程存活轮询（tick 3s 检测，进程消失即定终态）
+		this.monitorSet.add(runId);
 		writeStatus(runId, {
 			...status,
 			status: "running",
@@ -331,6 +333,7 @@ class Scheduler {
 			projectTrusted: this.deps.projectTrusted,
 		});
 		this.active.set(runId, { handle });
+		this.monitorSet.add(runId);
 		writeStatus(runId, {
 			...status,
 			status: "running",
@@ -344,6 +347,20 @@ class Scheduler {
 	}
 
 	// ── 主 pi 重启接管 ─────────────────────────────────────────
+
+	/** 扫描磁盘，把 running/paused 的 run 纳入进程存活监控。
+	 * 每次 session_start 调用：即使宿主进程重启/换人接管，磁盘上
+	 * 遗留的“running 但子进程已消失”的 run 也会被 tick 轮询定终态。 */
+	refreshMonitor(): void {
+		const runs = loadAllRuns();
+		for (const run of runs) {
+			const { task, status } = run;
+			if ((status.status === "running" || status.status === "paused") && status.pid) {
+				this.monitorSet.add(task.id);
+			}
+		}
+		this.ensureMonitor();
+	}
 
 	/** 扫描磁盘，重建队列/监控/补发回调 */
 	async restoreFromDisk(): Promise<void> {
