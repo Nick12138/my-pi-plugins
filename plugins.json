@@ -239,17 +239,18 @@
           "env": "SUBAGENT_DEFAULT_MODEL",
           "required": false,
           "default": "",
-          "optionsSource": "pi:vision-models",
-          "description": "子代理默认模型（provider/id）。留空 = 继承主 agent 当前模型；显式选择则固定使用该模型（仍可被调用时 model 参数临时覆盖）。选项由 PiDeck 根据本机已配置模型动态生成，与「视觉看图」共用同一选项来源。"
+          "optionsSource": "pi:models",
+          "description": "子代理默认模型（provider/id）。留空 = 继承主 agent 当前模型；显式选择则固定使用该模型（仍可被调用时 model 参数临时覆盖）。选项由 PiDeck 根据本机已配置的全部模型动态生成（含纯文本模型）。"
         },
         {
           "key": "fallbackModels",
-          "type": "text",
+          "type": "select",
           "label": "回退模型",
           "env": "SUBAGENT_FALLBACK_MODELS",
           "required": false,
+          "optionsSource": "pi:models-fallback",
           "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
-          "description": "默认模型（显式指定时）失败后按顺序回退的模型列表，英文逗号分隔；留空则最终回退到主 agent 继承模型。任务参数 fallbackModels 优先于本配置。"
+          "description": "默认模型（显式指定时）失败后按顺序回退的模型列表：每一行一个回退模型，从上到下依次尝试（底层仍以英文逗号分隔保存）；留空则最终回退到主 agent 继承模型。任务参数 fallbackModels 优先于本配置。"
         },
         {
           "key": "retry",
