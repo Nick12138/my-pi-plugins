@@ -131,6 +131,21 @@ function makeOnSettled(notifier: Notifier): (run: RunRecord) => void {
 	};
 }
 
+/**
+ * 中间态通知（暂停等）回调：值捕获 notifier 实例，避免 session_shutdown 置空模块级
+ * 变量后引用 null 崩溃（旧实现闭包捕获 let notifier 变量，多会话场景下必崩）。
+ * 通知失败不阻断控制操作（暂停/继续照常进行）。
+ */
+function makeOnInterim(notifier: Notifier): (run: RunRecord) => void {
+	return (run) => {
+		try {
+			notifier.queueInterim(run);
+		} catch {
+			/* 通知失败忽略（如会话已 shutdown），不阻断控制操作 */
+		}
+	};
+}
+
 // ── 工具 execute ─────────────────────────────────────────────
 
 function newRunId(): string {
@@ -470,10 +485,8 @@ export default function (pi: ExtensionAPI) {
 			resolveModel: resolveModelFor,
 			projectTrusted: ctx.isProjectTrusted?.() ?? false,
 			onSettled: makeOnSettled(notifier),
-			// 中间态通知（如暂停）：发送成功不标记 notified，不阻断终态通知
-			onInterim: (run) => {
-				notifier.queueInterim(run);
-			},
+			// 中间态通知（如暂停）：值捕获 notifier 实例，发送成功不标记 notified，不阻断终态通知
+			onInterim: makeOnInterim(notifier),
 		});
 		// 每次会话都接管磁盘上遗留的 running/paused run（宿主重启/崩溃兜底），
 		// tick 会轮询其子进程存活状态并在进程消失后定终态

@@ -141,24 +141,42 @@ export class Notifier {
 	private async drainQueue(map: Map<string, RunRecord>, markNotified: boolean): Promise<void> {
 		while (map.size > 0) {
 			// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
-			// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒任何会话，直接丢弃，
-			// 避免“新会话收到别人的子代理通知并自动处理”（如自动 resume 产生额外 LLM 成本）。
+			// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒其他会话，避免串扰。
 			const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
+			// run 是否已进入终态（中间态通知若已终态则无需补发）
+			const isTerminal = (run: RunRecord): boolean => {
+				const st = readStatus(run.task.id);
+				return !!st && (st.status === "completed" || st.status === "failed" || st.status === "stopped" || st.status === "interrupted");
+			};
 			const owned = [...map.values()].filter((run) => {
 				if (!run.task.sessionId) return false;
 				return run.task.sessionId === currentSessionId;
 			});
-			// 非当前会话的 run：丢弃（终态标 notified 避免下次重复补发；中间态直接丢弃）
+			// 非当前会话的 run：
 			for (const run of map.values()) {
 				if (owned.includes(run)) continue;
 				if (markNotified) {
+					// 终态通知：标 notified 丢弃，避免下次重复补发（防跨会话串扰）
 					const st = readStatus(run.task.id);
 					if (st) writeStatus(run.task.id, { ...st, notified: true });
+					map.delete(run.task.id);
+				} else if (isTerminal(run)) {
+					// 中间态通知但 run 已终态：无需再补发暂停等，丢弃
+					map.delete(run.task.id);
 				}
-				map.delete(run.task.id);
+				// 否则：中间态通知保留队列，等用户切回 run 的发起会话后补发
 			}
 			if (owned.length === 0) return;
-			const items = owned.map((run) => ({ run }));
+			// 发送前再次确认：中间态通知若 run 已终态则跳过（不发“已暂停”给已完成的任务）
+			const pendingItems = owned.filter((run) => {
+				if (!markNotified && isTerminal(run)) {
+					map.delete(run.task.id);
+					return false;
+				}
+				return true;
+			});
+			if (pendingItems.length === 0) continue;
+			const items = pendingItems.map((run) => ({ run }));
 			const content = formatGrouped(items, markNotified);
 			try {
 				this.pi.sendMessage(
