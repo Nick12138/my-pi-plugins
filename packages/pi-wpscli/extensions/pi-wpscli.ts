@@ -51,47 +51,95 @@ function isNewerVersion(a: string, b: string): boolean {
 	return false;
 }
 
+/** wpscli.exe is runnable if we can invoke it with --version. A stale install root
+ * fails immediately, so we skip it instead of crashing the runner. */
+function isRunnableWpscli(exe: string): boolean {
+	try {
+		execFileSync(exe, ["--version"], {
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 15_000,
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Extract the WPS version from an install path like ...\\WPS Office\\12.1.0.28043\\clitool\\wpscli.exe */
+function wpsVersionFromPath(exe: string): string {
+	const m = exe.match(/[\\/]WPS Office[\\/](\d+\.\d+\.\d+(?:\.\d+)?)/i);
+	return m ? m[1] : "";
+}
+
 function findWpscli(): string {
 	if (cliCache) return cliCache;
 
+	// Collect every candidate wpscli.exe: explicit config first, then all PATH hits,
+	// then every installed version discovered in the known install roots.
+	const candidates: string[] = [];
+	const add = (p?: string | null) => {
+		const abs = p?.trim();
+		if (!abs || !existsSync(abs)) return;
+		const norm = abs.toLowerCase();
+		if (!candidates.some((c) => c.toLowerCase() === norm)) candidates.push(abs);
+	};
+
 	// 1. explicit config
 	const fromEnv = process.env.WPSCLI_PATH?.trim();
-	if (fromEnv && existsSync(fromEnv)) return (cliCache = fromEnv);
+	if (fromEnv && isRunnableWpscli(fromEnv)) return (cliCache = fromEnv);
+	add(fromEnv); // still considered, so a broken explicit value doesn't silently hide others
 
-	// 2. PATH
+	// 2. PATH (may point at stale/broken version dirs) — gather ALL hits
 	try {
 		const out = execFileSync("where", ["wpscli"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-		const first = out
-			.split(/\r?\n/)
+		out.split(/\r?\n/)
 			.map((s) => s.trim())
-			.find(Boolean);
-		if (first && existsSync(first)) return (cliCache = first);
+			.filter(Boolean)
+			.forEach((p) => add(path.normalize(p)));
 	} catch {
-		// not on PATH, fall through
+		// not on PATH
 	}
 
-	// 3. known install roots; pick newest version dir
+	// 3. known install roots — discover every installed version
 	const roots = [
 		path.join(os.homedir(), "AppData", "Local", "Kingsoft", "WPS Office"),
 		"C:\\Program Files\\WPS Office",
 	];
-	let bestFile: string | null = null;
-	let bestVer = "";
 	for (const root of roots) {
 		if (!existsSync(root)) continue;
 		for (const entry of readdirSync(root)) {
 			if (!/^\d+\.\d+/.test(entry)) continue;
-			const exe = path.join(root, entry, "clitool", "wpscli.exe");
-			if (existsSync(exe) && (!bestFile || isNewerVersion(entry, bestVer))) {
-				bestFile = exe;
-				bestVer = entry;
-			}
+			add(path.join(root, entry, "clitool", "wpscli.exe"));
 		}
 	}
+
+	if (candidates.length === 0) {
+		throw new Error(
+			"找不到 wpscli：请安装 WPS Office，或设置 WPSCLI_PATH 环境变量指向 wpscli.exe（通常位于 ...\\WPS Office\\<版本>\\clitool\\wpscli.exe）。",
+		);
+	}
+
+	// Preferred: the NEWEST RUNNABLE version. If PATH points at an old/dead install
+	// that is older than the real one, the newer runnable candidate wins — so WPS
+	// upgrades can never break auto-detect again.
+	let bestFile: string | null = null;
+	let bestVer = "";
+	for (const exe of candidates) {
+		if (!isRunnableWpscli(exe)) continue;
+		const ver = wpsVersionFromPath(exe);
+		if (!bestFile || isNewerVersion(ver, bestVer)) {
+			bestFile = exe;
+			bestVer = ver;
+		}
+	}
+
 	if (bestFile) return (cliCache = bestFile);
 
 	throw new Error(
-		"找不到 wpscli：请安装 WPS Office，或设置 WPSCLI_PATH 环境变量指向 wpscli.exe（通常位于 ...\\WPS Office\\<版本>\\clitool\\wpscli.exe）。",
+		`找到 ${candidates.length} 个 wpscli.exe 候选但均无法运行：\n` +
+			candidates.map((c) => `  - ${c}`).join("\n") +
+			"\n请检查 WPS 安装是否损坏，或设置 WPSCLI_PATH 指向可用的 wpscli.exe。",
 	);
 }
 
