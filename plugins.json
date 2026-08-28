@@ -233,9 +233,9 @@
     {
       "id": "pi-ocr",
       "name": "OCR",
-      "description": "百度智能云 OCR 图片文字识别（通用识别标准版，每天 5 万次免费）：自动方向检测，证照关键词提示专用接口交叉核对。",
+      "description": "百度智能云 OCR（通用标准版/高精度版 + 营业执照/身份证/驾驶证/行驶证/发票证照专用接口）：单张、批量（并发默认 2，适配未付费 QPS=2）、证照结构化字段识别，自动方向检测，可选 outputPath 追加落盘 txt（按请求单文件记录）；错误码友好化、token 自动刷新。免费测试资源：个人 1000 次/月、企业 2000 次/月，以控制台为准。",
       "icon": "📝",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "author": "Nick12138",
       "tags": [
         "OCR",
@@ -265,6 +265,50 @@
           "required": true,
           "placeholder": "与 API Key 同页面获取",
           "description": "百度智能云 OCR 应用的 Secret Key。"
+        }
+      ]
+    },
+    {
+      "id": "pi-anytomd",
+      "name": "AnyToMD",
+      "description": "一个工具读所有本地文件为 Markdown：图片（WPS 云端 OCR / 百度 OCR 双通道）、docx/xlsx/pptx/doc 等 Office、PDF（自动区分文字版/扫描件）。内置 anytomd_setup 依赖体检与一键安装（pandoc/officecli 自动装、wpscli 自动定位、百度 Key 配置即用）。",
+      "icon": "📄",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["文档读取", "OCR", "Markdown", "WPS"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-anytomd"
+      },
+      "config": [
+        {
+          "key": "baiduOcrApiKey",
+          "type": "text",
+          "label": "百度 OCR API Key（可选）",
+          "env": "BAIDU_OCR_API_KEY",
+          "secret": true,
+          "required": false,
+          "placeholder": "在 console.bce.baidu.com/ai 创建 OCR 应用后获取",
+          "description": "第二识别通道（WPS 失败/精度不够时的回退）。与 pi-ocr 共用同一对 Key，留空则 OCR 回退禁用。"
+        },
+        {
+          "key": "baiduOcrSecretKey",
+          "type": "text",
+          "label": "百度 OCR Secret Key（可选）",
+          "env": "BAIDU_OCR_SECRET_KEY",
+          "secret": true,
+          "required": false,
+          "placeholder": "与 API Key 同页面获取",
+          "description": "与 API Key 配对使用。"
+        },
+        {
+          "key": "wpscliPath",
+          "type": "text",
+          "label": "wpscli 路径（可选）",
+          "env": "WPSCLI_PATH",
+          "required": false,
+          "placeholder": "C:\\Users\\…\\WPS Office\\12.1.0.xxxxx\\clitool\\wpscli.exe",
+          "description": "留空则自动定位（PATH → 最新版 WPS 安装目录）；找不到时才需要填完整路径。"
         }
       ]
     },

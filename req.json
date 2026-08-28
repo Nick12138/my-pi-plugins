@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"ATRpcServer.Searcher.V1.GetResult","params":{"input":{"pattern":"保证金","filterDir":"D:","filterExt":"*.docx","lastModifyBegin":0,"lastModifyEnd":2147483647,"limit":8,"offset":0,"order":0}}}
