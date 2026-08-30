@@ -25,8 +25,8 @@
  *   - BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY : optional second OCR channel
  */
 
-import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync, mkdtempSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -68,11 +68,10 @@ const EXIT_HINTS: Record<number, string> = {
 // ---------------------------------------------------------------------------
 
 function runSync(cmd: string, args: string[], timeoutMs = 10_000): string {
-	try {
-		return execFileSync(cmd, args, { encoding: "utf-8", timeout: timeoutMs, windowsHide: true }).trim();
-	} catch {
-		return "";
-	}
+	// spawnSync (not execFileSync): the sync API prints the child's stderr to the
+	// parent on non-zero exit, leaking GBK console noise (e.g. `where` not found)
+	const res = spawnSync(cmd, args, { encoding: "utf-8", timeout: timeoutMs, windowsHide: true });
+	return String(res.stdout ?? "").trim();
 }
 
 function whereFirst(name: string): string {
@@ -163,12 +162,29 @@ function wpscliVersion(): string {
 
 // ---- officecli / pandoc ----
 
+/** Push an existing file into a candidate list (deduped, case-insensitive). */
+function pushCandidate(list: string[], p?: string | null): void {
+	const abs = p?.trim();
+	if (!abs || !existsSync(abs)) return;
+	if (!list.some((c) => c.toLowerCase() === abs.toLowerCase())) list.push(abs);
+}
+
+/** First candidate that actually runs, else the first existing one. */
+function pickRunnable(candidates: string[]): string {
+	return candidates.find((c) => versionOf(c)) ?? candidates[0];
+}
+
 let officecliCache: string | null = null;
 let officecliVersionCache: string | null = null;
 function findOfficecli(): string {
 	if (officecliCache) return officecliCache;
-	const exe = whereFirst("officecli");
-	if (!exe) throw new Error("找不到 officecli：运行 anytomd_setup({ install: true }) 自动安装。");
+	const candidates: string[] = [];
+	for (const p of whereFirst("officecli").split(/\r?\n/)) pushCandidate(candidates, p);
+	// Fallback: the official installer always puts it here; needed because a PATH
+	// added mid-session is invisible to this already-running process.
+	pushCandidate(candidates, path.join(os.homedir(), "AppData", "Local", "OfficeCLI", "officecli.exe"));
+	if (!candidates.length) throw new Error("找不到 officecli：运行 anytomd_setup({ install: true }) 自动安装。");
+	const exe = pickRunnable(candidates);
 	officecliCache = exe;
 	officecliVersionCache = versionOf(exe);
 	return exe;
@@ -181,10 +197,24 @@ function officecliVersion(): string {
 let pandocCache: string | null = null;
 function findPandoc(): string {
 	if (pandocCache) return pandocCache;
-	const exe = whereFirst("pandoc");
-	if (!exe) throw new Error("找不到 pandoc：运行 anytomd_setup({ install: true }) 自动安装。");
-	pandocCache = exe;
-	return exe;
+	const candidates: string[] = [];
+	for (const p of whereFirst("pandoc").split(/\r?\n/)) pushCandidate(candidates, p);
+	// Fallbacks for installs whose PATH entry is not yet visible to this process:
+	// MSI default locations and the winget package tree (versioned subdir).
+	pushCandidate(candidates, path.join(os.homedir(), "AppData", "Local", "Pandoc", "pandoc.exe"));
+	pushCandidate(candidates, "C:\\Program Files\\Pandoc\\pandoc.exe");
+	const wingetPkgs = path.join(os.homedir(), "AppData", "Local", "Microsoft", "WinGet", "Packages");
+	try {
+		for (const pkg of readdirSync(wingetPkgs)) {
+			if (!/^JohnMacFarlane\.Pandoc_/i.test(pkg)) continue;
+			for (const sub of readdirSync(path.join(wingetPkgs, pkg))) {
+				if (/^pandoc-/i.test(sub)) pushCandidate(candidates, path.join(wingetPkgs, pkg, sub, "pandoc.exe"));
+			}
+		}
+	} catch { /* winget packages dir absent */ }
+	if (!candidates.length) throw new Error("找不到 pandoc：运行 anytomd_setup({ install: true }) 自动安装。");
+	pandocCache = pickRunnable(candidates);
+	return pandocCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -486,10 +516,19 @@ function makeTmpDir(): string {
 
 /** 删除临时目录；若父级 temporary 变空则一并移除（不报错） */
 function removeTmpDir(tmpDir: string): void {
-	try {
-		rmSync(tmpDir, { recursive: true, force: true });
-	} catch {
-		// ignore
+	const rm = (): boolean => {
+		try {
+			rmSync(tmpDir, { recursive: true, force: true });
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	// wpscli 云端任务结束后文件句柄可能延迟释放（Windows），失败则短暂重试
+	let ok = rm();
+	for (let i = 0; !ok && i < 10; i++) {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+		ok = rm();
 	}
 	try {
 		const parent = path.dirname(tmpDir);
@@ -549,15 +588,45 @@ async function docxToMd(docx: string, tmpDir: string, signal?: AbortSignal): Pro
 			if (textQualityOk(md)) return { md, route: "pandoc" };
 		}
 	}
-	// fallback: officecli view text
+	// fallback: officecli view text (view a COPY — officecli is a resident server that
+	// keeps the most recently viewed file handle open, which would lock our temp dir)
 	try {
-		const officecli = findOfficecli();
-		const res = await runCmd(officecli, ["view", docx, "text"], { timeoutSec: DEFAULT_TIMEOUT_SEC, signal });
+		const res = await officecliView(docx, signal);
 		if (res.ok && textQualityOk(res.stdout)) return { md: res.stdout, route: "officecli view text" };
 	} catch {
 		// ignore
 	}
 	throw new Error("docx → md 失败（pandoc 与 officecli 均不可用或结果为空）");
+}
+
+/**
+ * officecli view via a copy in the OS temp dir. officecli is a resident-server CLI:
+ * the first call spawns a long-lived process that holds the most recently viewed
+ * file handle open, which would lock the original (user files or our tmpDir).
+ */
+async function officecliView(file: string, signal?: AbortSignal): Promise<CmdResult> {
+	const officecli = findOfficecli();
+	const ext = path.extname(file);
+	const copy = path.join(
+		os.tmpdir(),
+		`anytomd-officecli-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`,
+	);
+	copyFileSync(file, copy);
+	try {
+		return await runCmd(officecli, ["view", copy, "text"], { timeoutSec: DEFAULT_TIMEOUT_SEC, signal });
+	} finally {
+		// view starts a resident process that holds the file handle; `close` releases it
+		try {
+			await runCmd(officecli, ["close", copy], { timeoutSec: 30, signal });
+		} catch {
+			// ignore
+		}
+		try {
+			rmSync(copy, { force: true });
+		} catch {
+			// copy may still be held; OS temp will clean it up
+		}
+	}
 }
 
 /** Images via WPS. Single: photo2word. Multiple: photo2pdf merge → pdf2word --scanned. */
@@ -595,8 +664,7 @@ async function officeToMd(file: string, tmpDir: string, signal?: AbortSignal): P
 	const ext = path.extname(file).toLowerCase();
 	if (OFFICE_NATIVE.has(ext)) {
 		try {
-			const officecli = findOfficecli();
-			const res = await runCmd(officecli, ["view", file, "text"], { timeoutSec: DEFAULT_TIMEOUT_SEC, signal });
+			const res = await officecliView(file, signal);
 			if (res.ok && textQualityOk(res.stdout)) return { md: res.stdout, route: "officecli view text" };
 		} catch {
 			// fall through
@@ -775,10 +843,10 @@ function checkDeps(): DepStatus[] {
 		statuses.push({ name: "wpscli", ok: false, version: "", path: "", detail: err instanceof Error ? err.message : String(err) });
 	}
 
-	const officePath = officecliVersion() ? whereFirst("officecli") : "";
-	if (officePath) {
+	try {
+		const officePath = findOfficecli();
 		statuses.push({ name: "officecli", ok: true, version: officecliVersion(), path: officePath, detail: "" });
-	} else {
+	} catch {
 		statuses.push({ name: "officecli", ok: false, version: "", path: "", detail: "未安装——运行 anytomd_setup({ install: true }) 自动安装" });
 	}
 
@@ -822,23 +890,61 @@ function depsReport(statuses: DepStatus[]): string {
 	].join("\n");
 }
 
-async function installMissing(deps: DepStatus[], signal?: AbortSignal): Promise<DepStatus[]> {
-	const installs: string[] = [];
+interface InstallOutcome {
+	name: string;
+	ranOk: boolean; // installer process exited 0
+	detected: boolean; // dependency visible on re-check
+	note: string; // error/output tail when something failed
+}
+
+/** One-line digest of a failed installer run (error + output tail). */
+function installNote(r: CmdResult): string {
+	if (r.ok) return "";
+	const tail = [r.error, r.stderr, r.stdout]
+		.filter(Boolean)
+		.join(" | ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return tail ? `原因: ${tail.slice(0, 300)}` : "安装器退出码非 0 且无输出";
+}
+
+/**
+ * Merge the Machine+User PATH from the registry into this process. Installers
+ * only update the registry, so without this a just-installed tool is invisible
+ * to `where` until a new terminal session starts.
+ */
+function refreshProcessPathFromRegistry(): void {
+	const out = runSync("powershell", [
+		"-NoProfile",
+		"-Command",
+		"[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+			"[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('Path','Machine')) + ';' + " +
+			"[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('Path','User'))",
+	], 15_000);
+	if (!out) return;
+	const current = (process.env.PATH ?? "").split(";").filter(Boolean);
+	const seen = new Set(current.map((p) => p.toLowerCase().replace(/[\\/]+$/, "")));
+	const extra = out
+		.split(";")
+		.map((p) => p.trim())
+		.filter((p) => p && !seen.has(p.toLowerCase().replace(/[\\/]+$/, "")));
+	if (extra.length) process.env.PATH = [...current, ...extra].join(";");
+}
+
+async function installMissing(deps: DepStatus[], signal?: AbortSignal): Promise<InstallOutcome[]> {
+	const outcomes: InstallOutcome[] = [];
 	const office = deps.find((d) => d.name === "officecli" && !d.ok);
 	const pandoc = deps.find((d) => d.name === "pandoc" && !d.ok);
 
 	if (office) {
-		installs.push("officecli");
-		const ps =
-			'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://d.officecli.ai/install.ps1 | iex"';
-		await runCmd("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://d.officecli.ai/install.ps1 | iex"], {
+		const r = await runCmd("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://d.officecli.ai/install.ps1 | iex"], {
 			timeoutSec: 600,
 			signal,
 		});
+		outcomes.push({ name: "officecli", ranOk: r.ok, detected: false, note: installNote(r) });
 	}
 	if (pandoc) {
-		installs.push("pandoc");
-		await runCmd("winget", [
+		const r = await runCmd("winget", [
 			"install",
 			"--id",
 			"JohnMacFarlane.Pandoc",
@@ -847,8 +953,19 @@ async function installMissing(deps: DepStatus[], signal?: AbortSignal): Promise<
 			"--accept-package-agreements",
 			"--disable-interactivity",
 		], { timeoutSec: 900, signal });
+		outcomes.push({ name: "pandoc", ranOk: r.ok, detected: false, note: installNote(r) });
 	}
-	return installs.length ? checkDeps() : deps;
+	if (outcomes.length) {
+		// Make registry PATH changes visible, then recheck (fallback path probing
+		// in findOfficecli/findPandoc covers the rest).
+		refreshProcessPathFromRegistry();
+		const recheck = checkDeps();
+		for (const o of outcomes) {
+			o.detected = recheck.find((d) => d.name === o.name)?.ok === true;
+			if (!o.detected && !o.note) o.note = "安装器执行完成，但复查仍未找到（可能装到了非标准位置）";
+		}
+	}
+	return outcomes;
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,14 +1195,15 @@ export default function (pi: ExtensionAPI) {
 			"install=true → auto-install missing installables: pandoc via winget (JohnMacFarlane.Pandoc), " +
 			"officecli via the official PowerShell script (https://d.officecli.ai/install.ps1). " +
 			"wpscli is never installed (comes with WPS Office); Baidu keys are config-only " +
-			"(BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY). Note: newly installed binaries may only be " +
-			"visible to new processes / after opening a fresh terminal.",
+			"(BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY). Detection probes known install dirs " +
+			"(e.g. %LOCALAPPDATA%\\OfficeCLI, winget packages) and refreshes this process's PATH " +
+			"from the registry after installing, so a fresh terminal is not required.",
 		promptSnippet:
 			"Check or auto-install AnyToMD dependencies (wpscli/officecli/pandoc/Baidu keys); install=true runs the installers",
 		promptGuidelines: [
 			"Run anytomd_setup() first when anytomd reports a missing dependency or the user asks about the plugin setup.",
 			"Pass install=true only when the user has authorized installing software (pandoc, officecli) on this machine.",
-			"After install, re-run anytomd_setup() (no args) to confirm; PATH changes may require a new terminal session.",
+			"After install, the report shows per-installer outcomes (installed+detected / installer failed with reason); a fresh terminal is not required.",
 		],
 		parameters: Type.Object({
 			install: Type.Optional(
@@ -1101,18 +1219,22 @@ export default function (pi: ExtensionAPI) {
 			let deps = checkDeps();
 			let installLog: string[] = [];
 			if (params.install === true) {
-				const before = deps.filter((d) => !d.ok).map((d) => d.name);
-				deps = await installMissing(deps, signal);
-				const after = deps.filter((d) => !d.ok).map((d) => d.name);
-				const fixed = before.filter((n) => !after.includes(n));
+				const outcomes = await installMissing(deps, signal);
+				deps = checkDeps();
+				installLog = ["## 安装执行结果", ""];
+				if (!outcomes.length) {
+					installLog.push("无需安装（体检时无缺失项）。");
+				} else {
+					for (const o of outcomes) {
+						const state = o.detected ? "✅ 已安装并识别" : o.ranOk ? "⚠️ 安装器执行完成但仍未识别" : "❌ 安装器执行失败";
+						installLog.push(`- ${o.name}: ${state}`);
+						if (!o.detected && o.note) installLog.push(`  ${o.note}`);
+					}
+					const fixed = outcomes.filter((o) => o.detected).map((o) => o.name);
+					if (fixed.length) installLog.push("", `已修复: ${fixed.join("、")}`);
+				}
 				const still = deps.filter((d) => !d.ok);
-				installLog = [
-					"## 安装执行结果",
-					"",
-					fixed.length ? `已修复: ${fixed.join("、")}` : "（无需安装或未安装成功）",
-					still.length ? `仍缺失: ${still.map((d) => d.name).join("、")}` : "",
-					"",
-				].filter(Boolean);
+				if (still.length) installLog.push("", `仍缺失: ${still.map((d) => d.name).join("、")}`);
 			}
 			const report = depsReport(deps);
 			const body = [report, installLog.join("\n")].filter(Boolean).join("\n\n");
