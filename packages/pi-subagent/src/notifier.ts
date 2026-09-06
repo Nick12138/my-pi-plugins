@@ -1,19 +1,29 @@
 /**
  * 完成通知管理器：批量 + 投递确认 + 自动重试。
  *
- * 对比旧实现（sendUserMessage 注入用户消息），这里用 pi.sendMessage 发送
- * 自定义类型消息（customType: "subagent-notify"）：
+ * 用 pi.sendMessage 发送自定义类型消息（customType: "subagent-notify"）：
  * - 通知不冒充用户消息，可注册 renderer 定制 TUI 显示
  * - sendMessage 成功后才写 notified 标记（投递确认），失败保留在队列重试
  * - 同一批待通知的 run 合并成一条消息发送，减少上下文占用与打断
+ *
+ * 会话归属：每个 Notifier 实例绑定唯一的发起会话（sessionId + send 回调），
+ * 由扩展层按 task.sessionId 路由创建（见 extensions/pi-subagent.ts 的 sessionPipes）。
+ * 一个宿主进程可能同时运行多个会话（如 PiDeck 的 active/background/热缓存），
+ * 通知必须送回发起会话的实例，绝不能“最后一次 session_start 赢者通吃”。
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readResult, readStatus, writeStatus } from "./store.ts";
 import { STATUS_LABEL } from "./types.ts";
 import type { RunRecord } from "./types.ts";
-import { ENV_ORCHESTRATOR_SESSION_ID } from "./supervisor-protocol.ts";
 
 export const SUBAGENT_NOTIFY_MESSAGE_TYPE = "subagent-notify";
+
+/** 发送给宿主会话的自定义消息形状（宿主侧 pi.sendMessage 的第一参数） */
+export interface NotifyMessage {
+	customType: string;
+	content: string;
+	display: boolean;
+	details?: unknown;
+}
 
 const FLUSH_INTERVAL_MS = 5000;
 const BATCH_WINDOW_MS = 1000;
@@ -89,20 +99,31 @@ function formatGrouped(items: NotifyItem[]): string {
 }
 
 export class Notifier {
-	private pi: ExtensionAPI;
+	/** 本实例归属的会话 id（发起会话）；归属不符的 run 一律拒绝入队 */
+	private readonly sessionId: string | undefined;
+	/** 投递通道：宿主侧 pi.sendMessage(msg, { triggerTurn: true }) 的封装。
+	 * 会话不活跃时应抛错（由调用方保留队列重试）。 */
+	private readonly send: (message: NotifyMessage) => void;
 	private pending = new Map<string, RunRecord>();
 	private flushing = false;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private batchTimer: ReturnType<typeof setTimeout> | null = null;
 
-	constructor(pi: ExtensionAPI) {
-		this.pi = pi;
+	constructor(sessionId: string | undefined, send: (message: NotifyMessage) => void) {
+		this.sessionId = sessionId;
+		this.send = send;
 	}
 
-	/** 入队一个已终结的 run；延迟一个批量窗口后合并发送，失败保留重试 */
+	/** 入队一个已终结的 run；延迟一个批量窗口后合并发送，失败保留重试。
+	 * 归属校验：非本会话的 run 直接丢弃（路由层应已按 sessionId 分发）。 */
 	queue(run: RunRecord): void {
 		const status = readStatus(run.task.id);
 		if (!status || status.notified) return;
+		if (this.sessionId && run.task.sessionId !== this.sessionId) {
+			// 归属不符：标记已通知丢弃，防止其他会话的通知被本会话吞掉
+			writeStatus(run.task.id, { ...status, notified: true });
+			return;
+		}
 		this.pending.set(run.task.id, run);
 		this.scheduleBatch();
 	}
@@ -132,43 +153,25 @@ export class Notifier {
 	 * 主 agent 可通过 subagent(action:"list") 自行查看。 */
 	private async drainQueue(map: Map<string, RunRecord>): Promise<void> {
 		while (map.size > 0) {
-			// 通知按会话归属过滤：只发送给 run 的发起会话（当前激活会话）。
-			// 跨会话/历史 run（含无 sessionId 的旧 run）不唤醒其他会话，避免串扰。
-			const currentSessionId = process.env[ENV_ORCHESTRATOR_SESSION_ID];
-			const owned = [...map.values()].filter((run) => {
-				if (!run.task.sessionId) return false;
-				return run.task.sessionId === currentSessionId;
-			});
-			// 非当前会话的 run：标 notified 丢弃，避免下次重复补发（防跨会话串扰）
-			for (const run of map.values()) {
-				if (owned.includes(run)) continue;
-				const st = readStatus(run.task.id);
-				if (st) writeStatus(run.task.id, { ...st, notified: true });
-				map.delete(run.task.id);
-			}
-			if (owned.length === 0) return;
-			const items = owned.map((run) => ({ run }));
+			const items = [...map.values()].map((run) => ({ run }));
 			const content = formatGrouped(items);
 			try {
-				this.pi.sendMessage(
-					{
-						customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
-						content,
-						// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
-						// 避免“工具提示”直接显示在主会话里。
-						display: false,
-						details: {
-							count: items.length,
-							runs: items.map(({ run }) => ({
-								id: run.task.id,
-								title: run.task.title,
-								agent: run.task.agent,
-								status: run.status.status,
-							})),
-						},
+				this.send({
+					customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
+					content,
+					// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
+					// 避免“工具提示”直接显示在主会话里。
+					display: false,
+					details: {
+						count: items.length,
+						runs: items.map(({ run }) => ({
+							id: run.task.id,
+							title: run.task.title,
+							agent: run.task.agent,
+							status: run.status.status,
+						})),
 					},
-					{ triggerTurn: true },
-				);
+				});
 				// 投递确认：sendMessage 接受后才写 notified 标记
 				for (const { run } of items) {
 					const st = readStatus(run.task.id);
@@ -199,7 +202,7 @@ export class Notifier {
 	}
 }
 
-/** 重启接管时补发：仅终态（completed/failed/stopped/interrupted）且未通知的 run 入队。
+/** 补发指定会话的历史遗留未通知终态 run（宿主重启/会话重开场景）。
  * 暂停等中间态不通知（主 agent 可自行 subagent(action:"list") 查看状态）。 */
 export function enqueueUnnotified(notifier: Notifier, runs: RunRecord[]): void {
 	for (const run of runs) {

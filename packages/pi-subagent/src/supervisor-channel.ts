@@ -1,10 +1,17 @@
 /**
- * 主代理侧 supervisor 服务端：轮询扫描通道目录，把子代理的请求转交给主 agent，
+ * 主代理侧 supervisor 服务端：轮询扫描通道目录，把子代理的请求转交给其发起会话，
  * 并提供 subagent_supervisor 工具让主 agent 回复（写入 replies/，子代理随即解除阻塞）。
  *
+ * 多会话宿主（如 PiDeck：active + background + 热缓存同进程）下的归属规则：
+ * - 轮询器是进程级单例：一个扫描线程服务所有会话，与单个会话的生命周期解耦；
+ * - 每个请求自带 orchestratorSessionId，投递时按它查会话注册表（sessionPipes），
+ *   绝不投给“最后一次 session_start 的会话”；
+ * - 发起会话离线时：期望回复的请求保留在目录中等待（会话重开后继续处理），
+ *   进度通知（不期望回复）直接丢弃；
+ * - subagent_supervisor 工具只看到本会话的待回复请求，跨会话不可代答。
+ *
  * 注意：工具注册（registerSupervisorTool）必须在扩展加载阶段调用（与 subagent 工具
- * 同时机），否则会话工具列表快照不会包含它；轮询（createSupervisorChannel().start()）
- * 在 session_start 启动、session_shutdown 时 dispose。
+ * 同时机），否则会话工具列表快照不会包含它。
  * Windows 上 fs.watch 对 %TEMP% 目录不可靠，统一用轮询（500ms）。
  */
 import * as fs from "node:fs";
@@ -13,20 +20,18 @@ import { StringEnum, type Static } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
-	REPLIES_DIR,
 	REQUESTS_DIR,
 	SERVER_POLL_MS,
 	SUPERVISOR_CHANNEL_ROOT,
 	SUPERVISOR_TOOL_SERVER,
 	parseRequestFile,
 	replyPath,
-	requestPath,
 	type SupervisorRequest,
 } from "./supervisor-protocol.ts";
 
 const ServerParams = Type.Object(
 	{
-		action: StringEnum(["reply", "pending", "list", "status"] as const, { description: "操作：reply=回复某个请求；pending/list=列出待回复请求；status=通道状态", default: "status" }),
+		action: StringEnum(["reply", "pending", "list", "status"] as const, { description: "操作：reply=回复子代理请求；pending/list=列出待回复请求；status=通道状态", default: "status" }),
 		replyTo: Type.Optional(Type.String({ description: "reply 时指定请求 id（或前缀/agent 名）" })),
 		message: Type.Optional(Type.String({ description: "reply 时的回复内容（必填）" })),
 	},
@@ -34,11 +39,10 @@ const ServerParams = Type.Object(
 );
 type ServerParamsT = Static<typeof ServerParams>;
 
-export interface SupervisorChannelDeps {
-	/** 当前主会话 id，用于校验请求属于本会话 */
-	getSessionId: () => string | undefined;
-	/** 新请求到达（含期望回复或进度通知）时的回调：负责唤醒主 agent */
-	onRequest: (request: SupervisorRequest, visibleText: string) => void;
+export interface SupervisorPollingDeps {
+	/** 把请求投递给其发起会话。返回 false 表示该会话当前不可投递（离线/不活跃）。
+	 * 期望回复的请求在投递失败时会保留在目录中，下一轮轮询重试。 */
+	deliver: (request: SupervisorRequest, visibleText: string) => boolean;
 }
 
 interface PendingEntry {
@@ -47,17 +51,11 @@ interface PendingEntry {
 	channelDir: string;
 }
 
-export interface SupervisorChannel {
-	start(): void;
-	dispose(): void;
-	pendingCount(): number;
-}
-
-// ── 模块级共享状态（工具与轮询共用）─────────────────────────
+// ── 进程级轮询单例（跨会话共享；投递目标由请求归属决定）──────────
 
 const pending = new Map<string, PendingEntry>();
 const seenFiles = new Set<string>();
-let currentDeps: SupervisorChannelDeps | null = null;
+let pollingDeps: SupervisorPollingDeps | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let started = false;
 
@@ -133,22 +131,20 @@ function refreshPending(): void {
 }
 
 function poll(): void {
-	const deps = currentDeps;
+	const deps = pollingDeps;
 	if (!deps) return;
-	const sessionId = deps.getSessionId();
-	if (!sessionId) return;
 	refreshPending();
 	const now = Date.now();
 	for (const { channelDir, file } of listRequestFiles()) {
 		if (seenFiles.has(file)) continue;
 		seenFiles.add(file);
 		const request = parseRequestFile(file);
-		if (!request || request.orchestratorSessionId !== sessionId) continue;
+		if (!request) continue;
 
 		if (!request.expectsReply) {
-			// 进度通知：交给主 agent 后即清理（不驻留 pending）
-			deps.onRequest(request, request.message);
-			removeFile(file);
+			// 进度通知：交给主 agent 后即清理（不驻留 pending）；发起会话离线则直接丢弃
+			if (deps.deliver(request, request.message)) removeFile(file);
+			else seenFiles.delete(file);
 			continue;
 		}
 		if (now > requestExpiresAt(request)) {
@@ -159,8 +155,12 @@ function poll(): void {
 			removeFile(file);
 			continue;
 		}
+		// 期望回复：投递给发起会话；会话离线则保留文件（seenFiles 回滚，下轮重试）
+		if (!deps.deliver(request, request.message)) {
+			seenFiles.delete(file);
+			continue;
+		}
 		pending.set(request.id, { request, file, channelDir });
-		deps.onRequest(request, request.message);
 	}
 }
 
@@ -176,8 +176,39 @@ function startPolling(): void {
 	timer.unref?.();
 }
 
-function resolvePending(replyTo: string | undefined): PendingEntry {
-	const entries = scanPendingRequests();
+/**
+ * 启动进程级 supervisor 轮询（幂等）。与单个会话的生命周期解耦：
+ * 会话切换/关闭不影响轮询，请求按 orchestratorSessionId 归属投递。
+ */
+export function startSupervisorPolling(deps: SupervisorPollingDeps): void {
+	pollingDeps = deps;
+	if (started) return;
+	started = true;
+	try {
+		fs.mkdirSync(SUPERVISOR_CHANNEL_ROOT, { recursive: true });
+	} catch {
+		/* 目录创建失败则靠轮询重试 */
+	}
+	try {
+		poll();
+	} catch (error) {
+		console.error(`[pi-subagent] supervisor poll failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	startPolling();
+}
+
+/** 停止进程级轮询（仅供宿主退出/测试使用；会话 shutdown 不应调用）。 */
+export function stopSupervisorPolling(): void {
+	started = false;
+	pollingDeps = null;
+	if (timer) clearInterval(timer);
+	timer = null;
+	pending.clear();
+	seenFiles.clear();
+}
+
+function resolvePending(replyTo: string | undefined, sessionId: string | undefined): PendingEntry {
+	const entries = scanPendingRequests(sessionId);
 	if (replyTo) {
 		const normalized = replyTo.trim().toLowerCase();
 		const matches = entries.filter((e) =>
@@ -194,13 +225,16 @@ function resolvePending(replyTo: string | undefined): PendingEntry {
 	throw new Error("Multiple pending supervisor requests need replies. Use replyTo.");
 }
 
-/** 直接扫描文件系统：所有未过期、无回复的期望回复请求（不依赖内存 pending，工具与 poll 解耦） */
-function scanPendingRequests(): PendingEntry[] {
+/** 直接扫描文件系统：所有未过期、无回复、归属指定会话的期望回复请求。
+ * sessionId 传 undefined 时不过滤（仅诊断场景）；工具路径必须传当前会话 id，
+ * 防止多会话宿主下 A 会话代答 B 会话发起的请求。 */
+function scanPendingRequests(sessionId?: string): PendingEntry[] {
 	const now = Date.now();
 	const entries: PendingEntry[] = [];
 	for (const { channelDir, file } of listRequestFiles()) {
 		const request = parseRequestFile(file);
 		if (!request || !request.expectsReply) continue;
+		if (sessionId !== undefined && request.orchestratorSessionId !== sessionId) continue;
 		if (now > requestExpiresAt(request)) {
 			removeFile(file);
 			continue;
@@ -214,7 +248,7 @@ function scanPendingRequests(): PendingEntry[] {
 	return entries;
 }
 
-function buildServerTool(): ToolDefinition<typeof ServerParams, Record<string, unknown>> {
+function buildServerTool(getSessionId: () => string | undefined): ToolDefinition<typeof ServerParams, Record<string, unknown>> {
 	return {
 		name: SUPERVISOR_TOOL_SERVER,
 		label: "Subagent Supervisor",
@@ -222,14 +256,15 @@ function buildServerTool(): ToolDefinition<typeof ServerParams, Record<string, u
 		parameters: ServerParams,
 		async execute(_id, params) {
 			const input = params as ServerParamsT;
+			const sessionId = getSessionId();
 			if (input.action === "status") {
 				return {
-					content: [{ type: "text", text: `Supervisor channel active. Pending replies: ${scanPendingRequests().length}.` }],
-					details: { active: true, pending: scanPendingRequests().length, root: SUPERVISOR_CHANNEL_ROOT },
+					content: [{ type: "text", text: `Supervisor channel active. Pending replies: ${scanPendingRequests(sessionId).length}.` }],
+					details: { active: true, pending: scanPendingRequests(sessionId).length, root: SUPERVISOR_CHANNEL_ROOT },
 				};
 			}
 			if (input.action === "pending" || input.action === "list") {
-				const entries = scanPendingRequests();
+				const entries = scanPendingRequests(sessionId);
 				if (entries.length === 0) return { content: [{ type: "text", text: "No pending supervisor requests." }], details: { pending: [] } };
 				const lines = entries.map((e) => {
 					const replyHint = ` Reply: ${SUPERVISOR_TOOL_SERVER}({ action: "reply", replyTo: "${e.request.id}", message: "..." })`;
@@ -241,7 +276,7 @@ function buildServerTool(): ToolDefinition<typeof ServerParams, Record<string, u
 				};
 			}
 			if (input.action === "reply") {
-				const target = resolvePending(input.replyTo);
+				const target = resolvePending(input.replyTo, sessionId);
 				writeReply(target, input.message ?? "");
 				return { content: [{ type: "text", text: `Replied to supervisor request ${target.request.id}.` }], details: { replyTo: target.request.id, runId: target.request.runId, agent: target.request.agent } };
 			}
@@ -251,68 +286,32 @@ function buildServerTool(): ToolDefinition<typeof ServerParams, Record<string, u
 }
 
 /**
- * 注册 subagent_supervisor 工具。必须在扩展加载阶段调用（与 subagent 工具同时机），
- * 否则会话工具列表快照不会包含它。幂等：同名工具已存在时跳过。
+ * 注册 subagent_supervisor 工具。必须在扩展加载阶段调用（与 subagent 工具
+ * 同时机），否则会话工具列表快照不会包含它。幂等：同名工具已存在时跳过。
+ * getSessionId 提供当前扩展实例绑定的会话 id，用于把工具可见/可回复的
+ * 请求限定在本会话发起的范围内。
  */
-export function registerSupervisorTool(pi: ExtensionAPI): void {
+export function registerSupervisorTool(pi: ExtensionAPI, getSessionId: () => string | undefined): void {
 	try {
 		if (pi.getAllTools?.().some((tool: { name?: unknown }) => tool.name === SUPERVISOR_TOOL_SERVER) === true) return;
 	} catch {
 		/* 拿不到工具列表则直接注册 */
 	}
 	try {
-		pi.registerTool(buildServerTool());
+		pi.registerTool(buildServerTool(getSessionId));
 	} catch (error) {
 		console.error(`[pi-subagent] registerSupervisorTool failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
-/** 创建 supervisor 轮询通道（单例）。扩展在 session_start 调用 start()，session_shutdown 调用 dispose()。 */
-export function createSupervisorChannel(_pi: ExtensionAPI, deps: SupervisorChannelDeps): SupervisorChannel {
-	currentDeps = deps;
-	return {
-		start: () => {
-			if (started) return;
-			started = true;
-			try {
-				fs.mkdirSync(SUPERVISOR_CHANNEL_ROOT, { recursive: true });
-			} catch {
-				/* 目录创建失败则靠轮询重试 */
-			}
-			try {
-				poll();
-			} catch (error) {
-				console.error(`[pi-subagent] supervisor poll failed: ${error instanceof Error ? error.message : String(error)}`);
-			}
-			startPolling();
-		},
-		dispose: () => {
-			started = false;
-			if (timer) clearInterval(timer);
-			timer = null;
-			pending.clear();
-			seenFiles.clear();
-			currentDeps = null;
-		},
-		pendingCount: () => pending.size,
-	};
-}
-
 /** 诊断信息（HTTP API 用） */
 export function supervisorDiagnostics(): Record<string, unknown> {
-	let sessionId: string | undefined;
-	try {
-		sessionId = currentDeps?.getSessionId();
-	} catch {
-		sessionId = "(getSessionId threw)";
-	}
 	return {
 		started,
 		timerActive: timer !== null,
 		pending: pending.size,
 		seenFiles: seenFiles.size,
 		root: SUPERVISOR_CHANNEL_ROOT,
-		sessionId: sessionId ?? null,
 		rootExists: (() => {
 			try {
 				return fs.existsSync(SUPERVISOR_CHANNEL_ROOT);

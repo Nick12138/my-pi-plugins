@@ -18,9 +18,9 @@ import { isProcessAlive } from "../src/runner.ts";
 import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "../src/store.ts";
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
-import { createSupervisorChannel, registerSupervisorTool, visibleRequestText, type SupervisorChannel } from "../src/supervisor-channel.ts";
-import { ENV_ORCHESTRATOR_SESSION_ID, channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson, type SteerRequest } from "../src/supervisor-protocol.ts";
-import { Notifier, enqueueUnnotified } from "../src/notifier.ts";
+import { registerSupervisorTool, startSupervisorPolling } from "../src/supervisor-channel.ts";
+import { channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson, type SteerRequest } from "../src/supervisor-protocol.ts";
+import { Notifier, enqueueUnnotified, type NotifyMessage } from "../src/notifier.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
 import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
 
@@ -32,10 +32,21 @@ const AGENT_DESC: Record<AgentName, string> = {
 	reviewer: "只读审查：正确性/测试/安全/简洁性审查报告",
 };
 
-let currentCtx: ExtensionContext | null = null;
+// ── 会话注册表（进程级，按 sessionId 路由）─────────────────
+// 一个宿主进程可能同时承载多个会话（如 PiDeck 的 active + background +
+// 空闲热缓存），且每个新会话都会重新执行本扩展入口。因此严禁把“发起会话
+// 身份/通知目标”存放在模块级变量或 process.env（会被后续 session_start
+// 覆盖，导致通知投错会话：幽灵会话 bug）。正确姿势：
+// - 每个会话实例在 session_start 时把自己的投递管道登记进 sessionPipes；
+// - run 归属在 spawn 点（工具 execute 的 ctx）确定并固化进 task；
+// - 终态通知由 routeSettled 按 task.sessionId 精准路由回发起会话。
+interface SessionPipe {
+	/** 向本会话发自定义消息并触发 turn（绑定本会话实例的 pi） */
+	sendMessage: (message: NotifyMessage) => void;
+	notifier: Notifier;
+}
+const sessionPipes = new Map<string, SessionPipe>();
 let initialized = false;
-let supervisorChannel: SupervisorChannel | null = null;
-let notifier: Notifier | null = null;
 
 // ── 工具参数 schema ──────────────────────────────────────────
 
@@ -106,14 +117,15 @@ function userIntervenedHint(run: RunRecord): string {
 
 // ── 模型解析 ─────────────────────────────────────────────────
 
-function resolveModelFor(task: RunTask): { model?: string; thinking?: string } {
-	// 优先级：任务显式指定 > 环境配置 > 继承主 agent
+function resolveModelFor(task: RunTask, ctx: ExtensionContext): { model?: string; thinking?: string } {
+	// 优先级：任务显式指定 > 环境配置 > 继承发起会话（ctx）的模型。
+	// 在 spawn 提交点解析一次并固化进 task：多会话宿主下不能在调度/重试时
+	// 动态读“当前会话”，否则可能继承到另一个会话的模型。
 	if (task.model) return { model: task.model, thinking: task.thinking };
 	const configured = process.env.SUBAGENT_DEFAULT_MODEL;
 	if (configured && configured !== "inherit") {
 		return { model: configured, thinking: task.thinking };
 	}
-	const ctx = currentCtx;
 	if (ctx?.model) {
 		return {
 			model: `${ctx.model.provider}/${ctx.model.id}`,
@@ -125,10 +137,18 @@ function resolveModelFor(task: RunTask): { model?: string; thinking?: string } {
 
 // ── 回调 ─────────────────────────────────────────────────────
 
-function makeOnSettled(notifier: Notifier): (run: RunRecord) => void {
-	return (run) => {
-		notifier.queue(run);
-	};
+/** run 终态通知路由：按 task.sessionId 送回发起会话。
+ * 发起会话不在线（已关闭/未打开）时不唤醒其他会话：状态已落盘（HTTP 面板、
+ * subagent list 可见），标记 notified 丢弃；会话重开时 session_start 会按
+ * sessionId 补发未通知的历史终态。 */
+function routeSettled(run: RunRecord): void {
+	const pipe = run.task.sessionId ? sessionPipes.get(run.task.sessionId) : undefined;
+	if (pipe) {
+		pipe.notifier.queue(run);
+		return;
+	}
+	const st = readStatus(run.task.id);
+	if (st) writeStatus(run.task.id, { ...st, notified: true });
 }
 
 // ── 工具 execute ─────────────────────────────────────────────
@@ -137,7 +157,16 @@ function newRunId(): string {
 	return `run_${Date.now().toString(36)}${randomUUID().slice(0, 6)}`;
 }
 
-function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTask {
+/** 从扩展上下文安全取当前会话 id（拿不到返回 null，多会话宿主下每个 ctx 绑定各自会话） */
+function safeSessionId(ctx: ExtensionContext): string | null {
+	try {
+		return ctx.sessionManager.getSessionId() ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string, sessionId: string | undefined): RunTask {
 	const agent = item.agent as AgentName;
 	const title = (item.title ?? params.title)?.trim() || `${agent}: ${item.task.slice(0, 30)}`;
 	const retryRaw = params.retry ?? process.env.SUBAGENT_RETRY ?? DEFAULT_RETRY;
@@ -162,8 +191,10 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 		...(params.maxRuntimeMs ? { maxRuntimeMs: params.maxRuntimeMs } : {}),
 		...(params.turnBudget ? { turnBudget: params.turnBudget } : {}),
 		...(params.toolTimeoutMs ? { toolTimeoutMs: params.toolTimeoutMs } : {}),
-		// 记录发起会话，供 PiDeck 面板按当前会话过滤（跨会话历史 run 不混入）
-		sessionId: process.env[ENV_ORCHESTRATOR_SESSION_ID],
+		// 记录发起会话：通知路由/面板过滤/子进程 supervisor 归属都以它为准。
+		// 取自本次工具调用的 ctx（spawn 点），绝不读进程级 env（多会话宿主下会被
+		// 其他会话的 session_start 覆盖，导致归属污染）。
+		sessionId,
 		createdAt: Date.now(),
 		parentCwd: cwd,
 	};
@@ -171,6 +202,7 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string): RunTa
 
 async function executeSpawn(params: SubagentParamsT, ctx: ExtensionContext): Promise<AgentToolResult<unknown>> {
 	const cwd = params.cwd ?? ctx.cwd;
+	const sessionId = safeSessionId(ctx) ?? undefined;
 	const tasks: SpawnItemT[] = [];
 	if (params.tasks && params.tasks.length > 0) {
 		tasks.push(...params.tasks);
@@ -191,7 +223,11 @@ async function executeSpawn(params: SubagentParamsT, ctx: ExtensionContext): Pro
 
 	const runIds: string[] = [];
 	for (const t of tasks) {
-		const task = makeTask(params, t, cwd);
+		const task = makeTask(params, t, cwd, sessionId);
+		// spawn 点解析继承模型并固化（resolveModelFor 只在此时读取发起会话的模型）
+		const resolved = resolveModelFor(task, ctx);
+		task.model = resolved.model ?? task.model;
+		task.thinking = resolved.thinking ?? task.thinking;
 		await scheduler.schedule(task);
 		runIds.push(task.id);
 	}
@@ -304,9 +340,15 @@ export default function (pi: ExtensionAPI) {
 	// 避免子进程里重复注册工具、HTTP 端口冲突、restoreFromDisk 干扰）
 	if (process.env.PI_SUBAGENT_DEPTH === "1") return;
 
+	// 本扩展实例绑定的会话 id。入口函数每个会话实例调用一次，此变量是
+	// 入口闭包内的局部状态，各实例独立，互不覆盖；工具 execute 通过闭包
+	// 引用它拿到“正在调用的会话”。
+	let mySessionId: string | null = null;
+
 	// supervisor 工具必须在扩展加载阶段注册（与 subagent 同时机），
-	// 否则会话工具列表快照不会包含它（session_start 里注册无法同步到已建会话）
-	registerSupervisorTool(pi);
+	// 否则会话工具列表快照不会包含它（session_start 里注册无法同步到已建会话）。
+	// 待回复请求按归属会话过滤：本会话只能看到/回复自己发起的请求。
+	registerSupervisorTool(pi, () => mySessionId ?? undefined);
 
 	// subagent_wait：阻塞等待子代理完成（与 subagent 工具同时机注册）
 	pi.registerTool({
@@ -319,6 +361,11 @@ export default function (pi: ExtensionAPI) {
 			"- timeoutMs：超时后返回当前进度（默认 30 分钟）；run 在后台继续不受影响",
 			"返回每个目标 run 的最终状态与输出预览。",
 		].join("\n"),
+		promptSnippet: "阻塞等待子代理 run 结束；超时返回进度，后台继续不受影响",
+		promptGuidelines: [
+			"subagent_wait({all:true}) 阻塞等本会话所有 pending/running run 完成；传 runId 只等指定 run。",
+			"超时或被中断后 run 仍在后台继续：稍后再 subagent_wait，或用 subagent(action:\"list\") 查看状态。",
+		],
 		parameters: Type.Object({
 			runId: Type.Optional(Type.String({ description: "目标 run id（缺省且 all=false 时等全部）" })),
 			all: Type.Optional(Type.Boolean({ description: "等所有运行中的 run 完成" })),
@@ -328,9 +375,12 @@ export default function (pi: ExtensionAPI) {
 			const timeoutMs = params.timeoutMs ?? 30 * 60 * 1000;
 			const deadline = Date.now() + Math.max(1000, timeoutMs);
 			const runs = loadAllRuns();
+			// all 模式只等本会话发起的 run（无 sessionId 的历史孤儿也算进来，
+			// 避免多会话宿主下等到其他会话的任务）；显式 runId 不限（跨会话接管语义）。
+			const ownOrOrphan = (r: RunRecord): boolean => !r.task.sessionId || r.task.sessionId === mySessionId;
 			const targets = params.runId
 				? runs.filter((r) => r.task.id === params.runId || r.task.id.startsWith(params.runId!))
-				: runs.filter((r) => r.status.status === "running" || r.status.status === "pending" || r.status.status === "paused");
+				: runs.filter((r) => ownOrOrphan(r) && (r.status.status === "running" || r.status.status === "pending" || r.status.status === "paused"));
 			if (targets.length === 0) return text("没有需要等待的 run。");
 
 			const isTerminal = (s: { status: string }): boolean =>
@@ -404,6 +454,15 @@ export default function (pi: ExtensionAPI) {
 			...AGENTS.map((a) => `- ${a}：${AGENT_DESC[a]}`),
 			"用法：subagent(agent, task) 单任务；subagent(tasks:[...]) 多任务；subagent(action, runId) 控制/查看。",
 		].join("\n"),
+		promptSnippet: "委托独立子代理（scout/worker/reviewer）：后台运行、队列排队、worktree 隔离、完成自动通知",
+		promptGuidelines: [
+			"会撑爆主上下文的自包含工作交给子代理：scout = 只读探索代码库/问题范围，worker = 实现并跑验证，reviewer = 只读审查改动。",
+			"多个相互独立的任务用一次 tasks:[...] 批量提交——自动排队并按并发上限同时运行；仅当后续任务依赖前面结果时才逐个 spawn。",
+			"并行 worker 会写同一仓库的文件时设 worktree:true，完成后用 subagent(action:\"merge\", runId) 合并回主分支。",
+			"spawn 立即返回（后台运行）：用 subagent_wait({all:true}) 阻塞等完成，或依赖完成后的自动通知。",
+			"任务描述必须自包含（目标 + 约束 + 预期输出）：子代理看不到你的会话内容。",
+			"需要改正在运行的子代理方向时用 subagent(action:\"steer\", runId, message) 引导，不要直接 stop；stop/pause/continue/resume 留给手动控制。",
+		],
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
@@ -451,82 +510,82 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
-	// 会话初始化
+	// 会话初始化（每个会话实例各执行一次；mySessionId 是入口函数闭包变量，
+	// 各实例独立，不会被其他会话的 session_start 覆盖）
 	pi.on("session_start", (_event, ctx) => {
-		currentCtx = ctx;
-		// 子代理 spawn 时继承该变量，用于 supervisor 请求的会话归属校验
-		try {
-			const sessionId = ctx.sessionManager.getSessionId();
-			if (sessionId) process.env[ENV_ORCHESTRATOR_SESSION_ID] = sessionId;
-		} catch {
-			/* 拿不到会话 id 则子代理无法使用 supervisor 通道 */
+		const sessionId = safeSessionId(ctx);
+		mySessionId = sessionId;
+		if (sessionId) {
+			// 登记本会话实例的通知管道：pi 闭包绑定本实例，routeSettled 按
+			// task.sessionId 精准投递（重复 session_start，如 reload，幂等覆盖）
+			const sendMessage = (message: NotifyMessage) => {
+				pi.sendMessage(message, { triggerTurn: true });
+			};
+			const pipe: SessionPipe = {
+				sendMessage,
+				notifier: new Notifier(sessionId, sendMessage),
+			};
+			pipe.notifier.start(); // 定时 flush：投递失败（会话忙碌等）后保留队列重试
+			sessionPipes.set(sessionId, pipe);
 		}
-		// 完成通知管理器：sendMessage(customType) + 投递确认 + 合并批处理
-		notifier?.dispose();
-		notifier = new Notifier(pi);
-		notifier.start();
 		scheduler.init({
 			maxConcurrency: Number(process.env.SUBAGENT_MAX_CONCURRENCY) || 10,
-			resolveModel: resolveModelFor,
 			projectTrusted: ctx.isProjectTrusted?.() ?? false,
-			onSettled: makeOnSettled(notifier),
+			onSettled: routeSettled,
 		});
 		// 每次会话都接管磁盘上遗留的 running/paused run（宿主重启/崩溃兜底），
 		// tick 会轮询其子进程存活状态并在进程消失后定终态
 		scheduler.refreshMonitor();
-		// supervisor 文件信箱：每次会话都重建（session_shutdown 会 dispose，
-		// 且 initialized 是进程级单次，后续会话必须重新创建通道并启动轮询）
-		supervisorChannel?.dispose();
-		supervisorChannel = createSupervisorChannel(pi, {
-			getSessionId: () => {
+		// supervisor 轮询是进程级单例：请求按 orchestratorSessionId 归属投递到
+		// sessionPipes 中的发起会话，与会话切换/关闭解耦
+		startSupervisorPolling({
+			deliver: (request, visibleText) => {
+				const pipe = sessionPipes.get(request.orchestratorSessionId);
+				if (!pipe) return false; // 发起会话离线：期望回复的请求保留目录等待
 				try {
-					return currentCtx?.sessionManager.getSessionId() ?? process.env[ENV_ORCHESTRATOR_SESSION_ID];
-				} catch {
-					return process.env[ENV_ORCHESTRATOR_SESSION_ID];
-				}
-			},
-			onRequest: (request, visibleText) => {
-				try {
-					pi.sendMessage(
-						{
-							customType: "subagent_supervisor_request",
-							content: visibleText,
-							display: true,
-							details: {
-								id: request.id,
-								reason: request.reason,
-								expectsReply: request.expectsReply,
-								runId: request.runId,
-								agent: request.agent,
-							},
+					pipe.sendMessage({
+						customType: "subagent_supervisor_request",
+						content: visibleText,
+						display: true,
+						details: {
+							id: request.id,
+							reason: request.reason,
+							expectsReply: request.expectsReply,
+							runId: request.runId,
+							agent: request.agent,
 						},
-						{ triggerTurn: true },
-					);
+					});
+					return true;
 				} catch {
-					/* 会话不活跃则丢弃（请求文件仍在，下一轮扫描不会重复唤醒） */
+					// 会话暂不可投递：请求文件保留，下一轮轮询重试
+					return false;
 				}
 			},
 		});
-		supervisorChannel.start();
 		if (!initialized) {
 			initialized = true;
-			// 接管上次会话遗留的 run（主 pi 重启场景）：补发未通知的回调
-			void scheduler.restoreFromDisk().then(() => {
-				if (notifier) enqueueUnnotified(notifier, loadAllRuns());
-			});
+			// 接管上次宿主进程遗留的 pending/running run（重建队列/监控）；
+			// 终态通知不在此时补发（归属发起会话，由各会话自己拉取）
+			void scheduler.restoreFromDisk();
 			// HTTP API（PiDeck 面板）
 			const port = Number(process.env.SUBAGENT_HTTP_PORT) || DEFAULT_HTTP_PORT;
 			startHttpServer(port);
 			console.log(`[pi-subagent] HTTP API 已启动: http://127.0.0.1:${port}`);
 		}
+		// 本会话历史遗留补发：宿主重启/会话重开后，拉取属于本会话的未通知终态 run
+		if (sessionId) {
+			const pipe = sessionPipes.get(sessionId);
+			if (pipe) enqueueUnnotified(pipe.notifier, loadAllRuns().filter((r) => r.task.sessionId === sessionId));
+		}
 	});
 
-	// 主 pi 退出时不取消子代理（后台运行需求）；这里只做记录
+	// 会话销毁：只注销本会话的管道；子代理进程不取消（后台运行需求），
+	// 进程级 supervisor 轮询继续服务其他会话
 	pi.on("session_shutdown", () => {
-		currentCtx = null;
-		supervisorChannel?.dispose();
-		supervisorChannel = null;
-		notifier?.dispose();
-		notifier = null;
+		if (mySessionId) {
+			sessionPipes.get(mySessionId)?.notifier.dispose();
+			sessionPipes.delete(mySessionId);
+		}
+		mySessionId = null;
 	});
 }

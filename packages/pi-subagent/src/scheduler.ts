@@ -384,7 +384,10 @@ class Scheduler {
 		this.ensureMonitor();
 	}
 
-	/** 扫描磁盘，重建队列/监控/补发回调 */
+	/** 扫描磁盘，重建队列/监控。
+	 * 终态未通知的 run 不在此处补发：通知归属发起会话，由该会话下次 session_start 时
+	 * 按 sessionId 拉取补发（见 extensions/pi-subagent.ts），避免多会话宿主下
+	 * “第一个启动的会话吞掉所有会话的通知”。 */
 	async restoreFromDisk(): Promise<void> {
 		const runs = loadAllRuns();
 		for (const run of runs) {
@@ -397,12 +400,6 @@ class Scheduler {
 				} else {
 					this.finishStatus(task.id, status, { status: "interrupted" });
 				}
-			} else if (
-				!status.notified &&
-				(status.status === "completed" || status.status === "failed" || status.status === "stopped" || status.status === "interrupted")
-			) {
-				// 终态未通知 → 补发回调（仅限终态；paused 等中间态不通知，主 agent 可自行 list 查看）
-				this.deps.onSettled(run);
 			}
 		}
 		this.ensureMonitor();

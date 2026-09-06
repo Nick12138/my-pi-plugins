@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunResultData, RunTask } from "./types.ts";
 import { ensureRunDir, eventsPath, runDir, sessionDir, stderrPath } from "./store.ts";
-import { channelDir } from "./supervisor-protocol.ts";
+import { ENV_ORCHESTRATOR_SESSION_ID, channelDir } from "./supervisor-protocol.ts";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -177,8 +177,12 @@ export function spawnChild(options: SpawnOptions): ChildHandle {
 		env: {
 			...process.env,
 			PI_SUBAGENT_DEPTH: "1",
-			// supervisor 文件信箱元数据（contact_supervisor 工具读取）
+			// supervisor 文件信箱元数据（contact_supervisor 工具读取）。
+			// orchestrator 会话 id 必须来自 task 本身，不能透传主进程的 env：
+			// 多会话宿主（如 PiDeck）下主进程 env 可能已被其他会话的 session_start
+			// 覆盖（污染），透传会让子代理的 supervisor 请求发错归属而永远无回复。
 			PI_SUBAGENT_SUPERVISOR_CHANNEL_DIR: channelDir(options.task.id, options.task.agent),
+			PI_SUBAGENT_ORCHESTRATOR_SESSION_ID: options.task.sessionId ?? "",
 			PI_SUBAGENT_RUN_ID: options.task.id,
 			PI_SUBAGENT_CHILD_AGENT: options.task.agent,
 		},
