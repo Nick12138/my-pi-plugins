@@ -18,7 +18,10 @@ function jsonEqual(actual: unknown, expected: unknown, message: string): void {
 type TodoTool = {
   name: string;
   executionMode: string;
-  execute: (...args: unknown[]) => Promise<{ details: { tasks: unknown[]; nextId: number } }>;
+  execute: (...args: unknown[]) => Promise<{
+    content?: Array<{ type?: string; text?: string }>;
+    details: { tasks: unknown[]; nextId: number };
+  }>;
 };
 
 const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -88,5 +91,43 @@ const otherSession = {
 await handlers.get("session_start")?.({}, otherSession);
 const otherList = await todoTool.execute("call-3", { action: "list" }, undefined, undefined, otherSession);
 jsonEqual(otherList.details.tasks, [], "session isolation");
+
+// plan writes the whole list in one call and the snapshot carries fresh ids
+const planned = await todoTool.execute(
+  "call-plan",
+  {
+    action: "plan",
+    tasks: [{ subject: "Research auth requirements" }, { subject: "Implement login UI" }, { subject: "Wire the API" }],
+  },
+  undefined,
+  undefined,
+  context,
+);
+equal(planned.details.tasks.length, 3, "plan snapshot tasks");
+equal(planned.details.nextId, 4, "plan snapshot next id");
+jsonEqual(planned.details.tasks.map((task) => (task as { id: number }).id), [1, 2, 3], "plan assigns fresh ids");
+assert(
+  ((planned.content ?? [])[0] as { text?: string } | undefined)?.text?.startsWith("Planned 3 tasks:") === true,
+  "plan summary text",
+);
+assert(!((planned.content ?? [])[0] as { text?: string }).text!.includes("Tip:"), "no hint on a 3-task plan");
+
+// a single-task plan gets a correction hint in the result text
+const singlePlan = await todoTool.execute(
+  "call-plan-single",
+  { action: "plan", tasks: [{ subject: "Do everything" }] },
+  undefined,
+  undefined,
+  context,
+);
+assert(((singlePlan.content ?? [])[0] as { text?: string } | undefined)?.text?.includes("Tip:") === true, "single-task plan hint");
+
+// plan snapshots restore through replay like every other action
+session.branch.push({
+  type: "message",
+  message: { role: "toolResult", toolName: TODO_TOOL_NAME, details: singlePlan.details },
+});
+const replanned = __replayTodoStateForTests(context);
+jsonEqual(replanned, { tasks: [{ id: 1, subject: "Do everything", status: "pending" }], nextId: 2 }, "replayed plan state");
 
 console.log("pi-todo extension tests passed");

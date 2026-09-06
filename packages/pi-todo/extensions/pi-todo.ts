@@ -15,6 +15,7 @@ import {
   formatOperation,
   isTaskAction,
   isTaskStatus,
+  operationHint,
   type Task,
   type TodoDetails,
   type TodoParams,
@@ -26,6 +27,7 @@ export const TODO_TOOL_NAME = "todo";
 const TodoParamsSchema = Type.Object({
   action: Type.Union([
     Type.Literal("create"),
+    Type.Literal("plan"),
     Type.Literal("update"),
     Type.Literal("list"),
     Type.Literal("get"),
@@ -33,6 +35,24 @@ const TodoParamsSchema = Type.Object({
     Type.Literal("clear"),
   ]),
   subject: Type.Optional(Type.String({ description: "Task subject (required for create)" })),
+  tasks: Type.Optional(
+    Type.Array(
+      Type.Object({
+        subject: Type.String({ description: "Task subject (required)" }),
+        description: Type.Optional(Type.String({ description: "Optional details describing the task" })),
+        activeForm: Type.Optional(
+          Type.String({ description: "Present-continuous label shown while the task is in_progress" }),
+        ),
+        status: Type.Optional(
+          Type.Union(
+            [Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
+            { description: "Initial status, default pending" },
+          ),
+        ),
+      }),
+      { description: "Full task list written by one plan call (required for plan; empty array clears the list)" },
+    ),
+  ),
   description: Type.Optional(Type.String({ description: "Optional details describing the task" })),
   activeForm: Type.Optional(
     Type.String({ description: "Present-continuous label shown while the task is in_progress" }),
@@ -131,8 +151,14 @@ function snapshotDetails(
 
 function resultFor(params: TodoParams, state: TodoState, operation: ReturnType<typeof applyMutation>) {
   const error = operation.operation.kind === "error" ? operation.operation.message : undefined;
+  const hint = operationHint(operation.operation, state);
   return {
-    content: [{ type: "text" as const, text: formatOperation(operation.operation, state, params) }],
+    content: [
+      {
+        type: "text" as const,
+        text: formatOperation(operation.operation, state, params) + (hint ? `\n\n${hint}` : ""),
+      },
+    ],
     details: snapshotDetails(params.action, params, state, error),
   };
 }
@@ -158,12 +184,14 @@ export default function (pi: ExtensionAPI) {
     name: TODO_TOOL_NAME,
     label: "Todo",
     description:
-      "Manage the agent's task list. Use it to track multi-step work. Actions: create, update, list, get, delete, clear. The task list is persisted in the session and shown by PiDeck.",
+      "Manage the agent's task list for multi-step work (3+ distinct steps). Actions: plan (write the whole list in one call — preferred way to start), create, update, list, get, delete, clear. The task list is persisted in the session and shown by PiDeck.",
     promptSnippet: "Track multi-step work with the todo task list",
     promptGuidelines: [
-      "Use todo for work with multiple implementation or research steps, and create the task list before starting those steps.",
+      "Use todo for work with 3 or more distinct steps; for one- or two-step requests, skip todo and just do the work.",
+      "Start multi-step work by calling plan once with the full list: one task per concrete, verifiable step, typically 3-7 tasks. Never collapse the work into a single umbrella task.",
+      "When revising the plan, resend the whole list with plan (keeping each task's current status); use update/delete only for small in-flight changes.",
       "Mark the task currently being worked on as in_progress, and mark it completed immediately after the work and its verification finish.",
-      "Keep exactly one task in_progress when possible; do not mark incomplete or failing work as completed.",
+      "At most one task should be in_progress at any time; do not mark incomplete or failing work as completed.",
       "Use todo list to refresh the current task list when you are unsure of task ids or status.",
       "Use todo update with id and status to change a task; use activeForm to describe the current activity while in_progress.",
     ],

@@ -7,7 +7,7 @@
  */
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "deleted";
-export type TaskAction = "create" | "update" | "list" | "get" | "delete" | "clear";
+export type TaskAction = "create" | "plan" | "update" | "list" | "get" | "delete" | "clear";
 
 export interface Task {
   id: number;
@@ -22,6 +22,14 @@ export interface TodoState {
   nextId: number;
 }
 
+/** One entry of a whole-list plan write. Ids are assigned by the state, not by the caller. */
+export interface PlanItem {
+  subject: string;
+  description?: string;
+  activeForm?: string;
+  status?: TaskStatus;
+}
+
 export interface TodoDetails {
   action: TaskAction;
   params: Record<string, unknown>;
@@ -33,6 +41,7 @@ export interface TodoDetails {
 export interface TodoParams {
   action: TaskAction;
   subject?: string;
+  tasks?: PlanItem[];
   description?: string;
   activeForm?: string;
   status?: TaskStatus;
@@ -42,6 +51,7 @@ export interface TodoParams {
 
 export type TodoOperation =
   | { kind: "create"; id: number }
+  | { kind: "plan"; count: number }
   | { kind: "update"; id: number; from: TaskStatus; to: TaskStatus; changed: boolean }
   | { kind: "list"; count: number }
   | { kind: "get"; id: number }
@@ -68,7 +78,7 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
 }
 
 export function isTaskAction(value: unknown): value is TaskAction {
-  return value === "create" || value === "update" || value === "list" || value === "get" || value === "delete" || value === "clear";
+  return value === "create" || value === "plan" || value === "update" || value === "list" || value === "get" || value === "delete" || value === "clear";
 }
 
 export function cloneState(state: TodoState): TodoState {
@@ -115,6 +125,33 @@ export function applyMutation(state: TodoState, params: TodoParams): MutationRes
       return {
         state: { tasks: [...state.tasks, task], nextId: state.nextId + 1 },
         operation: { kind: "create", id: task.id },
+      };
+    }
+
+    case "plan": {
+      // Whole-list write: one call replaces the plan and assigns fresh ids
+      // 1..N, so planning a full multi-step list costs a single tool call.
+      if (!Array.isArray(params.tasks)) return error(state, "tasks array required for plan");
+
+      const tasks: Task[] = [];
+      for (let index = 0; index < params.tasks.length; index++) {
+        const raw: unknown = params.tasks[index];
+        const item = (typeof raw === "object" && raw !== null ? raw : {}) as Partial<PlanItem>;
+        const subject = nonBlank(item.subject);
+        if (!subject) return error(state, `tasks[${index}] requires a non-blank subject`);
+        if (item.status !== undefined && !isTaskStatus(item.status)) {
+          return error(state, `tasks[${index}] has invalid status: ${String(item.status)}`);
+        }
+
+        const task: Task = { id: index + 1, subject, status: item.status ?? "pending" };
+        if (item.description !== undefined) task.description = item.description;
+        if (item.activeForm !== undefined) task.activeForm = item.activeForm;
+        tasks.push(task);
+      }
+
+      return {
+        state: { tasks, nextId: tasks.length + 1 },
+        operation: { kind: "plan", count: tasks.length },
       };
     }
 
@@ -202,6 +239,28 @@ export function visibleTasks(state: TodoState, includeDeleted = false): Task[] {
   return state.tasks.filter((task) => includeDeleted || task.status !== "deleted");
 }
 
+function formatTaskLines(state: TodoState, includeDeleted = false): string {
+  return visibleTasks(state, includeDeleted)
+    .map((task) => {
+      const active = task.status === "in_progress" && task.activeForm ? ` (${task.activeForm})` : "";
+      return `[${task.status}] #${task.id} ${task.subject}${active}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Soft nudge for plan shapes that add bookkeeping without planning value.
+ * Fires on create/plan when the visible list is exactly one still-pending
+ * task, so the model gets a correction signal instead of silently keeping a
+ * single umbrella task.
+ */
+export function operationHint(operation: TodoOperation, state: TodoState): string | undefined {
+  if (operation.kind !== "create" && operation.kind !== "plan") return undefined;
+  const visible = visibleTasks(state);
+  if (visible.length !== 1 || visible[0]!.status !== "pending") return undefined;
+  return "Tip: a single-task list adds tracking overhead without planning value. For multi-step work, call plan once with one task per step (typically 3-7); for simple work, skip todo.";
+}
+
 export function formatOperation(operation: TodoOperation, state: TodoState, params: TodoParams): string {
   switch (operation.kind) {
     case "create": {
@@ -215,16 +274,15 @@ export function formatOperation(operation: TodoOperation, state: TodoState, para
           : `Updated #${operation.id} (${operation.from} → ${operation.to})`
         : `No change: #${operation.id} already matches the requested values (status: ${operation.to})`;
     case "list": {
-      const tasks = visibleTasks(state, params.includeDeleted === true);
-      return tasks.length === 0
+      const includeDeleted = params.includeDeleted === true;
+      return visibleTasks(state, includeDeleted).length === 0
         ? "No tasks"
-        : tasks
-            .map((task) => {
-              const active = task.status === "in_progress" && task.activeForm ? ` (${task.activeForm})` : "";
-              return `[${task.status}] #${task.id} ${task.subject}${active}`;
-            })
-            .join("\n");
+        : formatTaskLines(state, includeDeleted);
     }
+    case "plan":
+      return operation.count === 0
+        ? "Planned 0 tasks (list cleared)"
+        : `Planned ${operation.count} tasks:\n${formatTaskLines(state)}`;
     case "get": {
       const task = state.tasks.find((item) => item.id === operation.id);
       if (!task) return `Error: #${operation.id} not found`;
