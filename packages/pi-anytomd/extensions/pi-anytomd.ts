@@ -1001,7 +1001,7 @@ export default function (pi: ExtensionAPI) {
 			"Results are always returned in the conversation; optional outputPath also persists a .md file " +
 			"(relative paths default to <workspace>/Agent临时工作/output/, absolute paths as-is; rename-on-exists, never overwrites). " +
 			"Intermediate process files go to <workspace>/Agent临时工作/temporary/ and are cleaned up after every run. " +
-			"Requires wpscli (WPS Office) for the primary chains; " + +
+			"Requires wpscli (WPS Office) for the primary chains; " +
 			"pandoc/officecli for office files; run anytomd_setup to check/install.",
 		promptSnippet:
 			"Read any local file (image/Office/PDF) as Markdown; auto-detects scanned PDFs; Baidu OCR fallback; optional md file output",
