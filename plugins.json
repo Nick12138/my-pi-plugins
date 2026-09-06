@@ -158,6 +158,16 @@
           "required": false,
           "placeholder": "anthropic/claude-sonnet-4-5,google/gemini-2.5-flash",
           "description": "显式指定默认模型时按顺序回退的备用视觉模型列表，英文逗号分隔；自动选择模式会自动尝试其他已配置视觉模型。"
+        },
+        {
+          "key": "visionMaxBatch",
+          "type": "text",
+          "label": "批量看图上限",
+          "env": "PI_VISION_MAX_BATCH",
+          "required": false,
+          "placeholder": "5",
+          "default": "5",
+          "description": "see_images 一次调用最多分析的图片数量（至少 1）。超出会整体拒绝并提示拆分；单图工具 see_image 不受影响。"
         }
       ]
     },

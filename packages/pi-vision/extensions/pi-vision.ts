@@ -1,7 +1,8 @@
 /**
  * pi-vision — 让"文字型"模型看懂图片的插件。
  *
- * 只暴露一个工具 `see_image`：把图片（截图 / 照片 / 文件路径 / data URL）连同
+ * 只暴露两个工具：`see_image`（单图）与 `see_images`（多图批量，单次上限
+ * PI_VISION_MAX_BATCH，默认 5）：把图片（截图 / 照片 / 文件路径 / data URL）连同
  * 一个问题一起发给视觉模型，把视觉模型的回答作为工具结果返回。
  * 主要服务于不具备识图能力的模型——它们照常推理，需要看图时调这个工具即可。
  *
@@ -32,6 +33,7 @@
  *   - PI_VISION_FALLBACK_MODELS  : 回退模型列表，英文逗号分隔（text）
  *   - PI_VISION_MAX_TOKENS       : 单次视觉调用最大输出 token，默认 4096
  *   - PI_VISION_TIMEOUT_MS       : 单次视觉调用超时毫秒，默认 90000
+ *   - PI_VISION_MAX_BATCH        : see_images 单次调用最多图片数，默认 5
  *
  * 交互：
  *   - /vision 查看当前配置与解析结果
@@ -50,6 +52,7 @@ import { Type } from "typebox";
 
 const REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_MAX_BATCH = 5;
 
 const VISION_SYSTEM_PROMPT = [
 	"You are an expert vision analysis assistant.",
@@ -108,6 +111,12 @@ function envTimeoutMs(): number {
 function envMaxTokens(): number {
 	const n = parseInt(process.env.PI_VISION_MAX_TOKENS ?? "", 10);
 	return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_TOKENS;
+}
+
+/** see_images 单次调用的图片上限；配置非法或小于 1 时回退默认值。 */
+function envMaxBatch(): number {
+	const n = parseInt(process.env.PI_VISION_MAX_BATCH ?? "", 10);
+	return Number.isFinite(n) && n >= 1 ? n : DEFAULT_MAX_BATCH;
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
@@ -255,7 +264,7 @@ function buildCandidates(ctx: ExtensionContext, overrideRef: string | undefined)
 async function callVisionModel(
 	ctx: ExtensionContext,
 	model: Model<Api>,
-	image: { mimeType: string; data: string },
+	images: ReadonlyArray<{ mimeType: string; data: string }>,
 	prompt: string,
 	signal: AbortSignal | undefined,
 ): Promise<string> {
@@ -276,8 +285,14 @@ async function callVisionModel(
 					role: "user" as const,
 					timestamp: Date.now(),
 					content: [
-						{ type: "image" as const, data: image.data, mimeType: image.mimeType },
-						{ type: "text" as const, text: prompt },
+						...images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType })),
+						{
+							type: "text" as const,
+							text:
+								images.length > 1
+									? `用户提供了 ${images.length} 张图片，按传入顺序编号 1..${images.length}。\n\n${prompt}`
+									: prompt,
+						},
 					],
 				},
 			],
@@ -306,6 +321,85 @@ async function callVisionModel(
 	return text;
 }
 
+/**
+ * 一次视觉分析（含模型回退循环）：see_image 传单图，see_images 传多图。
+ * 返回 toolResult / toolError，由调用方直接透传。
+ */
+async function runVisionAnalysis(
+	ctx: ExtensionContext,
+	opts: {
+		images: Array<{ mimeType: string; data: string }>;
+		prompt: string;
+		modelOverride?: string;
+		/** 进度文案里的对象名词，如 "图片" / "3 张图片" */
+		noun: string;
+	},
+	signal: AbortSignal | undefined,
+	onUpdate: ((partial: { content: Array<{ type: "text"; text: string }>; details?: unknown }) => void) | undefined,
+) {
+	const candidates = buildCandidates(ctx, opts.modelOverride);
+	const attempts: string[] = [];
+	const autoSelection = !opts.modelOverride && !parseModelRef(process.env.PI_VISION_MODEL);
+
+	for (const cand of candidates) {
+		const refName = cand.model ? `${cand.model.provider}/${cand.model.id}` : cand.ref;
+
+		if (!cand.model) {
+			attempts.push(`${refName}：注册表中未找到该模型（确认 provider/modelId 是否已配置到 models.json）`);
+			continue;
+		}
+		if (cand.unusable) {
+			attempts.push(`${refName}：${cand.unusable}`);
+			continue;
+		}
+		if (signal?.aborted) {
+			return toolError("已取消。", { error: "aborted", attempts, imageCount: opts.images.length });
+		}
+
+		ctx.ui.setStatus("pi-vision", `👁 ${cand.model.id} …`);
+		onUpdate?.({
+			content: [{ type: "text", text: `正在用 ${refName} 分析${opts.noun}…` }],
+			details: { model: refName, status: "analyzing" },
+		});
+
+		try {
+			const text = await callVisionModel(ctx, cand.model, opts.images, opts.prompt, signal);
+			if (autoSelection) autoPreferredModelRef = modelRef(cand.model);
+			const usedFallback = attempts.length > 0;
+			const prefix = usedFallback
+				? `（默认模型不可用，已由 ${refName} 回退完成。失败记录：${attempts.join("；")}）\n\n`
+				: "";
+			return toolResult(prefix + text, {
+				model: refName,
+				fallback: usedFallback,
+				attempts,
+				prompt: opts.prompt,
+				imageCount: opts.images.length,
+			});
+		} catch (err) {
+			if (signal?.aborted) {
+				return toolError("已取消。", { error: "aborted", attempts, imageCount: opts.images.length });
+			}
+			attempts.push(`${refName}：${messageOf(err)}`);
+		} finally {
+			updateStatus(ctx);
+		}
+	}
+
+	return toolError(
+		[
+			"所有视觉模型候选均失败：",
+			...attempts.map((a, i) => `  ${i + 1}. ${a}`),
+			"",
+			"请检查配置：",
+			"  PI_VISION_MODEL=provider/modelId          默认视觉模型",
+			"  PI_VISION_FALLBACK_MODELS=a/x,b/y         回退模型（逗号分隔）",
+			"可用 /vision 查看当前配置与候选解析结果。",
+		].join("\n"),
+		{ error: "all_failed", attempts, imageCount: opts.images.length },
+	);
+}
+
 function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string {
 	const envModel = process.env.PI_VISION_MODEL?.trim() || "（未设置 → auto）";
 	const envFallbacks = process.env.PI_VISION_FALLBACK_MODELS?.trim() || "（未设置）";
@@ -315,6 +409,7 @@ function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string 
 		`  回退模型:        ${envFallbacks}`,
 		`  max tokens:      ${envMaxTokens()}`,
 		`  超时:            ${envTimeoutMs()}ms`,
+		`  批量上限:        ${envMaxBatch()}（see_images 单次最多图片数）`,
 		"",
 		"候选解析（按尝试顺序）:",
 		...buildCandidates(ctx, undefined).map((c, i) => {
@@ -328,22 +423,24 @@ function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string 
 		"配置方式（环境变量，PiDeck 配置界面注入）:",
 		"  PI_VISION_MODEL=provider/modelId            默认视觉模型",
 		"  PI_VISION_FALLBACK_MODELS=a/x,b/y           回退模型，逗号分隔",
-		"  或在调用 see_image 时传 model 参数临时指定。",
+		"  PI_VISION_MAX_BATCH=5                       see_images 单次最多图片数",
+		"  或在调用 see_image/see_images 时传 model 参数临时指定。",
 	];
 	return lines.join("\n");
+}
+
+/** 状态栏：显示下一个可用视觉模型；suffix 用于调用期间展示当前使用的模型。 */
+function updateStatus(ctx: ExtensionContext | ExtensionCommandContext, suffix?: string): void {
+	const first = buildCandidates(ctx, undefined).find((c) => c.model && !c.unusable);
+	ctx.ui.setStatus(
+		"pi-vision",
+		first?.model ? `👁 ${first.model.id}${suffix ? ` ${suffix}` : ""}` : undefined,
+	);
 }
 
 // ── Extension ────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	function updateStatus(ctx: ExtensionContext | ExtensionCommandContext, suffix?: string): void {
-		const first = buildCandidates(ctx, undefined).find((c) => c.model && !c.unusable);
-		ctx.ui.setStatus(
-			"pi-vision",
-			first?.model ? `👁 ${first.model.id}${suffix ? ` ${suffix}` : ""}` : undefined,
-		);
-	}
-
 	pi.on("session_start", (_event, ctx) => {
 		updateStatus(ctx);
 	});
@@ -367,10 +464,12 @@ export default function (pi: ExtensionAPI) {
 			"适用于需要根据图片内容作答的任何场景：UI 截图、报错弹窗、图表、照片、扫描件等。" +
 			"image 支持本地文件路径或 data:image/...;base64 形式的 data URL。" +
 			"prompt 是你想从图片里得到什么，写得越具体越好。" +
-			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则自动从已配置（非 OAuth）的视觉模型中首选，失败时自动按序尝试其他已配置模型。",
+			"可选 model 参数临时指定视觉模型（格式 provider/modelId，仅本次调用生效）；不指定则自动从已配置（非 OAuth）的视觉模型中首选，失败时自动按序尝试其他已配置模型。" +
+			"一次分析多张图片请用 see_images（批量）。",
 		promptSnippet: "用视觉模型解析图片内容（截图/照片/图片），支持默认模型 + 回退模型",
 		promptGuidelines: [
 			"需要看懂截图、报错弹窗、UI 界面、图表、照片等任何图片内容时，调用 see_image；在 prompt 里写明你具体要从图中获取什么。",
+			"需要对比或成组分析多张图片时，用 see_images 一次提交，不要逐张调用 see_image。",
 			"see_image 的 image 参数接受本地文件路径（如截图文件的绝对路径）或 data:image/...;base64 的 data URL。",
 			"see_image 自动使用最近一次成功的视觉模型，失败会自动尝试其他可用模型并记住新的成功模型；仅在需要临时换模型时传 model 参数（provider/modelId）。",
 		],
@@ -416,65 +515,94 @@ export default function (pi: ExtensionAPI) {
 				});
 			}
 
-			const candidates = buildCandidates(ctx, params.model);
-			const attempts: string[] = [];
-			const autoSelection = !params.model && !parseModelRef(process.env.PI_VISION_MODEL);
+			return runVisionAnalysis(
+				ctx,
+				{ images: [image], prompt: params.prompt, modelOverride: params.model, noun: "图片" },
+				signal,
+				onUpdate,
+			);
+		},
+	});
 
-			for (const cand of candidates) {
-				const refName = cand.model ? `${cand.model.provider}/${cand.model.id}` : cand.ref;
+	pi.registerTool({
+		name: "see_images",
+		label: "See Images (Vision)",
+		description:
+			`用视觉模型一次分析多张图片（对比多张截图、审查一组 UI 图、逐页看扫描件等），返回覆盖全部图片的文字分析。` +
+			`images 最多 ${envMaxBatch()} 张（PI_VISION_MAX_BATCH 可调），按传入顺序编号；prompt 是对所有图片的同一个分析要求，可用"第 N 张"指代具体图片。` +
+			`模型选择与自动回退同 see_image。单张图片用 see_image 即可。`,
+		promptSnippet: "一次视觉调用分析多张图片（对比/成组/多页），支持默认模型 + 回退模型",
+		promptGuidelines: [
+			"需要对比或成组分析多张图片时，用 see_images 一次提交，不要对每张图各调一次 see_image；单张图片仍用 see_image。",
+			`images 上限 ${envMaxBatch()} 张（PI_VISION_MAX_BATCH 可调），更多时拆成多次调用；prompt 对所有图片生效，用"第 N 张"引用具体图片。`,
+			"see_images 的模型选择/回退与 see_image 相同：默认自动，仅在需要临时换模型时传 model 参数（provider/modelId）。",
+		],
+		parameters: Type.Object({
+			images: Type.Array(
+				Type.String({
+					description: "图片位置：本地文件路径（相对路径按当前工作目录解析）或 data:image/png;base64,... 形式的 data URL",
+				}),
+				{ description: `图片位置列表，按传入顺序编号，最多 ${envMaxBatch()} 张（PI_VISION_MAX_BATCH）` },
+			),
+			prompt: Type.String({
+				description:
+					'想让视觉模型对所有图片分析/提取的内容，越具体越好。例如："对比两张截图，列出 UI 差异"、"逐张提取每页的手写文字"。',
+			}),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"临时指定视觉模型，格式 provider/modelId（仅本次调用生效，优先级最高）。不指定则走与 see_image 相同的默认模型选择。",
+				}),
+			),
+		}),
 
-				if (!cand.model) {
-					attempts.push(`${refName}：注册表中未找到该模型（确认 provider/modelId 是否已配置到 models.json）`);
-					continue;
-				}
-				if (cand.unusable) {
-					attempts.push(`${refName}：${cand.unusable}`);
-					continue;
-				}
-				if (signal?.aborted) {
-					return toolError("已取消。", { error: "aborted", attempts });
-				}
+		renderCall(args, theme) {
+			const title = theme.fg("toolTitle", theme.bold("see_images"));
+			const countLine = theme.fg("dim", `images: ${args.images.length} 张`);
+			const promptLine = theme.fg(
+				"dim",
+				`prompt: ${args.prompt.length > 120 ? args.prompt.slice(0, 117) + "..." : args.prompt}`,
+			);
+			const modelLine = args.model ? theme.fg("dim", `model: ${args.model}`) : undefined;
+			return new Text(
+				[title, `  ${countLine}`, `  ${promptLine}`, ...(modelLine ? [`  ${modelLine}`] : [])].join("\n"),
+				0,
+				0,
+			);
+		},
 
-				ctx.ui.setStatus("pi-vision", `👁 ${cand.model.id} …`);
-				onUpdate?.({
-					content: [{ type: "text", text: `正在用 ${refName} 分析图片…` }],
-					details: { model: refName, status: "analyzing" },
-				});
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const images = [...new Set(params.images.map((p) => p.trim()).filter(Boolean))];
+			if (!images.length) {
+				return toolError("未提供任何图片路径。", { error: "empty_images" });
+			}
+			const max = envMaxBatch();
+			if (images.length > max) {
+				return toolError(
+					`一次最多分析 ${max} 张图片（当前 ${images.length} 张，PI_VISION_MAX_BATCH=${max}）。请拆分成多次 see_images 调用，或在配置中调高 PI_VISION_MAX_BATCH。`,
+					{ error: "too_many_images", max, count: images.length },
+				);
+			}
 
+			// 逐张读取；任何一张读不了就整体失败并指出是哪张，避免模型对着缺图作答。
+			const loaded: Array<{ mimeType: string; data: string }> = [];
+			for (const [index, image] of images.entries()) {
 				try {
-					const text = await callVisionModel(ctx, cand.model, image, params.prompt, signal);
-					if (autoSelection) autoPreferredModelRef = modelRef(cand.model);
-					const usedFallback = attempts.length > 0;
-					const prefix = usedFallback
-						? `（默认模型不可用，已由 ${refName} 回退完成。失败记录：${attempts.join("；")}）\n\n`
-						: "";
-					return toolResult(prefix + text, {
-						model: refName,
-						fallback: usedFallback,
-						attempts,
-						prompt: params.prompt,
-					});
+					loaded.push(await loadImage(image, ctx.cwd));
 				} catch (err) {
-					if (signal?.aborted) {
-						return toolError("已取消。", { error: "aborted", attempts });
-					}
-					attempts.push(`${refName}：${messageOf(err)}`);
-				} finally {
-					updateStatus(ctx);
+					return toolError(`无法读取第 ${index + 1} 张图片 "${image}"：${messageOf(err)}`, {
+						error: "image_read_error",
+						index: index + 1,
+						image,
+					});
 				}
 			}
 
-			return toolError(
-				[
-					"所有视觉模型候选均失败：",
-					...attempts.map((a, i) => `  ${i + 1}. ${a}`),
-					"",
-					"请检查配置：",
-					"  PI_VISION_MODEL=provider/modelId          默认视觉模型",
-					"  PI_VISION_FALLBACK_MODELS=a/x,b/y         回退模型（逗号分隔）",
-					"可用 /vision 查看当前配置与候选解析结果。",
-				].join("\n"),
-				{ error: "all_failed", attempts },
+			return runVisionAnalysis(
+				ctx,
+				{ images: loaded, prompt: params.prompt, modelOverride: params.model, noun: `${loaded.length} 张图片` },
+				signal,
+				onUpdate,
 			);
 		},
 	});
