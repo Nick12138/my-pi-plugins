@@ -202,6 +202,11 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string, sessio
 
 async function executeSpawn(params: SubagentParamsT, ctx: ExtensionContext): Promise<AgentToolResult<unknown>> {
 	const cwd = params.cwd ?? ctx.cwd;
+	// 防徊：未绑定 workspace 的宿主（如 PiDeck prewarm/shared host）里 ctx.cwd 可能为空，
+	// 此时子 pi 进程会退化继承 host 进程自身 cwd（dev 下是 pi-host 包目录），必须显式拒绝。
+	if (!cwd || !String(cwd).trim()) {
+		return text("spawn 失败：无法确定工作目录（ctx.cwd 为空且未传 params.cwd）。请显式传 cwd。");
+	}
 	const sessionId = safeSessionId(ctx) ?? undefined;
 	const tasks: SpawnItemT[] = [];
 	if (params.tasks && params.tasks.length > 0) {
