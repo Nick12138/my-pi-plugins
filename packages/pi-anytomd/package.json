@@ -1,7 +1,7 @@
 {
   "name": "pi-anytomd",
-  "version": "0.1.0",
-  "description": "AnyToMD: read any local file (image / Office / PDF) as Markdown. WPS-first pipelines, Baidu OCR fallback, auto scanned-PDF detection. One tool: anytomd.",
+  "version": "0.2.0",
+  "description": "AnyToMD: read any local file (images / Office / PDF / ODF / EPUB / RTF / CSV) as Markdown. Sync & async job queue, password decryption, Baidu OCR fallback. Tools: anytomd, anyjob, anytomd_setup.",
   "keywords": ["pi-package"],
   "license": "MIT",
   "author": "Nick12138",

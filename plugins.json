@@ -243,9 +243,9 @@
     {
       "id": "pi-anytomd",
       "name": "AnyToMD",
-      "description": "一个工具读所有本地文件为 Markdown：图片（WPS 云端 OCR / 百度 OCR 双通道）、docx/xlsx/pptx/doc 等 Office、PDF（自动区分文字版/扫描件）。内置 anytomd_setup 依赖体检与一键安装（pandoc/officecli 自动装、wpscli 自动定位、百度 Key 配置即用）。",
+      "description": "本地任意文档转 Markdown（同步转换 + 跨会话异步任务队列）：覆盖 PDF（文字/扫描件 OCR）、Office（docx/xlsx/pptx/doc/xls/ppt/wps/et/dps）、OpenDocument（odt）、EPUB、RTF、CSV、图片多图合并，支持加密文档密码解密、百度 OCR 质量降级门。包含同步工具 anytomd 与异步队列工具 anyjob。",
       "icon": "📄",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": ["文档读取", "OCR", "Markdown", "WPS"],
       "install": {
