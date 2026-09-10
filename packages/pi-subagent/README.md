@@ -20,7 +20,7 @@ Windows 专用的 pi 子代理运行时：把任务委托给独立的子 pi 进�
 - **回调**：完成/失败/停止时通知主 agent（不打断当前轮，空闲自动唤醒）
 - **双向工具回调**（Nico pi-subagents 风格）：子代理可主动联系主代理要决策/结构化输入/报进度，并**阻塞等待回复**；主代理用 `subagent_supervisor` 工具回复。跨进程走**文件系统信箱**（`%TEMP%/pi-subagent-supervisor-channels/`），不依赖会话消息注入
 - **Steering 运行中引导**：主代理可在子代理运行中发送引导消息（`subagent({action:"steer", runId, message, mode})`），子代理在下一安全点/回合边界收到并调整方向
-- **预算与超时**：`maxRuntimeMs` 总超时、`turnBudget` 回合数上限、`toolTimeoutMs` 无输出卡死检测，超出自动终止防失控
+- **预算与超时**：`maxRuntimeMs` 总超时、`turnBudget` 回合数上限、`toolTimeoutMs` 无输出卡死检测，超出自动终止防失控。`turnBudget` 不传则不限回合；传入值低于 60 会自动抬到最低 60（复杂任务建议不传，交给 `maxRuntimeMs` 兜底）
 - **模型自动回退**：`fallbackModels` 列表，主模型限流/超时/错误时自动换下一个续跑（同会话断点续跑）
 - **subagent_wait**：主代理可阻塞等待子代理完成（`subagent_wait({runId?|all, timeoutMs})`），适合编排依赖关系
 - **会话标题**：每个任务带标题，显示在列表与回调中
@@ -62,7 +62,7 @@ subagent(tasks:[
 subagent(agent:"worker", task:"实现 xx", model:"openai/gpt-5", worktree:true, retry:0)
 
 # 预算与超时 / 模型回退
-subagent(agent:"worker", task:"长任务", maxRuntimeMs:600000, turnBudget:20, toolTimeoutMs:300000,
+subagent(agent:"worker", task:"长任务", maxRuntimeMs:600000, turnBudget:60, toolTimeoutMs:300000,
          fallbackModels:["4/hy3-free", "1/glm-5.2"])   # 主模型失败自动换下一个
 
 # 模型回退优先级：任务 fallbackModels > 全局 SUBAGENT_FALLBACK_MODELS

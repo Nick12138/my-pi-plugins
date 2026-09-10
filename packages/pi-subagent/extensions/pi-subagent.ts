@@ -76,7 +76,7 @@ const SubagentParams = Type.Object({
 	retry: Type.Optional(Type.Number({ description: "失败自动重试次数（0-3），默认取配置" })),
 	fallbackModels: Type.Optional(Type.Array(Type.String(), { description: "模型回退列表：主模型失败时依次尝试" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "运行总超时（毫秒），超时自动 kill" })),
-	turnBudget: Type.Optional(Type.Number({ description: "回合数上限，超出自动 stop" })),
+	turnBudget: Type.Optional(Type.Number({ description: "回合数上限，超出自动 stop；不传 = 不限回合，传了则最低 60（低于 60 会自动抬到 60）" })),
 	toolTimeoutMs: Type.Optional(Type.Number({ description: "单工具调用超时（毫秒），0=不限制" })),
 	message: Type.Optional(Type.String({ description: "steer 时发送给运行中子代理的引导消息" })),
 	mode: Type.Optional(StringEnum(["steer", "follow_up", "auto"] as const, { description: "steer 投递模式：steer=中断当前执行投递；follow_up=回合边界投递；auto=自动", default: "steer" })),
@@ -166,6 +166,8 @@ function safeSessionId(ctx: ExtensionContext): string | null {
 	}
 }
 
+const MIN_TURN_BUDGET = 60;
+
 function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string, sessionId: string | undefined): RunTask {
 	const agent = item.agent as AgentName;
 	const title = (item.title ?? params.title)?.trim() || `${agent}: ${item.task.slice(0, 30)}`;
@@ -189,7 +191,9 @@ function makeTask(params: SubagentParamsT, item: SpawnItemT, cwd: string, sessio
 		retry,
 		...(fallbackRaw?.length ? { fallbackModels: fallbackRaw } : {}),
 		...(params.maxRuntimeMs ? { maxRuntimeMs: params.maxRuntimeMs } : {}),
-		...(params.turnBudget ? { turnBudget: params.turnBudget } : {}),
+		// 回合预算：显式传入的小值统一抬到最低 MIN_TURN_BUDGET，
+		// 不传则不限回合（防失控由 maxRuntimeMs / toolTimeoutMs 兜底）。
+		...(params.turnBudget ? { turnBudget: Math.max(params.turnBudget, MIN_TURN_BUDGET) } : {}),
 		...(params.toolTimeoutMs ? { toolTimeoutMs: params.toolTimeoutMs } : {}),
 		// 记录发起会话：通知路由/面板过滤/子进程 supervisor 归属都以它为准。
 		// 取自本次工具调用的 ctx（spawn 点），绝不读进程级 env（多会话宿主下会被
