@@ -48,7 +48,7 @@ async function callWorkerSpec(spec: Record<string, unknown>, password?: string, 
 	const tmpSpec = path.join(os.tmpdir(), `anytomd-spec-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
 	writeFileSync(tmpSpec, JSON.stringify(spec, null, 2), "utf-8");
 
-	const childEnv = {
+	const childEnv: Record<string, string | undefined> = {
 		...process.env,
 		ELECTRON_RUN_AS_NODE: "1",
 	};
