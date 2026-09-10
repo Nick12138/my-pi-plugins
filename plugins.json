@@ -126,9 +126,9 @@
     {
       "id": "pi-vision",
       "name": "视觉看图",
-      "description": "让没有识图能力的模型看懂截图、图片、照片：调用 see_image 工具把图片发给配置的视觉模型，默认模型失败自动回退备用模型。",
+      "description": "让没有识图能力的模型看懂截图、图片、照片：see_image/see_images 把图片发给配置的视觉模型（默认模型失败自动回退备用模型），see_job 支持大批量后台异步分析任务队列。",
       "icon": "👁",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": [
         "视觉",
@@ -168,6 +168,16 @@
           "placeholder": "5",
           "default": "5",
           "description": "see_images 一次调用最多分析的图片数量（至少 1）。超出会整体拒绝并提示拆分；单图工具 see_image 不受影响。"
+        },
+        {
+          "key": "visionMaxConcurrent",
+          "type": "text",
+          "label": "异步看图并发数",
+          "env": "PI_VISION_MAX_CONCURRENT",
+          "required": false,
+          "placeholder": "2",
+          "default": "2",
+          "description": "see_job 后台分析任务的并发数（整数 1-8，默认 2），超出自动排队。"
         }
       ]
     },

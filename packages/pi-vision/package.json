@@ -1,7 +1,7 @@
 {
   "name": "pi-vision",
-  "version": "0.1.0",
-  "description": "Vision tool for pi: let text-only models understand screenshots, pictures and photos via a configurable vision model with fallback models.",
+  "version": "0.2.0",
+  "description": "Vision tools for pi: let text-only models understand screenshots, pictures and photos via a configurable vision model with fallback models. Also provides see_job, a persistent async job queue for batch image analysis.",
   "keywords": ["pi-package", "pi-extension", "vision", "image", "multimodal"],
   "license": "MIT",
   "author": "Nick12138",

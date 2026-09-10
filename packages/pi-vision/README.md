@@ -1,8 +1,9 @@
 # 👁 pi-vision
 
-视觉能力插件：给**没有识图功能的模型**一个"看图"工具。暴露两个工具：`see_image`（单图）与
-`see_images`（多图批量，单次上限可配，默认 5 张）——把图片发给你配置的视觉模型，
-把分析结果作为工具结果返回给主模型。截图、报错弹窗、UI 界面、图表、照片都能让它看懂。
+视觉能力插件：给**没有识图功能的模型**一个"看图"工具。暴露三个工具：`see_image`（单图）、
+`see_images`（多图批量，单次上限可配，默认 5 张）与 `see_job`（异步看图任务队列，大批量后台分析）——
+把图片发给你配置的视觉模型，把分析结果作为工具结果返回给主模型。
+截图、报错弹窗、UI 界面、图表、照片都能让它看懂。
 
 模型路由带**自动首选 + 全量回退**能力。自动模式首次从"已配置且非 OAuth"的视觉模型中随机选择一个并保持；该模型失败后按其他已配置视觉模型继续尝试，新的成功模型会成为下一次自动调用的首选。**自动模式绝不会选中你没配置过的模型**（例如 openrouter、anthropic 等 OAuth 登录的内置目录模型会被排除）。
 
@@ -23,8 +24,9 @@ auto 模式的候选范围只认**用户已配置**的模型：provider 有可�
 ## 工具
 
 ```
-see_image({ image, prompt, model? })        单图
-see_images({ images[], prompt, model? })    多图批量（上限 PI_VISION_MAX_BATCH，默认 5）
+see_image({ image, prompt, model? })                      单图
+see_images({ images[], prompt, model? })                  多图批量（上限 PI_VISION_MAX_BATCH，默认 5）
+see_job({ action, tasks[]?... })                          异步任务队列：submit / status / wait / cancel / list
 ```
 
 ### see_image
@@ -46,6 +48,40 @@ see_images({ images[], prompt, model? })    多图批量（上限 PI_VISION_MAX_
 多图在**同一次视觉调用**中一起送入模型（而非逐张调用），适合跨图对比与成组审查；
 任一图片读不了会整体失败并指出第几张，避免模型对着缺图作答。模型选择/回退与 see_image 完全一致。
 
+### see_job（异步任务队列，对标 pi-anytomd 的 anyjob）
+
+大批量图片分析（批量 OCR、证书信息提取、逐页审阅）不想阻塞当前回合时使用。
+submit 创建后台任务立即返回 job-id；任务记录与结果持久化到 `~/.pi/vision-jobs/jobs/<id>/`，
+跨会话可查（status / wait / cancel / list）。
+
+```ts
+// 批量提交：每个任务 = 独立的图片组 + 独立的 prompt（一次最多 50 个）
+see_job({ action: "submit", tasks: [
+  { image: "./cert1.png", prompt: "提取姓名、证书编号、有效期" },
+  { image: "./cert2.png", prompt: "提取姓名、证书编号、有效期" },
+  { images: ["./p1.png", "./p2.png"], prompt: "对比两张截图的差异", model: "openai/gpt-4o" },
+]})
+
+// 单任务快捷方式；wait=true 则阻塞等本批全部到终态并内联返回分析全文
+see_job({ action: "submit", image: "./a.png", prompt: "...", wait: true, timeoutSec: 600 })
+
+see_job({ action: "status", id: "seejob_..." })   // 状态 + 结果预览（前 2000 字）
+see_job({ action: "wait",   id: "seejob_..." })   // 阻塞到终态，成功直接返回分析全文
+see_job({ action: "cancel", id: "seejob_..." })   // 取消（运行中的任务触发中断）
+see_job({ action: "list", limit: 20, statusFilter: "failed" })  // 历史
+```
+
+| 特性 | 说明 |
+| --- | --- |
+| 并发 | `PI_VISION_MAX_CONCURRENT`（默认 2，1-8），超限自动排队 |
+| 产物 | `<jobDir>/result.md`（分析全文）+ `details.json`（模型/回退尝试记录） |
+| stale 检测 | 读任务时发现排队/运行中的任务 pid 与当前进程不一致（即上个 pi 进程遗留），自动标记 failed |
+| data URL 隐私 | 任务元数据里的 data URL 不落盘（只存 `data:<mime>;base64,<长度>` 标记），原件只在提交进程内存中 |
+| 与 anyjob 的差异 | anyjob 是 detached 独立进程（跨会话继续跑）；see_job 在 pi 进程内运行（依赖模型注册表），pi 退出后排队/运行中任务视为失败，已落盘结果跨会话仍可查 |
+
+模型路由/回退与 see_image 完全一致；成功模型同样会提升为下一次自动调用首选。
+**提交前会做一次前置检查**：如果存在未指定模型的任务而默认路由上没有任何可用视觉模型，会直接拒绝提交。
+
 ## 配置（环境变量）
 
 | 环境变量 | 控件类型 | 说明 |
@@ -53,13 +89,15 @@ see_images({ images[], prompt, model? })    多图批量（上限 PI_VISION_MAX_
 | `PI_VISION_MODEL` | select（视觉模型动态单选） | 默认视觉模型；选“自动选择”则由插件从已配置且非 OAuth 的识图模型中随机选择并保持，失败后自动切换到其他已配置模型 |
 | `PI_VISION_FALLBACK_MODELS` | text | 显式配置默认模型时使用的回退视觉模型列表，英文逗号分隔，按顺序尝试；自动模式会自动尝试其他已配置视觉模型 |
 | `PI_VISION_MAX_BATCH` | text | `see_images` 单次调用最多分析的图片数量，默认 5（至少 1）；超出会整体拒绝并提示拆分 |
+| `PI_VISION_MAX_CONCURRENT` | text | `see_job` 后台分析并发数，默认 2（1-8），超限自动排队 |
 
-另有两个**仅供高级用户**的环境变量（不在配置界面显示，留空走内置默认值）：
+另有三个**仅供高级用户**的环境变量（不在配置界面显示，留空走内置默认值）：
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PI_VISION_MAX_TOKENS` | 4096 | 单次视觉调用最大输出 token 数 |
 | `PI_VISION_TIMEOUT_MS` | 90000 | 单次视觉调用超时毫秒数，超时后自动回退下一个模型 |
+| `PI_VISION_JOBS_DIR` | `~/.pi/vision-jobs` | `see_job` 任务库目录（可覆盖，主要给测试隔离使用） |
 
 配置界面的选项与仓库根目录 [plugins.json](../../plugins.json) 中的 `config` 声明一一对应。
 工具调用的 `model` 参数优先级高于环境变量。
