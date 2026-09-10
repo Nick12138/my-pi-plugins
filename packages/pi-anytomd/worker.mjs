@@ -86,10 +86,6 @@ function versionOf(exe) {
 let wpscliCache = null;
 let wpscliVersionCache = null;
 
-function isRunnableWpscli(exe) {
-	return runSync(exe, ["--version"], 15000).length > 0;
-}
-
 function wpsVersionFromPath(exe) {
 	const m = exe.match(/[\\/]WPS Office[\\/](\d+\.\d+\.\d+(?:\.\d+)?)/i);
 	return m ? m[1] : "";
@@ -114,7 +110,15 @@ function findWpscli() {
 		if (!candidates.some((c) => c.toLowerCase() === abs.toLowerCase())) candidates.push(abs);
 	};
 	const fromEnv = process.env.WPSCLI_PATH?.trim();
-	if (fromEnv && isRunnableWpscli(fromEnv)) return (wpscliCache = fromEnv);
+	if (fromEnv) {
+		// 探测即捕获版本输出，写入缓存，避免后续 wpscliVersion() 对同一 exe 重复 --version。
+		const envVersion = versionOf(fromEnv);
+		if (envVersion) {
+			wpscliCache = fromEnv;
+			wpscliVersionCache = envVersion;
+			return fromEnv;
+		}
+	}
 	add(fromEnv);
 
 	for (const p of whereFirst("wpscli").split(/\r?\n/)) add(p);
@@ -152,7 +156,8 @@ function findWpscli() {
 }
 
 function wpscliVersion() {
-	if (wpscliVersionCache) return wpscliVersionCache;
+	// 用 != null 判断：版本探测结果为空字符串（坏 exe）时也视为已缓存，不再反复探测。
+	if (wpscliVersionCache != null) return wpscliVersionCache;
 	try {
 		wpscliVersionCache = versionOf(findWpscli());
 	} catch {
@@ -167,8 +172,14 @@ function pushCandidate(list, p) {
 	if (!list.some((c) => c.toLowerCase() === abs.toLowerCase())) list.push(abs);
 }
 
+// 探测第一个可运行的候选并直接返回其 --version 输出，
+// 调用方必须复用返回的 version，不得对同一 exe 再次调用 versionOf。
 function pickRunnable(candidates) {
-	return candidates.find((c) => versionOf(c)) ?? candidates[0];
+	for (const c of candidates) {
+		const version = versionOf(c);
+		if (version) return { exe: c, version };
+	}
+	return { exe: candidates[0], version: "" };
 }
 
 let officecliCache = null;
@@ -179,10 +190,10 @@ function findOfficecli() {
 	for (const p of whereFirst("officecli").split(/\r?\n/)) pushCandidate(candidates, p);
 	pushCandidate(candidates, path.join(os.homedir(), "AppData", "Local", "OfficeCLI", "officecli.exe"));
 	if (!candidates.length) throw new Error("找不到 officecli：运行 anytomd_setup({ install: true }) 自动安装。");
-	const exe = pickRunnable(candidates);
-	officecliCache = exe;
-	officecliVersionCache = versionOf(exe);
-	return exe;
+	const picked = pickRunnable(candidates);
+	officecliCache = picked.exe;
+	officecliVersionCache = picked.version;
+	return picked.exe;
 }
 
 function officecliVersion() {
@@ -191,6 +202,7 @@ function officecliVersion() {
 }
 
 let pandocCache = null;
+let pandocVersionCache = null;
 function findPandoc() {
 	if (pandocCache) return pandocCache;
 	const candidates = [];
@@ -207,8 +219,15 @@ function findPandoc() {
 		}
 	} catch { /* ignore */ }
 	if (!candidates.length) throw new Error("找不到 pandoc：运行 anytomd_setup({ install: true }) 自动安装。");
-	pandocCache = pickRunnable(candidates);
+	const picked = pickRunnable(candidates);
+	pandocCache = picked.exe;
+	pandocVersionCache = picked.version;
 	return pandocCache;
+}
+
+function pandocVersion() {
+	if (!pandocCache) try { findPandoc(); } catch { return ""; }
+	return pandocVersionCache ?? "";
 }
 
 async function runCmd(exe, args, opts = {}) {
@@ -902,7 +921,7 @@ function checkDeps() {
 
 	try {
 		const pan = findPandoc();
-		statuses.push({ name: "pandoc", ok: true, version: versionOf(pan), path: pan, detail: "" });
+		statuses.push({ name: "pandoc", ok: true, version: pandocVersion(), path: pan, detail: "" });
 	} catch (err) {
 		statuses.push({ name: "pandoc", ok: false, version: "", path: "", detail: err instanceof Error ? err.message : String(err) });
 	}
