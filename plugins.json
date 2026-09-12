@@ -37,6 +37,23 @@
       }
     },
     {
+      "id": "pi-ask-user-question",
+      "name": "交互式提问",
+      "description": "Agent 提问弹窗：agent 在不确定时用 ask_user_question 向你发起结构化问卷，桌面端弹出对话框让你点选——选项列表可搜索、支持自定义回复，另有确认/输入/编辑器三种形态，多问题排队依次作答、带过期倒计时，而不是让 agent 自己猜。",
+      "icon": "❓",
+      "version": "2.1.0",
+      "author": "juicesharp",
+      "tags": [
+        "提问",
+        "交互",
+        "agent"
+      ],
+      "install": {
+        "type": "npm",
+        "source": "npm:@juicesharp/rpiv-ask-user-question"
+      }
+    },
+    {
       "id": "pi-subagent",
       "name": "子代理",
       "description": "Windows 专用子代理运行时：3 角色（探索/执行/审查）并行后台运行，失败可恢复（自动重试+断点续跑），完成自动回调主 agent；队列排队、暂停/继续/停止、worktree 隔离、全量事件落盘 + HTTP API 供 PiDeck 面板查看。",
