@@ -42,16 +42,37 @@
  *   - PI_VISION_MAX_TOKENS       : 单次视觉调用最大输出 token，默认 4096
  *   - PI_VISION_TIMEOUT_MS       : 单次视觉调用超时毫秒，默认 90000
  *   - PI_VISION_MAX_BATCH        : see_images 单次调用最多图片数，默认 5
+ *   - PI_VISION_MAX_IMAGE_MB     : 单张图片体积上限（MB，按解码前字节数），默认 20；超限直接拒绝
  *   - PI_VISION_MAX_CONCURRENT   : see_job 后台分析并发数，默认 2（上限 8）
  *   - PI_VISION_JOBS_DIR         : see_job 任务库目录覆盖（测试用），默认 ~/.pi/vision-jobs
+ *   - PI_VISION_CAPABILITY_FILE  : 模型看图能力探针结果缓存文件，默认 <JOBS_DIR>/model-capabilities.json
+ *
+ * 工具可见性门控（有视觉的模型默认走视觉）：
+ *   本插件服务于**自身不能看图**的模型。因此当会话模型自己就能看图时，
+ *   see_image / see_images / see_job 会被移出活跃工具集，让它直接看原图，
+ *   而不是把截图转交给“另一个视觉模型”。模型不能看图时才把工具挂上。
+ *
+ *   关键：**不以 models.json 的 input 声明为准**。声明只代表“值得探”
+ *   （存在配置写了 input:["text","image"]、实际调不通图片的模型），真正的结论
+ *   来自发一个 1x1 PNG 探针真实调一次，按 provider/model 缓存 7 天；
+ *   拿不准（认证缺失 / 网络失败 / 超时）一律按“不能看图”处理，工具保持开启。
+ *   `/vision tools auto|on|off` 可人工覆盖。
+ *
+ * 图片路径读取与错误分类（loadImage）：
+ *   只读“真实存在的图片文件”。路径不存在 / 是目录 / 扩展名不是图片 / 体积超限 /
+ *   文件为空，都会在调视觉模型之前返回带 error code 的失败，并在错误文案里回显
+ *   传入路径、实际解析路径与 cwd —— 便于定位“模型自己拼了一个不存在的路径”这类问题。
  *
  * 交互：
  *   - /vision 查看当前配置与解析结果
+ *   - /vision tools auto|on|off 调整 see_* 工具门控（默认 auto：按实际看图能力）
  *   - 工具运行时底部状态栏显示 👁 标记指向的视觉模型
  */
 
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { Stats } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import {
 	cancelJob,
 	createJob,
@@ -77,6 +98,16 @@ import { Type } from "typebox";
 const REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_MAX_BATCH = 5;
+/** 单张图片体积上限（解码前字节数），默认 20MB。 */
+const DEFAULT_MAX_IMAGE_MB = 20;
+
+/** 静态说明：本工具面向“自身不能看图”的模型；能直接看图的模型应自己看原图。 */
+const USE_WHEN_TEXT_ONLY_NOTE =
+	"【适用对象】本工具是给自身不能读图的模型用的；如果你自己就能看图（用户消息里附带的图片你能直接看到、read 打开图片文件时能看到内容），" +
+	"请直接看原图，不要调用本工具。";
+
+/** 本插件注册的工具名；模型自己支持看图时这些工具会被移出活跃集。 */
+const VISION_TOOL_NAMES = ["see_image", "see_images", "see_job"] as const;
 
 const VISION_SYSTEM_PROMPT = [
 	"You are an expert vision analysis assistant.",
@@ -127,6 +158,214 @@ function parseFallbackRefs(value: string | undefined): ModelRef[] {
 		.filter((ref): ref is ModelRef => ref !== undefined);
 }
 
+function modelSupportsVision(model: Model<Api> | undefined): boolean {
+	return model?.input?.includes("image") === true;
+}
+
+// ── 实际视觉能力探测 ───────────────────────────────────────────────────────
+//
+// models.json 里的 `input: ["text","image"]` 只是**声明**，实测存在“声明支持、实际
+// 不支持图片”的模型（provider 会直接报不支持图片）。所以这里不把声明当结论：
+// `modelSupportsVision` 只用来判断“值不值得探”，真正的结论来自发一个 1x1 PNG 探针
+// 真实调一次，并按 provider/model 把结论缓存到磁盘（每个模型只花一次）。
+//
+// 结果只影响“要不要把 see_* 工具挂给模型”这一个决策，不会因为猜错就把用户卡死：
+// 探针偏保守——拿不准（认证缺失 / 网络失败 / 超时）就当“不支持看图”处理，工具保持开启。
+
+/** 1x1 红点 PNG（最小合法图片），探针用。 */
+const PROBE_PNG_1X1 =
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+const PROBE_TIMEOUT_MS = 20_000;
+/** 探针结论缓存有效期；过期后重新探（应对模型/代理侧能力变更）。 */
+const CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface CapabilityEntry {
+	supports: boolean;
+	reason: string;
+	at: number;
+}
+
+/** 本进程内的探针结论（包含无法定论、未写入磁盘的情况）。 */
+const sessionCapabilities = new Map<string, CapabilityEntry>();
+/** 在途探针（in-flight 去重）：同一模型并发触发门控时不重复发真实调用。 */
+const pendingProbes = new Map<string, Promise<boolean>>();
+
+/**
+ * 非定论结果（无认证 / 网络失败 / 超时）在本会话内的短期有效期。
+ * 不能沿用 7 天 TTL：用户补配 key 后应当很快重探，而不是卡一整个会话。
+ */
+const INCONCLUSIVE_TTL_MS = 5 * 60 * 1000;
+/** 非定论标记（不落盘）。 */
+const inconclusiveKeys = new Set<string>();
+
+function capabilityCacheFile(): string {
+	return process.env.PI_VISION_CAPABILITY_FILE ?? join(JOBS_ROOT, "model-capabilities.json");
+}
+
+function readCapabilityCache(): Record<string, CapabilityEntry> {
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(capabilityCacheFile(), "utf-8"));
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, CapabilityEntry>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** 读缓存（先本进程、再磁盘；过期或缺失返回 undefined）。 */
+function getCachedCapability(model: Model<Api>): CapabilityEntry | undefined {
+	const key = modelRef(model);
+	const fresh = (entry: CapabilityEntry | undefined): CapabilityEntry | undefined => {
+		if (!entry || typeof entry.supports !== "boolean") return undefined;
+		// 非定论条目用短 TTL（补配 key 后很快重探）
+		const ttl = inconclusiveKeys.has(key) ? INCONCLUSIVE_TTL_MS : CAPABILITY_TTL_MS;
+		return Date.now() - entry.at < ttl ? entry : undefined;
+	};
+	const inSession = fresh(sessionCapabilities.get(key));
+	if (inSession) return inSession;
+	const fromDisk = fresh(readCapabilityCache()[key]);
+	if (fromDisk) sessionCapabilities.set(key, fromDisk);
+	return fromDisk;
+}
+
+/** 写缓存（磁盘 + 本进程）；写盘失败不影响本次判定。 */
+function setCachedCapability(model: Model<Api>, supports: boolean, reason: string): void {
+	const entry: CapabilityEntry = { supports, reason, at: Date.now() };
+	sessionCapabilities.set(modelRef(model), entry);
+	try {
+		const cache = readCapabilityCache();
+		cache[modelRef(model)] = entry;
+		const file = capabilityCacheFile();
+		// 原子写：临时文件 + rename，避免进程崩在半途留下截断的 JSON
+		const tmp = `${file}.${process.pid}.tmp`;
+		writeFileSync(tmp, JSON.stringify(cache, null, 2), "utf-8");
+		renameSync(tmp, file);
+	} catch {
+		/* 落盘失败只丢缓存，不影响判定 */
+	}
+}
+
+/** provider 明确表示“吃不下图片”类错误 → 可以定论（可缓存）。 */
+function isVisionUnsupportedError(message: string): boolean {
+	return [
+		/does not support (images?|image inputs?)/i,
+		/not support images?/i,
+		/unsupported (image|content type)/i,
+		/image input is not supported/i,
+		// 只收显式“图片输入/数据非法”类措辞；宽泛的 invalid.*image 会把
+		// “invalid image URL（代理拦截）/ image_url must be string（参数错）”
+		// 这类临时/配置错误误判成“永久不支持图片”并缓存 7 天。
+		/invalid image (input|data|format)/i,
+		/image[_-]?url is only supported/i,
+		/vision is not supported/i,
+		/不支持图片/i,
+		/不支持图像/i,
+		/图片(?:类型)?不支持/i,
+	].some((pattern) => pattern.test(message));
+}
+
+/** 测试注入的探针实现（默认 undefined = 走真实 provider 探针）。 */
+type ProbeOverride = (
+	ctx: ExtensionContext,
+	model: Model<Api>,
+) => Promise<{ supports: boolean; definitive: boolean; reason: string }>;
+let probeOverride: ProbeOverride | undefined;
+
+/**
+ * 发 1x1 PNG 探针真实调一次。definitive=false 表示无法定论（认证/网络/超时）。
+ * 测试可通过 __piVisionTestUtils.setProbeOverride 替换实现。
+ */
+async function probeVisionSupport(
+	ctx: ExtensionContext,
+	model: Model<Api>,
+): Promise<{ supports: boolean; definitive: boolean; reason: string }> {
+	if (probeOverride) return probeOverride(ctx, model);
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) {
+		return { supports: false, definitive: false, reason: `无法解析 API Key：${auth.error}` };
+	}
+	try {
+		await complete(
+			model,
+			{
+				systemPrompt: "Reply with OK.",
+				messages: [
+					{
+						role: "user" as const,
+						timestamp: Date.now(),
+						content: [
+							{ type: "image" as const, data: PROBE_PNG_1X1, mimeType: "image/png" },
+							{ type: "text" as const, text: "ping" },
+						],
+					},
+				],
+			},
+			{
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+				env: auth.env,
+				maxTokens: 1,
+				temperature: 0,
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			},
+		);
+		return { supports: true, definitive: true, reason: "探针调用成功（模型接受了图片输入）" };
+	} catch (err) {
+		const message = messageOf(err);
+		return { supports: false, definitive: isVisionUnsupportedError(message), reason: message };
+	}
+}
+
+/**
+ * 判定“模型实际能不能看图”：
+ *   1. 配置就声明纯文本（input 无 image）→ 直接认定不能看图，不浪费一次探针；
+ *   2. 有缓存（内存或磁盘，未过期）→ 直接用；
+ *   3. 在途探针→ 复用同一个 Promise（in-flight 去重，避免重复计费）；
+ *   4. 否则发探针，能定论就写盘缓存，定不了论只记在本进程（短 TTL）。
+ */
+async function resolveActualVisionCapability(ctx: ExtensionContext, model: Model<Api> | undefined): Promise<boolean> {
+	if (!model) return false;
+	if (!modelSupportsVision(model)) return false;
+	const key = modelRef(model);
+	const cached = getCachedCapability(model);
+	if (cached) return cached.supports;
+	const inflight = pendingProbes.get(key);
+	if (inflight) return inflight;
+
+	const probe = (async () => {
+		const result = await probeVisionSupport(ctx, model);
+		if (result.definitive) {
+			inconclusiveKeys.delete(key);
+			setCachedCapability(model, result.supports, result.reason);
+		} else {
+			// 非定论：只记本进程，且标短 TTL，不落盘、不进“声明不符”提醒
+			inconclusiveKeys.add(key);
+			sessionCapabilities.set(key, { supports: result.supports, reason: result.reason, at: Date.now() });
+		}
+		return result.supports;
+	})().finally(() => pendingProbes.delete(key));
+
+	pendingProbes.set(key, probe);
+	return probe;
+}
+
+/**
+ * 仅供单元测试使用的内部函数句柄。生产代码不得依赖，改动不保证兼容。
+ * 探针依赖 pi-ai 的真实 provider 调用，测试里无法用假 provider 走完整链路，
+ * 因此把“判定 / 缓存 / 错误分类 / 探针实现注入”开个口子单独测。
+ */
+export const __piVisionTestUtils = {
+	isVisionUnsupportedError,
+	getCachedCapability,
+	setCachedCapability,
+	resolveActualVisionCapability,
+	modelSupportsVision,
+	/** 注入探针实现（测竞态/去重用），传 undefined 恢复真实探针。 */
+	setProbeOverride: (fn: ProbeOverride | undefined) => {
+		probeOverride = fn;
+	},
+};
+
 function envTimeoutMs(): number {
 	const n = parseInt(process.env.PI_VISION_TIMEOUT_MS ?? "", 10);
 	return Number.isFinite(n) && n > 0 ? n : REQUEST_TIMEOUT_MS;
@@ -141,6 +380,13 @@ function envMaxTokens(): number {
 function envMaxBatch(): number {
 	const n = parseInt(process.env.PI_VISION_MAX_BATCH ?? "", 10);
 	return Number.isFinite(n) && n >= 1 ? n : DEFAULT_MAX_BATCH;
+}
+
+/** 单张图片体积上限（字节）；配置非法或小于 1 时回退默认 20MB。 */
+function envMaxImageBytes(): number {
+	const n = parseFloat(process.env.PI_VISION_MAX_IMAGE_MB ?? "");
+	const mb = Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_IMAGE_MB;
+	return Math.round(mb * 1024 * 1024);
 }
 
 /** see_job 后台分析并发数；未配置或非法时回退 2，封顶 8。 */
@@ -166,9 +412,87 @@ function toolError(text: string, details: Record<string, unknown>) {
 	return { content: [{ type: "text" as const, text }], details, isError: true as const };
 }
 
-/** 读取图片：支持文件路径（相对路径按 cwd 解析）与 data URL。返回 base64 + mimeType。 */
+/**
+ * 读图失败。带稳定 error code 供上层写进 tool result details：
+ *   not_found / is_directory / unsupported_format / empty_file / too_large / read_failed / unsupported_url
+ * diagnostics 是给模型看的多行诊断（传入 / 解析 / cwd / 原因），便于它自我纠正。
+ */
+class ImageReadError extends Error {
+	readonly code: string;
+	readonly diagnostics: string;
+
+	constructor(code: string, message: string, diagnostics: string) {
+		super(message);
+		this.name = "ImageReadError";
+		this.code = code;
+		this.diagnostics = diagnostics;
+	}
+}
+
+/** 取 Windows 盘符（大写，如 "D:"）；非盘符绝对路径返回 undefined。 */
+function driveOf(path: string): string | undefined {
+	return /^[A-Za-z]:/.exec(path)?.[0]?.toUpperCase();
+}
+
+/** 是否带 URL scheme（http:// / https:// 等）——这类字符串不能拿来做文件系统归一化。 */
+function hasUrlScheme(value: string): boolean {
+	return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
+}
+
+/**
+ * 构造多行诊断：把“模型传的路径”和“真正去读的路径”都摊开，路径被改动一眼可见。
+ * Windows 上 `..` 会被词法吸收（`D:/a/b/../..` → `D:/`），归一化行专门暴露这种漂移。
+ */
+function buildDiagnostics(input: string, resolved: string, cwd: string, reason: string): string {
+	const lines = [`传入: ${input}`, `  解析: ${resolved}`];
+	if (!hasUrlScheme(resolved)) {
+		const normalized = normalize(resolved);
+		if (normalized !== resolved) lines.push(`  归一: ${normalized}`);
+	}
+	lines.push(`  cwd:  ${cwd}`);
+	const resolvedDrive = driveOf(resolved);
+	const cwdDrive = driveOf(cwd);
+	if (resolvedDrive && cwdDrive && resolvedDrive !== cwdDrive) {
+		lines.push(`  注意: 路径盘符 ${resolvedDrive} 与 cwd 盘符 ${cwdDrive} 不同`);
+	}
+	lines.push(`  原因: ${reason}`);
+	return lines.join("\n");
+}
+
+function imageReadError(input: string, resolved: string, cwd: string, code: string, reason: string): ImageReadError {
+	return new ImageReadError(code, reason, buildDiagnostics(input, resolved, cwd, reason));
+}
+
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 取路径扩展名的 MIME；非图片扩展名返回 undefined。 */
+function mimeFromPath(path: string): string | undefined {
+	const base = path.split(/[\\/]/).pop() ?? "";
+	const dot = base.lastIndexOf(".");
+	if (dot <= 0 || dot === base.length - 1) return undefined;
+	return MIME_BY_EXT[base.slice(dot + 1).toLowerCase()];
+}
+
+/**
+ * 读取图片：支持文件路径（相对路径按 cwd 解析）与 data URL。返回 base64 + mimeType。
+ *
+ * 失败时抛 ImageReadError，并在文案里回显“传入路径 / 解析路径 / cwd / 原因”：
+ * 最常见的失败是模型自己拼了一个不存在的路径（例如把系统提示里的文档路径
+ * 前缀上 cwd 并加 ../../），回显解析结果能让这类错误一眼定位。
+ */
 async function loadImage(image: string, cwd: string): Promise<{ mimeType: string; data: string }> {
 	const trimmed = image.trim();
+	if (!trimmed) {
+		throw new ImageReadError(
+			"empty_ref",
+			"图片路径为空。",
+			`传入: (空)\n  cwd:  ${cwd}\n  原因: 未提供图片路径。`,
+		);
+	}
 
 	const dataUrl = /^data:([^;,]+);base64,(.+)$/s.exec(trimmed);
 	if (dataUrl) {
@@ -176,13 +500,70 @@ async function loadImage(image: string, cwd: string): Promise<{ mimeType: string
 	}
 
 	if (/^https?:\/\//i.test(trimmed)) {
-		throw new Error("HTTP(S) 链接暂不支持，请先把图片保存为本地文件再调用。");
+		throw new ImageReadError(
+			"unsupported_url",
+			"HTTP(S) 链接暂不支持，请先把图片保存为本地文件再调用。",
+			buildDiagnostics(trimmed, trimmed, cwd, "不支持 http(s) 链接（请先下载为本地文件）"),
+		);
 	}
 
 	const path = isAbsolute(trimmed) ? trimmed : resolve(cwd, trimmed);
-	const buffer = await readFile(path);
-	const ext = path.split(".").pop()?.toLowerCase() ?? "";
-	return { mimeType: MIME_BY_EXT[ext] ?? "image/png", data: buffer.toString("base64") };
+
+	let info: Stats;
+	try {
+		info = await stat(path);
+	} catch (err) {
+		const code = (err as { code?: string }).code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			throw imageReadError(trimmed, path, cwd, "not_found", "文件不存在（ENOENT）");
+		}
+		if (code === "EACCES" || code === "EPERM") {
+			throw imageReadError(trimmed, path, cwd, "read_failed", "没有读取权限（EACCES）");
+		}
+		throw imageReadError(trimmed, path, cwd, "read_failed", messageOf(err));
+	}
+
+	if (info.isDirectory()) {
+		throw imageReadError(trimmed, path, cwd, "is_directory", "这是一个目录，不是图片文件");
+	}
+	if (!info.isFile()) {
+		throw imageReadError(trimmed, path, cwd, "read_failed", "不是常规文件（可能是设备 / 管道 / 符号链接指向的目标）");
+	}
+
+	const mimeType = mimeFromPath(path);
+	if (!mimeType) {
+		const ext = path.split(/[\\/]/).pop()?.split(".").pop() ?? "(无扩展名)";
+		throw imageReadError(
+			trimmed,
+			path,
+			cwd,
+			"unsupported_format",
+			`不是受支持的图片格式（.${ext}）；支持 ${Object.keys(MIME_BY_EXT).join(" / ")}。若这是文档 / 表格 / PDF，请改用 anytomd 读取。`,
+		);
+	}
+
+	const maxBytes = envMaxImageBytes();
+	if (info.size > maxBytes) {
+		throw imageReadError(
+			trimmed,
+			path,
+			cwd,
+			"too_large",
+			`图片体积 ${formatBytes(info.size)} 超过上限 ${formatBytes(maxBytes)}（PI_VISION_MAX_IMAGE_MB 可调）`,
+		);
+	}
+	if (info.size === 0) {
+		throw imageReadError(trimmed, path, cwd, "empty_file", "文件为空（0 字节）");
+	}
+
+	let buffer: Buffer;
+	try {
+		buffer = await readFile(path);
+	} catch (err) {
+		throw imageReadError(trimmed, path, cwd, "read_failed", messageOf(err));
+	}
+
+	return { mimeType, data: buffer.toString("base64") };
 }
 
 // ── 模型解析与调用 ───────────────────────────────────────────────────────
@@ -451,6 +832,19 @@ function truncateText(text: string, max: number): string {
 	return text.length <= max ? text : `${text.slice(0, max)}\n\n\u2026（已截断，完整内容见 result.md）`;
 }
 
+/**
+ * 把读图失败统一格式化为带诊断的 tool error（三个工具共用）。
+ * 诊断文本（传入 / 解析 / cwd / 原因）已经写好，这里只决定前缀。
+ */
+function imageReadToolError(label: string, input: string, err: unknown) {
+	const code = err instanceof ImageReadError ? err.code : "read_failed";
+	const head = label ? `无法读取${label} "${input}"：` : `无法读取图片 "${input}"：`;
+	// ImageReadError 的 message 已包含原因；非 ImageReadError 时用 message 内容充当诊断
+	const reason = messageOf(err);
+	const diagnostics = err instanceof ImageReadError ? err.diagnostics : reason;
+	return toolError(`${head}${reason}\n  ${diagnostics}`, { error: "image_read_error", reason: code });
+}
+
 /** 有空闲并发槽时依次取排队任务开跑。 */
 function pumpVisionJobs(): void {
 	while (activeJobs.size < envMaxConcurrent() && pendingJobIds.length > 0) {
@@ -485,9 +879,19 @@ async function startVisionJob(jobId: string): Promise<void> {
 			} catch (err) {
 				const message = `无法读取第 ${index + 1} 张图片 "${imageRef}"：${messageOf(err)}`;
 				writeJobResult(jobId, {
-					details: { error: "image_read_error", index: index + 1, image: redactImageRef(imageRef) },
+					details: {
+						error: "image_read_error",
+						reason: err instanceof ImageReadError ? err.code : "read_failed",
+						index: index + 1,
+						image: redactImageRef(imageRef),
+						diagnostics: err instanceof ImageReadError ? err.diagnostics : undefined,
+					},
 				});
-				updateJob(jobId, { status: "failed", finishedAt: new Date().toISOString(), error: message });
+				updateJob(jobId, {
+					status: "failed",
+					finishedAt: new Date().toISOString(),
+					error: err instanceof ImageReadError ? `${message}\n  ${err.diagnostics}` : message,
+				});
 				return;
 			}
 		}
@@ -772,6 +1176,18 @@ function listVisionJobs(params: { limit?: number; statusFilter?: string }) {
 	return toolResult(table, { count: jobs.length, jobs });
 }
 
+/**
+ * 门控状态放在模块级（不是 Extension 闭包内）：因为 `configSummary` 等模块级函数在
+ * `/vision` 命令里会读这些值。之前它们在闭包内，导致 `/vision` 直接 ReferenceError。
+ */
+let currentModelSupportsVision = false;
+/** `/vision tools auto|on|off` 显式覆盖（undefined = 按实测能力自动决定）。 */
+let toolGateOverride: boolean | undefined;
+/** 已提醒过“配置声明与实际不符”的模型（避免重复弹提示）。 */
+const declaredOnlyVisionModels = new Set<string>();
+/** 门控代数：每次发起新的门控/探针递增；旧探针回调发现代数变了就丢弃结果。 */
+let gateGeneration = 0;
+
 function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string {
 	const envModel = process.env.PI_VISION_MODEL?.trim() || "（未设置 → auto）";
 	const envFallbacks = process.env.PI_VISION_FALLBACK_MODELS?.trim() || "（未设置）";
@@ -793,6 +1209,12 @@ function configSummary(ctx: ExtensionContext | ExtensionCommandContext): string 
 		"",
 		"auto 模式说明: 只从'用户已配置且非 OAuth'的 provider 中选择视觉模型；",
 		"  未配置 / OAuth 登录的 provider（如 openrouter、anthropic 内置目录）不会被自动选中。",
+		"",
+		"工具可见性门控:",
+		`  当前模型声明支持看图: ${modelSupportsVision(ctx.model) ? "是" : "否"}；探针实测: ${currentModelSupportsVision ? "支持" : "不支持"}`,
+		`  判定规则: 不能看图 → 挂上 see_* 工具；能看图 → 移出活跃集（模型直接看原图）`,
+		`  能力缓存: ${capabilityCacheFile()}（PI_VISION_CAPABILITY_FILE 可覆盖）`,
+		"  手动覆盖: /vision tools auto | on | off",
 		"",
 		"配置方式（环境变量，PiDeck 配置界面注入）:",
 		"  PI_VISION_MODEL=provider/modelId            默认视觉模型",
@@ -817,17 +1239,164 @@ function updateStatus(ctx: ExtensionContext | ExtensionCommandContext, suffix?: 
 // ── Extension ────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// 门控状态见文件上部模块级变量：configSummary 等多处模块级代码需要读它们。
+
+	/**
+	 * 按工具可见性意图同步刷新活跃集（保留内置工具与其它插件的工具）。
+	 * 返回是否真的改动了活跃集。
+	 */
+	const syncActiveTools = (wantActive: boolean): boolean => {
+		const active = new Set(pi.getActiveTools());
+		const updates: Array<[string, boolean]> = [];
+		for (const name of VISION_TOOL_NAMES) {
+			if (wantActive && !active.has(name)) updates.push([name, true]);
+			else if (!wantActive && active.has(name)) updates.push([name, false]);
+		}
+		if (!updates.length) return false;
+		for (const [name, enabled] of updates) {
+			if (enabled) active.add(name);
+			else active.delete(name);
+		}
+		pi.setActiveTools([...active]);
+		return true;
+	};
+
+	/** 把“能不能看图”的结论落到活跃集上（工具只在模型不能看图时开启）。 */
+	const applyDecision = (canSeeImages: boolean): void => {
+		currentModelSupportsVision = canSeeImages;
+		const wantActive = toolGateOverride !== undefined ? toolGateOverride : !canSeeImages;
+		syncActiveTools(wantActive);
+	};
+
+	/**
+	 * 按当前模型实际能力刷新工具活跃集（“有视觉的模型默认走视觉，非视觉模型才用 see_image”）：
+	 * - 模型不能看图（或配置就声明纯文本）→ 工具开启（这才是插件的核心场景）；
+	 * - 模型能看图（探针实测）→ 工具从活跃集移除，让它直接看原图；
+	 * - 用户用 `/vision tools auto|on|off` 显式覆盖时，以用户意愿为准。
+	 *
+	 * 关键取舍：**不以配置声明为准**。实测存在 models.json 写了 input: ["text","image"]、
+	 * 实际调不通图片的模型，所以“声明了 image”只意味着“值得探”，结论来自真实探针（按模型缓存）。
+	 *
+	 * 同步快路径：模型未知 / 声明纯文本 / 命中缓存 —— 立即决策，无额外延迟。
+	 * 只有“声明了 image 且无缓存”才走异步探针；探针期间工具保持开启（宁可多给，不误关）。
+	 */
+	const applyToolGate = (ctx: ExtensionContext | ExtensionCommandContext): void => {
+		const model = ctx.model;
+		// 每次进入门控就递增代数：任何在途探针的结果都会因代数不符被丢弃。
+		// 必须放在最前面（包括下面的快路径）——否则“A 探针在途时切到 B（B 走快路径）”
+		// 不会递增代数，A 的结果回来仍会覆盖 B 的决策。
+		const generation = ++gateGeneration;
+
+		// 快路径 0：用户已显式指定 on/off —— 直接用，不探测、不弹提示、不折腾状态
+		if (toolGateOverride !== undefined) {
+			syncActiveTools(toolGateOverride);
+			return;
+		}
+
+		// 快路径 1：模型未知——无法判断，按“不能看图”处理
+		if (!model) {
+			applyDecision(false);
+			return;
+		}
+
+		// 快路径 2：配置就声明纯文本——不必浪费一次探针
+		if (!modelSupportsVision(model)) {
+			applyDecision(false);
+			return;
+		}
+
+		// 快路径 3：已有探针结论（内存 / 磁盘，未过期）
+		const cached = getCachedCapability(model);
+		if (cached) {
+			applyDecision(cached.supports);
+			return;
+		}
+
+		// 慢路径：需要真实探针。先保守（工具保持开启），探针回来再修正
+		const ref = modelRef(model);
+		void (async () => {
+			let canSeeImages = false;
+			try {
+				canSeeImages = await resolveActualVisionCapability(ctx, model);
+			} catch (err) {
+				// 探针本身不应抛错，兜底避免 unhandledRejection（Node 24 默认可带崩进程）
+				sessionCapabilities.set(ref, { supports: false, reason: messageOf(err), at: Date.now() });
+				inconclusiveKeys.add(ref);
+			}
+			// 代数保护：期间用户已切模型（或又触发过门控）→ 这个结论已过期，丢弃
+			if (generation !== gateGeneration) return;
+			applyDecision(canSeeImages);
+			// 只在“探针给了定论、且与配置声明矛盾”时提醒一次（无认证/网络失败不算定论，不哔）
+			const settled = getCachedCapability(model);
+			if (!canSeeImages && settled && !declaredOnlyVisionModels.has(ref)) {
+				declaredOnlyVisionModels.add(ref);
+				ctx.ui.notify?.(
+					`${ref} 的配置声明了图片输入（input 含 "image"），但实测不支持看图：${settled.reason}\n` +
+						`已按“实际不支持看图”处理：see_image / see_images / see_job 保持开启。`,
+					"warning",
+				);
+			}
+		})().catch(() => {
+			/* 已内层兜底；此处仅防极端情况下仍冒泡 */
+		});
+	};
+
 	pi.on("session_start", (_event, ctx) => {
+		applyToolGate(ctx);
 		updateStatus(ctx);
 	});
 
 	pi.on("model_select", (_event, ctx) => {
+		applyToolGate(ctx);
 		updateStatus(ctx);
 	});
 
+	// 同步修正：模型自己看图时，本插件的 promptSnippet / promptGuidelines 会一直
+	// 告诉模型“看不懂图就调 see_image”，反而促它转交。这里把它们从本轮系统提示里
+	// 剔掉（只影响本轮，不改全局配置）。注意返回值只支持 { message?, systemPrompt? }。
+	pi.on("before_agent_start", (event) => {
+		if (!currentModelSupportsVision) return;
+		const isVisionToolLine = (line: string): boolean =>
+			(VISION_TOOL_NAMES as readonly string[]).some((name) => line.includes(name));
+		const filtered = event.systemPrompt
+			.split("\n")
+			.filter((line) => !isVisionToolLine(line))
+			.join("\n");
+		if (filtered === event.systemPrompt) return;
+		return { systemPrompt: filtered };
+	});
+
 	pi.registerCommand("vision", {
-		description: "查看 pi-vision 视觉模型配置与候选解析结果",
-		handler: async (_args, ctx) => {
+		description: "查看/调整 pi-vision 配置：/vision [tools auto|on|off]",
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim();
+			const toolArg = /^tools(?:\s+(auto|on|off))?$/i.exec(arg);
+			if (toolArg) {
+				const value = toolArg[1]?.toLowerCase();
+				if (!value) {
+					ctx.ui.notify(
+						[
+							`当前模型: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "（未知）"}`,
+							`配置声明支持看图: ${modelSupportsVision(ctx.model) ? "是" : "否"}`,
+							`探针实测支持看图: ${currentModelSupportsVision ? "是（工具默认关闭）" : "否（工具默认开启）"}`,
+							`覆盖设置: ${toolGateOverride === undefined ? "auto（按实测能力）" : toolGateOverride ? "on（总是开启）" : "off（总是关闭）"}`,
+							`能力缓存: ${capabilityCacheFile()}`,
+							"用法: /vision tools auto | /vision tools on | /vision tools off",
+						].join("\n"),
+						"info",
+					);
+					return;
+				}
+				toolGateOverride = value === "auto" ? undefined : value === "on";
+				applyToolGate(ctx);
+				ctx.ui.notify(
+					`pi-vision：see_image / see_images / see_job 已切换为 ${
+						toolGateOverride === undefined ? `auto（当前模型${currentModelSupportsVision ? "自己支持看图 → 关闭" : "不支持看图 → 开启"}）` : toolGateOverride ? "on（总是开启，即使模型自己能看图）" : "off（总是关闭）"
+					}`,
+					"info",
+				);
+				return;
+			}
 			ctx.ui.notify(configSummary(ctx), "info");
 		},
 	});
@@ -837,6 +1406,7 @@ export default function (pi: ExtensionAPI) {
 		label: "See Image (Vision)",
 		description:
 			"用视觉模型理解一张图片（截图、照片、图片文件），返回文字分析结果。" +
+			USE_WHEN_TEXT_ONLY_NOTE +
 			"适用于需要根据图片内容作答的任何场景：UI 截图、报错弹窗、图表、照片、扫描件等。" +
 			"image 支持本地文件路径或 data:image/...;base64 形式的 data URL。" +
 			"prompt 是你想从图片里得到什么，写得越具体越好。" +
@@ -845,14 +1415,17 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "用视觉模型解析图片内容（截图/照片/图片），支持默认模型 + 回退模型",
 		promptGuidelines: [
 			"需要看懂截图、报错弹窗、UI 界面、图表、照片等任何图片内容时，调用 see_image；在 prompt 里写明你具体要从图中获取什么。",
+			"若你自己（当前会话模型）已支持图片输入，不要本工具：直接用 read 打开图片文件或看用户附带的图片，把图看懂；仅当图片读不了 / 格式不支持时才转交本工具。",
 			"需要对比或成组分析多张图片时，用 see_images 一次提交，不要逐张调用 see_image。",
 			"see_image 的 image 参数接受本地文件路径（如截图文件的绝对路径）或 data:image/...;base64 的 data URL。",
+			"不要猜测或拼接图片路径：只传你确实读到的图片文件路径，或用户消息里附带的图片。若消息里没有可用路径，就用 read/find 先确认文件存在，或直接说明缺少路径，不要把系统提示里的文档路径、其它目录的路径改一改就传进来。",
+			"路径报错时错误信息会给出「传入 / 解析 / cwd / 原因」四行诊断，按解析结果修正路径或换一张真实存在的图片再试，不要重复提交同一个路径。",
 			"see_image 自动使用最近一次成功的视觉模型，失败会自动尝试其他可用模型并记住新的成功模型；仅在需要临时换模型时传 model 参数（provider/modelId）。",
 		],
 		parameters: Type.Object({
 			image: Type.String({
 				description:
-					"图片位置：本地文件路径（相对路径按当前工作目录解析）或 data:image/png;base64,... 形式的 data URL",
+					"图片位置：本地文件路径（相对路径按当前工作目录解析）或 data:image/png;base64,... 形式的 data URL。只传真存在的图片文件路径，不要自己拼接/猜测路径。",
 			}),
 			prompt: Type.String({
 				description:
@@ -886,9 +1459,7 @@ export default function (pi: ExtensionAPI) {
 			try {
 				image = await loadImage(params.image, ctx.cwd);
 			} catch (err) {
-				return toolError(`无法读取图片 "${params.image}"：${messageOf(err)}`, {
-					error: "image_read_error",
-				});
+				return imageReadToolError("图片", params.image, err);
 			}
 
 			return runVisionAnalysis(
@@ -905,6 +1476,7 @@ export default function (pi: ExtensionAPI) {
 		label: "See Images (Vision)",
 		description:
 			`用视觉模型一次分析多张图片（对比多张截图、审查一组 UI 图、逐页看扫描件等），返回覆盖全部图片的文字分析。` +
+			USE_WHEN_TEXT_ONLY_NOTE +
 			`images 最多 ${envMaxBatch()} 张（PI_VISION_MAX_BATCH 可调），按传入顺序编号；prompt 是对所有图片的同一个分析要求，可用"第 N 张"指代具体图片。` +
 			`模型选择与自动回退同 see_image。单张图片用 see_image 即可。`,
 		promptSnippet: "一次视觉调用分析多张图片（对比/成组/多页），支持默认模型 + 回退模型",
@@ -916,7 +1488,8 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			images: Type.Array(
 				Type.String({
-					description: "图片位置：本地文件路径（相对路径按当前工作目录解析）或 data:image/png;base64,... 形式的 data URL",
+					description:
+						"图片位置：本地文件路径（相对路径按当前工作目录解析）或 data:image/png;base64,... 形式的 data URL。只传真存在的图片文件路径，不要自己拼接/猜测路径。",
 				}),
 				{ description: `图片位置列表，按传入顺序编号，最多 ${envMaxBatch()} 张（PI_VISION_MAX_BATCH）` },
 			),
@@ -966,11 +1539,9 @@ export default function (pi: ExtensionAPI) {
 				try {
 					loaded.push(await loadImage(image, ctx.cwd));
 				} catch (err) {
-					return toolError(`无法读取第 ${index + 1} 张图片 "${image}"：${messageOf(err)}`, {
-						error: "image_read_error",
-						index: index + 1,
-						image,
-					});
+					const res = imageReadToolError(`第 ${index + 1} 张图片`, image, err);
+					// data URL 可能带整段 base64：details 里必须脱敏（与 see_job 一致）
+					return { ...res, details: { ...res.details, index: index + 1, image: redactImageRef(image) } };
 				}
 			}
 
@@ -991,6 +1562,7 @@ export default function (pi: ExtensionAPI) {
 		label: "See Job (Vision Async)",
 		description:
 			"异步看图任务队列（对标 anytomd 的 anyjob）：把一批图片分析任务提交到后台，submit 立即返回 job-id，不阻塞当前回合。" +
+			USE_WHEN_TEXT_ONLY_NOTE +
 			"Actions: submit（提交 1~50 个独立分析任务，每个任务=自己的图片组+自己的 prompt）/ status（状态+结果预览）/ wait（阻塞等到终态并返回分析全文）/ cancel（取消排队或运行中的任务）/ list（历史列表）。" +
 			"结果落盘 ~/.pi/vision-jobs/jobs/<id>/result.md，跨会话可查询；并发数由 PI_VISION_MAX_CONCURRENT 控制（默认 2）。" +
 			"注意：视觉分析在 pi 进程内运行（依赖模型注册表），pi 退出后排队/运行中的任务会在下次查询时被 stale 检测标记 failed。" +
@@ -1001,6 +1573,7 @@ export default function (pi: ExtensionAPI) {
 			"需要批量分析很多图片（批量 OCR/证书信息提取/逐页审阅）且不想阻塞当前回合时，用 see_job submit 一次提交多个 tasks（每个任务独立图片组+独立 prompt），之后用 wait/status 收结果。",
 			"see_job 的 wait/status 对 succeeded 任务会直接返回分析文本（wait 返回全文，status 返回前 2000 字预览），无需再读文件；result.md 是完整产物。",
 			"单图即时问答用 see_image，交互式对比分析用 see_images；只有大批量/后台化场景才用 see_job。",
+			"see_job 的图片路径同样必须是真实存在的图片文件；不要猜测或拼接路径，否则任务会以 image_read_error 失败（错误里会给出传入 / 解析 / cwd 四行诊断）。",
 			"see_job 提交后不要退出 pi 进程：排队/运行中的任务依赖当前进程，进程退出后的遗留任务会被 stale 检测标记为 failed。",
 		],
 		parameters: Type.Object({
