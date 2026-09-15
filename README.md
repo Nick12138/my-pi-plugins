@@ -31,6 +31,7 @@ my-pi-plugins/
 | **👁 [pi-vision](packages/pi-vision)** | 视觉理解：让无识图能力的模型调用 `see_image`/`see_images` 看懂截图/图片/照片（单图 + 多图批量对比），默认视觉模型 + 回退模型两级兜底 |
 | **🤖 [pi-subagent](packages/pi-subagent)** | Windows 子代理运行时：3 角色（探索/执行/审查）并行后台运行、队列排队、失败断点恢复+自动重试、完成自动回调主 agent、worktree 隔离、HTTP API 供 PiDeck 面板查看 |
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
+| **⚡ [pi-shelljob](packages/pi-shelljob)** | 后台 Shell：长任务（构建/装依赖/dev server/批量转换）提交后台立即返回，完成自动通知主 agent；短任务仍用同步 bash，进程树终止、跨会话任务落盘 |
 
 ## 手动安装（不走 PiDeck 时）
 
