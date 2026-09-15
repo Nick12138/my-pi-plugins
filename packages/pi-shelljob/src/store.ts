@@ -62,7 +62,19 @@ export function ensureJobDir(jobId: string): void {
 }
 
 function writeJson(file: string, data: unknown): void {
-	fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf-8");
+	// 原子写（临时文件 + rename）：崩溃/断电时不会留下半截 JSON 导致任务“消失”
+	const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+	try {
+		fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
+		fs.renameSync(tmp, file);
+	} catch (err) {
+		try {
+			fs.rmSync(tmp, { force: true });
+		} catch {
+			/* 清理失败不影响主流程 */
+		}
+		throw err;
+	}
 }
 
 function readJson<T>(file: string): T | null {
