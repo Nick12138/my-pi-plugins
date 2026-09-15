@@ -2,6 +2,46 @@
   "specVersion": 1,
   "plugins": [
     {
+      "id": "pi-shelljob",
+      "name": "后台 Shell",
+      "description": "后台可运行的 shell 任务：长任务（构建、装依赖、dev server、批量转换、大下载、全量测试）提交后台立即返回，不阻塞会话，完成/失败自动通知主 agent；短任务仍用同步 bash。支持单任务超时、进程树终止、日志尾部查看、跨会话任务落盘（~/.pi/shelljob/），宿主重启自动接管遗留任务。",
+      "icon": "⚡",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "shell",
+        "后台任务",
+        "bash",
+        "构建"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-shelljob"
+      },
+      "config": [
+        {
+          "key": "defaultTimeoutMs",
+          "type": "text",
+          "label": "默认单任务超时（毫秒）",
+          "env": "SHELLJOB_DEFAULT_TIMEOUT_MS",
+          "required": false,
+          "placeholder": "0",
+          "default": "0",
+          "description": "未显式传 timeoutMs 时生效；0 = 不限，靠 shell_wait / 手动 kill 兜底。"
+        },
+        {
+          "key": "maxLogBytes",
+          "type": "text",
+          "label": "单任务日志上限（字节）",
+          "env": "SHELLJOB_MAX_LOG_BYTES",
+          "required": false,
+          "placeholder": "5242880",
+          "default": "5242880",
+          "description": "单个任务 output.log 的保护上限（默认 5MB），超过后保护性 kill 防止失控输出塞满磁盘；调大前请确认磁盘余量。"
+        }
+      ]
+    },
+    {
       "id": "pi-browser",
       "name": "浏览器",
       "description": "AI 驱动的持久浏览器：自动打开与操作网页、跨会话保留登录态、可信密码填充（密码不进入对话）、CAPTCHA 辅助。底层引擎为 BetterWright，首次安装会下载约 517MB 的 BetterChromium。",
