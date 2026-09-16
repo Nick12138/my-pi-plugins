@@ -158,6 +158,19 @@ async function testZombieTakeover(): Promise<void> {
 	console.log(`  ✓ ${st.status}：${st.errorMessage}`);
 }
 
+async function testNoPidTakeover(): Promise<void> {
+	console.log("── 测试 8：无 pid 的僵尸任务接管（宿主崩在 spawn 前）");
+	// 模拟宿主写完 running 状态后、spawn 之前崩溃：status=running 且无 pid，
+	// 旧行为会被 takeoverOrphans 跳过导致永久 running，新行为应落 interrupted
+	const job = makeJob(`node -e "setTimeout(function(){},60000)"`);
+	writeStatus(job.id, { status: "running", startedAt: Date.now() }); // 不写 pid
+	const { takeoverOrphans } = await import("../src/runner.ts");
+	await takeoverOrphans();
+	const st = readStatus(job.id)!;
+	assert.strictEqual(st.status, "interrupted", `应为 interrupted，实际 ${st.status}`);
+	console.log(`  ✓ ${st.status}：${st.errorMessage}`);
+}
+
 (async () => {
 	await testSuccessAndLog();
 	await testKillProcessTree();
@@ -166,6 +179,7 @@ async function testZombieTakeover(): Promise<void> {
 	await testLogLimit();
 	await testRecordRouting();
 	await testZombieTakeover();
+	await testNoPidTakeover();
 	console.log("\n全部冒烟测试通过 ✅");
 	process.exit(0);
 })().catch((err) => {
