@@ -152,15 +152,12 @@ class Notifier {
 	}
 }
 
-/** 终态路由：按 job.sessionId 送回发起会话；会话离线时标记 notified（状态已落盘，面板/列表可查） */
+/** 终态路由：按 job.sessionId 送回发起会话。
+ * 会话离线（已关闭/未打开）时不把通知吞掉也不标记 notified：保持未通知，等该会话
+ * 重新打开时由 session_start 的补发逻辑投递（跨会话不会误发：补发按 sessionId 过滤）。 */
 function routeSettled(record: ShellJobRecord): void {
 	const pipe = record.job.sessionId ? sessionPipes.get(record.job.sessionId) : undefined;
-	if (pipe) {
-		pipe.notifier.queue(record);
-		return;
-	}
-	const st = readStatus(record.job.id);
-	if (st && !st.notified) writeStatus(record.job.id, { ...st, notified: true });
+	if (pipe) pipe.notifier.queue(record);
 }
 
 // ── 公共 helper ──────────────────────────────────────────────
