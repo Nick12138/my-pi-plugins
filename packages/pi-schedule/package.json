@@ -1,0 +1,18 @@
+{
+  "name": "pi-schedule",
+  "version": "0.1.0",
+  "description": "Scheduled agent tasks for pi: cron / interval / once / manual triggers, each run in its OWN isolated session (history + fork-to-continue), per-job model, per-workspace cwd, three permission tiers (read_only/write/full tool allowlists), file-based job store plus a local HTTP control plane for desktop panels.",
+  "keywords": ["pi-package", "pi-extension", "schedule", "cron", "automation", "task"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

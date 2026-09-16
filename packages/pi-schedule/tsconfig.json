@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "typeRoots": [
+      "D:/我的项目/PiAbyss/node_modules/.pnpm/@types+node@24.12.4/node_modules/@types",
+      "./node_modules/@types"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["D:/我的项目/my-pi-plugins/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"],
+      "@earendil-works/pi-ai": ["D:/我的项目/my-pi-plugins/node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
+      "@earendil-works/pi-tui": ["D:/我的项目/my-pi-plugins/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
+      "typebox": ["D:/我的项目/my-pi-plugins/node_modules/typebox/build/index.d.ts"]
+    },
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src/**/*.ts", "extensions/**/*.ts", "test/**/*.ts"]
+}

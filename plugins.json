@@ -356,6 +356,61 @@
           "description": "留空则自动定位（PATH → 最新版 WPS 安装目录）；找不到时才需要填完整路径。"
         }
       ]
+    },
+    {
+      "id": "pi-schedule",
+      "name": "定时任务",
+      "description": "给 agent 的定时任务：cron / 周期 / 一次性 / 仅手动触发。每次执行都在独立新会话里跑（不污染当前对话），历史独立保存且可在任意一次基础上 fork 续聊；支持按工作区启动、选模型、三档权限（只读/可写/全权 = 结构性工具白名单）、超时中止、maxRuns 有界执行、错过窗口策略、单飞锁与并发上限。文件即真相源（~/.pi/schedule/）+ 本地 HTTP 控制面（127.0.0.1:18766），供面板对接。",
+      "icon": "⏰",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": ["定时", "cron", "调度", "自动化", "任务"],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-schedule"
+      },
+      "config": [
+        {
+          "key": "tickMs",
+          "type": "text",
+          "label": "扫描间隔（毫秒）",
+          "env": "PI_SCHEDULE_TICK_MS",
+          "required": false,
+          "placeholder": "30000",
+          "default": "30000",
+          "description": "到期任务的检查周期，最小 1000。越小越准时、开销越大。"
+        },
+        {
+          "key": "httpPort",
+          "type": "text",
+          "label": "HTTP 控制面端口",
+          "env": "PI_SCHEDULE_PORT",
+          "required": false,
+          "placeholder": "18766",
+          "default": "18766",
+          "description": "面板/外部工具调用的本地端口（仅监听 127.0.0.1）。改端口后前端也要同步。"
+        },
+        {
+          "key": "dir",
+          "type": "text",
+          "label": "数据目录",
+          "env": "PI_SCHEDULE_DIR",
+          "required": false,
+          "placeholder": "~/.pi/schedule",
+          "default": "",
+          "description": "任务定义 / 执行记录 / 会话文件的存放根目录；留空用默认 ~/.pi/schedule。"
+        },
+        {
+          "key": "tz",
+          "type": "text",
+          "label": "默认时区",
+          "env": "PI_SCHEDULE_TZ",
+          "required": false,
+          "placeholder": "Asia/Shanghai",
+          "default": "",
+          "description": "cron 未显式指定 timezone 时使用；留空取系统时区。"
+        }
+      ]
     }
   ]
 }
