@@ -214,8 +214,17 @@ export function enforceLogLimits(): void {
 export async function takeoverOrphans(): Promise<void> {
 	if (!deps) return;
 	for (const { job, status } of loadAllJobs()) {
-		if (status.status !== "running" || !status.pid) continue;
+		if (status.status !== "running") continue;
 		if (liveChildren.has(job.id)) continue; // 本进程管理中，交给 exit/timer
+		// 宿主在写入 running 状态后、spawn 前崩溃：无 pid，永远等不到 exit，直接落终态
+		if (!status.pid) {
+			deps.settle(job.id, {
+				status: "interrupted",
+				finishedAt: Date.now(),
+				errorMessage: "宿主崩溃于任务启动前（无 pid 记录），任务未实际运行",
+			});
+			continue;
+		}
 		// 遗留任务：先查超时再查存活（超时优先语义明确）
 		const timeout = job.timeoutMs ?? 0;
 		if (timeout > 0 && Date.now() - status.startedAt > timeout) {

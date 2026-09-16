@@ -433,6 +433,9 @@ export default function (pi: ExtensionAPI) {
 		const sessionId = safeSessionId(ctx);
 		mySessionId = sessionId;
 		if (sessionId) {
+			// 同一 sessionId 重入（重开/恢复会话）时先释放旧 pipe，避免旧 Notifier 的 5s 定时器泄漏
+			sessionPipes.get(sessionId)?.notifier.dispose();
+			sessionPipes.delete(sessionId);
 			const sendMessage = (message: { customType: string; content: string; display: boolean; details?: unknown }) => {
 				pi.sendMessage(message, { triggerTurn: true });
 			};
