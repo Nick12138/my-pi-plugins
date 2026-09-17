@@ -13,6 +13,7 @@ import {
 	appendLedger,
 	ensureRoot,
 	listJobs,
+	listRuns,
 	patchJobsWith,
 	paths,
 	tryAcquireRunLock,
@@ -134,32 +135,44 @@ export class Scheduler {
 			const staleIds: string[] = [];
 
 			for (const job of jobList) {
-				if (!job.enabled || job.terminated) continue;
-				if (job.trigger.type === "manual") continue;
-				if (!job.nextRunAt) continue;
-				if (this.activeRuns.has(job.id)) continue;
-				if (this.activeRuns.size >= this.maxConcurrent) break;
-
-				const decision = shouldFire({
-					nextRunAt: job.nextRunAt,
-					now,
-					missedWindow: job.missedWindow,
-					trigger: job.trigger,
-				});
-
-				if (!decision.fire) {
-					const due = new Date(job.nextRunAt).getTime();
-					if (due <= now.getTime()) staleIds.push(job.id);
-					continue;
+				// per-job 兜底：形状校验之外的意外脏数据也不允许拖垮整个扫描
+				try {
+					this.scanJob(job, now, staleIds);
+				} catch (error) {
+					console.error(
+						`[pi-schedule] 扫描任务 ${job?.id ?? "?"} 异常，已跳过：${error instanceof Error ? error.message : String(error)}`,
+					);
 				}
-
-				void this.fire(job, { trigger: job.trigger.type, scheduledFor: job.nextRunAt }).catch(() => undefined);
 			}
 
 			if (staleIds.length > 0) this.advanceStaleJobs(staleIds, now, timezone);
 		} finally {
 			this.ticking = false;
 		}
+	}
+
+	/** 单个任务的扫描逻辑（由 tick 逐个调用，异常不影响其他任务）。 */
+	private scanJob(job: Job, now: Date, staleIds: string[]): void {
+		if (!job.enabled || job.terminated) return;
+		if (job.trigger.type === "manual") return;
+		if (!job.nextRunAt) return;
+		if (this.activeRuns.has(job.id)) return;
+		if (this.activeRuns.size >= this.maxConcurrent) return;
+
+		const decision = shouldFire({
+			nextRunAt: job.nextRunAt,
+			now,
+			missedWindow: job.missedWindow,
+			trigger: job.trigger,
+		});
+
+		if (!decision.fire) {
+			const due = new Date(job.nextRunAt).getTime();
+			if (due <= now.getTime()) staleIds.push(job.id);
+			return;
+		}
+
+		void this.fire(job, { trigger: job.trigger.type, scheduledFor: job.nextRunAt }).catch(() => undefined);
 	}
 
 	/**
@@ -173,26 +186,44 @@ export class Scheduler {
 	 */
 	private advanceStaleJobs(jobIds: string[], now: Date, timezone: string): void {
 		const applied = patchJobsWith(jobIds, (fresh) => {
-			// 正在执行的任务不要动它的排期/状态（once 任务跑得比宽限期久时
-			// 曾被误标成 terminated:"missed"）
-			if (this.activeRuns.has(fresh.id)) return null;
-			if (!fresh.nextRunAt) return null;
-			const due = new Date(fresh.nextRunAt).getTime();
-			if (due > now.getTime()) return null; // 期间已被别的路径推进
-			// once 走到这里就说明「唯一的那个槽位」已经过期且 skip 策略不发车：
-			// 直接终止（不看 trigger.at——槽位才是事实上的计划时刻）
-			const next =
-				fresh.trigger.type === "once" ? null : advanceNextRunAt(fresh.trigger, now, timezone, fresh.nextRunAt);
-			if (!next) {
-				// 无法前进：终止，避免反复重写（once 已过期 / 表达式不再可触发）
-				return {
-					enabled: false,
-					terminated: "missed" as const,
-					nextRunAt: null,
-					updatedAt: now.toISOString(),
-				};
+			try {
+				// 正在执行的任务不要动它的排期/状态（once 任务跑得比宽限期久时
+				// 曾被误标成 terminated:"missed"）
+				if (this.activeRuns.has(fresh.id)) return null;
+				// 跨进程证据：本进程 activeRuns 为空不代表没人跑——另一个宿主进程
+				// 可能正在执行（共用数据目录）。runs 目录里最新记录仍是 running 且
+				// 未超出「超时 + 宽限」就当作正在执行，不动它的排期/状态。
+				// 超出宽限仍 running 的记录视为宿主崩溃遗留的僵尸，照常处理。
+				const latest = listRuns(fresh.id, 1)[0];
+				if (latest?.status === "running") {
+					const startedMs = Date.parse(latest.startedAt);
+					const bound = Math.max(60_000, fresh.timeoutMs + 5 * 60 * 1000);
+					if (Number.isFinite(startedMs) && Date.now() - startedMs < bound) return null;
+				}
+				if (!fresh.nextRunAt) return null;
+				const due = new Date(fresh.nextRunAt).getTime();
+				if (due > now.getTime()) return null; // 期间已被别的路径推进
+				// once 走到这里就说明「唯一的那个槽位」已经过期且 skip 策略不发车：
+				// 直接终止（不看 trigger.at——槽位才是事实上的计划时刻）
+				const next =
+					fresh.trigger.type === "once" ? null : advanceNextRunAt(fresh.trigger, now, timezone, fresh.nextRunAt);
+				if (!next) {
+					// 无法前进：终止，避免反复重写（once 已过期 / 表达式不再可触发）
+					return {
+						enabled: false,
+						terminated: "missed" as const,
+						nextRunAt: null,
+						updatedAt: now.toISOString(),
+					};
+				}
+				return { nextRunAt: next, updatedAt: now.toISOString() };
+			} catch (error) {
+				// 脏数据导致的意外异常：跳过这个任务，绝不让它把整个 tick 拖死
+				console.error(
+					`[pi-schedule] 处理过期任务 ${fresh?.id ?? "?"} 异常，已跳过：${error instanceof Error ? error.message : String(error)}`,
+				);
+				return null;
 			}
-			return { nextRunAt: next, updatedAt: now.toISOString() };
 		});
 
 		for (const { id, patch } of applied) {

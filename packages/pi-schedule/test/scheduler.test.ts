@@ -3,7 +3,7 @@
  * P1-5（runCount 陈旧快照）、排期推进（不漂移）。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -221,4 +221,94 @@ test("P2-D：updateJob 不会用陈旧快照覆盖并发 runCount", async () => 
 	assert.equal(updated.name, "改名");
 	assert.equal(updated.runCount, 5, "runCount 不应被陈旧快照覆盖");
 	assert.equal(updated.lastStatus, "ok");
+});
+
+/** 构造一条 run 记录（只填本套测试关心的字段，其余占位）。 */
+function makeRun(job: { id: string; name: string }, runId: string, status: string, startedAt: string) {
+	return {
+		runId,
+		jobId: job.id,
+		jobName: job.name,
+		trigger: "cron",
+		scheduledFor: null,
+		startedAt,
+		finishedAt: null,
+		status,
+		cwd: CWD,
+		model: null,
+		permission: "read_only",
+		tools: ["read"],
+		sessionId: null,
+		sessionPath: null,
+		forkOf: null,
+		replyText: null,
+		usage: null,
+		summary: "",
+		outputText: "",
+		toolCalls: 0,
+		error: null,
+		idempotencyKey: `${job.id}:${runId}`,
+	};
+}
+
+test("R1：手动编辑坏一条 job 记录，不会拖垮整个调度器（坏条目跳过 + 台账告警 + 去重）", async () => {
+	const good = createJob(
+		{ name: "好任务", prompt: "x", cwd: CWD, trigger: { type: "interval", every: "30m" }, missedWindow: "skip" },
+		{ by: "test" },
+	);
+	store.patchJob(good.id, { nextRunAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() });
+
+	// 模拟外部手动编辑：往 jobs.json 里塞一条缺 trigger 的坏记录
+	const raw = JSON.parse(readFileSync(store.paths().jobsFile, "utf8"));
+	raw.jobs.push({ id: "badjob01", name: "坏条目", enabled: true });
+	writeFileSync(store.paths().jobsFile, JSON.stringify(raw, null, "\t"), "utf8");
+
+	const scheduler = new Scheduler({ tickMs: 3_600_000 });
+	await scheduler.tick("tick");
+	await scheduler.tick("tick");
+
+	// 好任务照常被调度推进（旧实现：tick 抛 TypeError 被吞掉，全部停摆）
+	const after = store.getJob(good.id);
+	assert.ok(after?.nextRunAt && new Date(after.nextRunAt).getTime() > Date.now(), "好任务排期应被推进到未来");
+
+	// 坏条目被跳过但不丢数据（可修复）；台账有 error 告警且去重（两次 tick 只记一次）
+	assert.equal(store.getJob("badjob01")?.name, "坏条目", "坏条目不应被静默删除");
+	assert.ok(!store.listJobs().some((j: { id: string }) => j.id === "badjob01"), "坏条目不应参与调度");
+	const errorRows = store
+		.readLedger(50)
+		.filter((e: { event: string; jobId: string }) => e.event === "error" && e.jobId === "badjob01");
+	assert.equal(errorRows.length, 1, `台账 error 应去重为 1 条，实际 ${errorRows.length}`);
+
+	// 修复坏条目后恢复参与调度
+	store.patchJob("badjob01", { trigger: { type: "manual" } });
+	assert.ok(store.listJobs().some((j: { id: string }) => j.id === "badjob01"), "修复后应重新可见");
+});
+
+test("R2：跨进程 running 证据——另一进程正在执行时，本进程不得误终止/误推进", async () => {
+	const job = createJob(
+		{ name: "跨进程保护", prompt: "x", cwd: CWD, trigger: { type: "interval", every: "30m" }, missedWindow: "skip" },
+		{ by: "test" },
+	);
+	const past = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+	store.patchJob(job.id, { nextRunAt: past });
+
+	// 模拟另一进程正在执行：runs 目录里最新记录 status=running 且刚启动（在 timeout+宽限内）
+	const startedAt = new Date().toISOString();
+	store.writeRun(makeRun(job, "runX001", "running", startedAt));
+
+	const scheduler = new Scheduler({ tickMs: 3_600_000 });
+	await scheduler.tick("tick");
+
+	const untouched = store.getJob(job.id);
+	assert.equal(untouched?.terminated, null, "另一进程在跑时不得标 terminated:missed");
+	assert.equal(untouched?.enabled, true, "另一进程在跑时不得停用");
+	assert.equal(untouched?.nextRunAt, past, "另一进程在跑时不得动排期（由执行方 afterRun 推进）");
+
+	// 超出 timeout(30m)+宽限(5m) 仍 running：视为宿主崩溃遗留的僵尸，恢复照常处理（skip 推进）
+	const zombieStarted = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString();
+	store.writeRun(makeRun(job, "runX001", "running", zombieStarted));
+	await scheduler.tick("tick");
+	const after = store.getJob(job.id);
+	assert.equal(after?.terminated, null, "僵尸 run 应照常 skip 推进而非终止");
+	assert.ok(after?.nextRunAt && new Date(after.nextRunAt).getTime() > Date.now(), "僵尸 run 应被 skip 推进到未来");
 });

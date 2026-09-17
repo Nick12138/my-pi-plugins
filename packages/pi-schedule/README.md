@@ -84,7 +84,7 @@ locks/                           单飞锁 / 写锁
 ## 开发
 
 ```bash
-node --test "packages/pi-schedule/test/*.test.ts"      # 单测（44 个，零 LLM 调用）
+node --test "packages/pi-schedule/test/*.test.ts"      # 单测（52 个，零 LLM 调用）
 node packages/pi-schedule/test/smoke.e2e.mjs         # 端到端冒烟：真跑一次 + fork 续聊
 node packages/pi-schedule/test/smoke.http.mjs        # HTTP 控制面冒烟（18 项）
 ```

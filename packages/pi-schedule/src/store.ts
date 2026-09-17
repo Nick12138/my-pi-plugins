@@ -303,8 +303,61 @@ export function readJobsFile(): JobsFile {
 	return { version: STORE_VERSION, jobs: file.jobs };
 }
 
+const TRIGGER_TYPES = new Set(["manual", "once", "interval", "cron"]);
+
+/**
+ * 单条 job 的最小形状校验：「文件即真相源」允许外部查看，但手动编辑改坏一条
+ * 记录（如删掉 trigger）绝不能拖垮整个调度器。只查调度必需字段，其余字段
+ * 交给各消费点自己兜底。
+ */
+function isShapedJob(job: unknown): job is Job {
+	if (!job || typeof job !== "object") return false;
+	const j = job as Record<string, unknown>;
+	return (
+		typeof j.id === "string" &&
+		j.id.length > 0 &&
+		typeof j.name === "string" &&
+		typeof j.enabled === "boolean" &&
+		!!j.trigger &&
+		typeof j.trigger === "object" &&
+		TRIGGER_TYPES.has((j.trigger as { type?: unknown }).type as string)
+	);
+}
+
+/** 上次报告过的非法条目签名（去重：非法条目不修复就别每个 tick 都刷台账）。 */
+let lastInvalidJobsSignature: string | null = null;
+
+/** 列出任务：形状非法的条目被跳过（记 error 台账 + console，去重），不影响其他任务。 */
 export function listJobs(): Job[] {
-	return readJobsFile().jobs;
+	const jobs = readJobsFile().jobs;
+	const invalidIds: string[] = [];
+	const valid: Job[] = [];
+	for (const job of jobs) {
+		if (isShapedJob(job)) {
+			valid.push(job);
+		} else {
+			const raw = job as { id?: unknown } | null;
+			invalidIds.push(typeof raw?.id === "string" && raw.id.length > 0 ? raw.id : "(无 id)");
+		}
+	}
+	if (invalidIds.length > 0) {
+		const signature = invalidIds.join(",");
+		if (signature !== lastInvalidJobsSignature) {
+			lastInvalidJobsSignature = signature;
+			console.error(`[pi-schedule] jobs.json 中 ${invalidIds.length} 条记录形状非法，已跳过：${signature}`);
+			for (const id of invalidIds) {
+				appendLedger({
+					at: new Date().toISOString(),
+					event: "error",
+					jobId: id,
+					detail: "jobs.json 记录形状非法（可能被外部手动编辑），已跳过该条；修复或删除该条后恢复",
+				});
+			}
+		}
+	} else {
+		lastInvalidJobsSignature = null;
+	}
+	return valid;
 }
 
 export function getJob(id: string): Job | undefined {
