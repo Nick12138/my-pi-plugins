@@ -68,8 +68,29 @@ test("jobs：非法输入被拒", () => {
 				{ name: "x", prompt: "y", cwd: CWD, trigger: { type: "interval", every: "5s" } },
 				{ by: "test" },
 			),
-		/不能小于 1m/,
+		/10s/,
 	);
+	assert.throws(
+		() =>
+			createJob(
+				{ name: "x", prompt: "y", cwd: CWD, trigger: { type: "interval", every: "91d" } },
+				{ by: "test" },
+			),
+		/90d/,
+	);
+	assert.throws(
+		() => createJob({ name: "x", prompt: "y", cwd: CWD, trigger: { type: "manual" }, notify: "email" }, { by: "test" }),
+		/notify 非法/,
+	);
+});
+
+test("notify：默认值 / patch 更新", () => {
+	const job = makeJob("notify-default");
+	assert.equal(job.notify, "none", "创建时缺省应为 none");
+	const patched = updateJob(job.id, { notify: "system" }, { by: "test" });
+	assert.equal(patched.notify, "system");
+	assert.throws(() => updateJob(job.id, { notify: "sms" as never }, { by: "test" }), /notify 非法/);
+	deleteJob(job.id, { by: "test" });
 });
 
 test("单飞锁：同 job 二次获取失败，释放后可再获取", () => {
@@ -171,4 +192,43 @@ test("损坏的 jobs.json 会被隔离而不是静默清空", () => {
 	// 隔离文件已生成
 	const files = store.paths().root;
 	assert.ok(files.length > 0);
+});
+
+test("旧数据兼容：缺 notify 字段的任务读取时补默认 none", () => {
+	const oldJob = {
+		id: "deadbeef",
+		name: "legacy",
+		prompt: "旧任务",
+		command: null,
+		cwd: CWD,
+		enabled: true,
+		permission: "read_only",
+		model: null,
+		trigger: { type: "interval", every: "30m" },
+		missedWindow: "catch_up_one",
+		timeoutMs: 1_800_000,
+		maxRuns: null,
+		loadExtensions: false,
+		tags: [],
+		createdAt: "2025-01-01T00:00:00.000Z",
+		updatedAt: "2025-01-01T00:00:00.000Z",
+		updatedBy: "old",
+		nextRunAt: null,
+		lastRunAt: null,
+		lastRunId: null,
+		lastStatus: null,
+		runCount: 0,
+		terminated: null,
+	};
+	// 故意不含 notify 字段（旧版本写入的数据）
+	writeFileSync(store.paths().jobsFile, JSON.stringify({ version: 1, jobs: [oldJob] }), "utf8");
+	const jobs = store.listJobs();
+	assert.equal(jobs.length, 1);
+	assert.equal(jobs[0]!.id, "deadbeef");
+	assert.equal(jobs[0]!.notify, "none", "缺 notify 的旧任务应补默认 none，而不是 undefined");
+	// 该旧任务可正常被 patch（服务层不会被缺字段拦住）
+	const patched = updateJob("deadbeef", { enabled: false }, { by: "test" });
+	assert.equal(patched.enabled, false);
+	assert.equal(patched.notify, "none");
+	deleteJob("deadbeef", { by: "test" });
 });

@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CronParseError, nextCronAfter, parseCron, wallClockAt } from "../src/cron.ts";
 import {
+	addCalendarMonths,
+	advanceNextRunAt,
 	computeNextRunAt,
+	parseEvery,
 	parseInterval,
 	ScheduleError,
 	shouldFire,
@@ -100,10 +103,30 @@ test("parseInterval：合法与非法", () => {
 	assert.equal(parseInterval("2h"), 2 * 60 * 60 * 1000);
 	assert.equal(parseInterval("1d"), 24 * 60 * 60 * 1000);
 	assert.equal(parseInterval(" 90s "), 90 * 1000);
-	assert.throws(() => parseInterval("45s"), ScheduleError, "小于 1m");
 	assert.throws(() => parseInterval("91d"), ScheduleError, "大于 90d");
 	assert.throws(() => parseInterval("abc"), ScheduleError);
 	assert.throws(() => parseInterval("5"), ScheduleError, "缺单位");
+});
+
+test("parseInterval：s 最小 10s（低于 10s 报错）", () => {
+	assert.equal(parseInterval("45s"), 45 * 1000, "45s 在 s 单位最小值之上，合法");
+	assert.throws(() => parseInterval("9s"), /10s/, "9s 低于最小粒度应报错");
+	assert.throws(() => parseInterval("1s"), ScheduleError);
+});
+
+test("parseEvery：w 单位（1w = 7d，上限 90d 同样生效）", () => {
+	assert.equal(parseEvery("1w").ms, 7 * 24 * 60 * 60 * 1000);
+	assert.equal(parseEvery("12w").ms, 12 * 7 * 24 * 60 * 60 * 1000, "12w = 84d ≤ 90d");
+	assert.throws(() => parseEvery("13w"), /90d/, "13w = 91d 超上限");
+});
+
+test("parseEvery：mo 必须是整数月且上限约 2mo", () => {
+	assert.equal(parseEvery("1mo").months, 1);
+	assert.equal(parseEvery("2mo").months, 2);
+	assert.throws(() => parseEvery("3mo"), /90d/, "3mo ≈ 91.3d 超上限");
+	assert.throws(() => parseEvery("0.5mo"), /整数月/, "非整数月应报错");
+	assert.throws(() => parseEvery("0mo"), ScheduleError);
+	assert.throws(() => parseInterval("1mo"), /日历月/, "mo 无固定毫秒语义，parseInterval 应报错");
 });
 
 test("computeNextRunAt：once / interval / manual", () => {
@@ -117,6 +140,66 @@ test("computeNextRunAt：once / interval / manual", () => {
 		"2026-01-01T00:30:00.000Z",
 	);
 	assert.equal(computeNextRunAt({ type: "manual" }, now, "UTC"), null);
+});
+
+test("computeNextRunAt：interval 新单位 s / w", () => {
+	const now = new Date("2026-01-01T00:00:00Z");
+	assert.equal(
+		computeNextRunAt({ type: "interval", every: "10s" }, now, "UTC"),
+		"2026-01-01T00:00:10.000Z",
+	);
+	assert.equal(
+		computeNextRunAt({ type: "interval", every: "1w" }, now, "UTC"),
+		"2026-01-08T00:00:00.000Z",
+	);
+});
+
+test("computeNextRunAt：mo 按日历月推进，日超出当月收敛到月末", () => {
+	const tz = "UTC";
+	// 1/31 +1mo → 2/28（2026 非闰年），时/分/秒保留
+	const jan31 = new Date("2026-01-31T09:30:15Z");
+	assert.equal(
+		computeNextRunAt({ type: "interval", every: "1mo" }, jan31, tz),
+		"2026-02-28T09:30:15.000Z",
+	);
+	// 1/30 +1mo → 2/28（2 月只有 28 天）
+	assert.equal(
+		computeNextRunAt({ type: "interval", every: "1mo" }, new Date("2026-01-30T00:00:00Z"), tz),
+		"2026-02-28T00:00:00.000Z",
+	);
+	// 1/15 +1mo → 2/15（普通情况不变形）
+	assert.equal(
+		computeNextRunAt({ type: "interval", every: "1mo" }, new Date("2026-01-15T00:00:00Z"), tz),
+		"2026-02-15T00:00:00.000Z",
+	);
+});
+
+test("advanceNextRunAt：mo 从原计划时刻推进且保留原始「日」", () => {
+	const tz = "UTC";
+	const trigger = { type: "interval", every: "1mo" } as const;
+	const scheduledFor = "2026-01-31T00:00:00.000Z";
+	// 现在是 2/15：下一次是 2/28（收敛到月末）
+	assert.equal(
+		advanceNextRunAt(trigger, new Date("2026-02-15T00:00:00Z"), tz, scheduledFor),
+		"2026-02-28T00:00:00.000Z",
+	);
+	// 现在是 3/01：下一次是 3/31（从原计划时刻算，日不因 2 月短而漂到 28）
+	assert.equal(
+		advanceNextRunAt(trigger, new Date("2026-03-01T00:00:00Z"), tz, scheduledFor),
+		"2026-03-31T00:00:00.000Z",
+	);
+	// 落后多个周期：一次性跳到未来
+	assert.equal(
+		advanceNextRunAt(trigger, new Date("2026-06-01T00:00:00Z"), tz, scheduledFor),
+		"2026-06-30T00:00:00.000Z",
+	);
+});
+
+test("addCalendarMonths：闰年与跨年", () => {
+	// 2024 闰年：1/31 +1mo → 2/29
+	assert.equal(addCalendarMonths(new Date("2024-01-31T00:00:00Z"), 1).toISOString(), "2024-02-29T00:00:00.000Z");
+	// 12/31 +1mo → 1/31（跨年不丢日）
+	assert.equal(addCalendarMonths(new Date("2026-12-31T00:00:00Z"), 1).toISOString(), "2027-01-31T00:00:00.000Z");
 });
 
 test("shouldFire：catch_up_one 与 skip 的差异", () => {

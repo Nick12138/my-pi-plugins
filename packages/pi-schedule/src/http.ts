@@ -168,7 +168,7 @@ function toTrigger(raw: unknown): Trigger {
 		}
 		case "interval": {
 			const every = String(obj.every ?? "");
-			if (!every) throw new ScheduleError("trigger.type=interval 需要 every（如 30m / 2h / 1d）");
+			if (!every) throw new ScheduleError("trigger.type=interval 需要 every（如 30s / 30m / 2h / 1d / 1w / 1mo）");
 			return { type: "interval", every };
 		}
 		case "cron": {
@@ -191,6 +191,7 @@ function toJobInput(body: Record<string, unknown>): JobInput {
 		permission: body.permission ? (String(body.permission) as JobInput["permission"]) : undefined,
 		model: body.model ? (body.model as JobInput["model"]) : null,
 		missedWindow: body.missedWindow ? (String(body.missedWindow) as JobInput["missedWindow"]) : undefined,
+		notify: body.notify === undefined ? undefined : (String(body.notify) as JobInput["notify"]),
 		timeoutMs: body.timeoutMs === undefined ? undefined : Number(body.timeoutMs),
 		maxRuns: body.maxRuns === undefined ? undefined : body.maxRuns === null ? null : Number(body.maxRuns),
 		loadExtensions: body.loadExtensions === undefined ? undefined : Boolean(body.loadExtensions),
@@ -209,6 +210,7 @@ function toJobPatch(body: Record<string, unknown>): JobPatch {
 	if (body.permission !== undefined) patch.permission = String(body.permission) as JobPatch["permission"];
 	if (body.model !== undefined) patch.model = body.model === null ? null : (body.model as JobPatch["model"]);
 	if (body.missedWindow !== undefined) patch.missedWindow = String(body.missedWindow) as JobPatch["missedWindow"];
+	if (body.notify !== undefined) patch.notify = String(body.notify) as JobPatch["notify"];
 	if (body.timeoutMs !== undefined) patch.timeoutMs = Number(body.timeoutMs);
 	if (body.maxRuns !== undefined) patch.maxRuns = body.maxRuns === null ? null : Number(body.maxRuns);
 	if (body.loadExtensions !== undefined) patch.loadExtensions = Boolean(body.loadExtensions);

@@ -52,6 +52,9 @@
 
 ### 3.1 `jobs.json`
 
+版本号在 `jobs.json` 的 `version` 字段（当前 `1`）。字段演进只做向后兼容新增：
+旧文件里缺 `notify` 字段的任务，插件读取时自动补默认 `"none"`（面板读盘不会拿到 undefined）。
+
 ```jsonc
 {
   "version": 1,
@@ -70,7 +73,9 @@
       // { "type": "manual" }
       // { "type": "once", "at": "2026-01-01T09:00:00.000Z" }
       // { "type": "interval", "every": "30m" }
+      //   every 单位：30s / 30m / 2h / 1d / 1w（=7d）/ 1mo（日历月）
       "missedWindow": "catch_up_one", // catch_up_one | skip
+      "notify": "none",               // none | system | tg（tg 为 Telegram 推送预留，当前无行为差异）
       "timeoutMs": 1800000,
       "maxRuns": null,               // 数字 = 投递上限，到达后自动停用
       "loadExtensions": false,       // 执行会话是否加载扩展/技能
@@ -191,6 +196,7 @@
   "permission": "read_only",
   "model": { "provider": "5", "id": "deepseek-v4.1-flash", "thinkingLevel": "medium" },
   "missedWindow": "catch_up_one",
+  "notify": "none",          // none | system | tg
   "timeoutMs": 1800000,
   "maxRuns": null,
   "loadExtensions": false,
@@ -240,14 +246,18 @@
     终止（`terminated:"missed"`），而不是反复重写文件——这曾经是个自持写入死循环。
 11. **节拍**：`interval` 的下次触发从**原计划时刻**推进（不是从本次结束时刻），
     因此长任务不会让整体节拍漂移。
-12. **DST**：cron 遇到不存在的本地时刻（如纽约春季 02:30）时，按迭代收敛到的
+12. **interval 单位与边界**：`s`（最小 10s，避免调度打爆）/ `m` / `h` / `d` / `w`（=7d，语义等价）/
+    `mo`（日历月，必须是 ≥1 的整数月）。总上限 90d 同样生效：`w` 最多 12w，`mo` 最多约 2mo。
+    `mo` 按**日历月**推进（不是固定 30d）：从原计划时刻「月 +1 保留日/时/分/秒」，
+    日超出当月天数时收敛到当月最后一天（如 1/31 → 2/28 → 3/31，不因短月永久漂移）。
+13. **DST**：cron 遇到不存在的本地时刻（如纽约春季 02:30）时，按迭代收敛到的
     实际时刻触发（可能偏移到 01:30 或 03:30），不跳过。
-13. **保留策略**：`runs.jsonl` 保留最近 5000 行；每任务最多保留 300 个 run 文件；
+14. **保留策略**：`runs.jsonl` 保留最近 5000 行；每任务最多保留 300 个 run 文件；
     通知队列保留最近 500 条。
-14. **通知策略**：所有终态都进 `notify-queue.jsonl`（面板自行决定弹什么）；
+15. **通知策略**：所有终态都进 `notify-queue.jsonl`（面板自行决定弹什么）；
     但**进会话的消息**只发「失败类」或「用户主动触发（run_now/reply）」——
     高频成功轮询保持安静（自定义消息会进入 LLM 上下文，不能刷屏）。
-15. **命令型任务**（`command` 非空）：触发后直接执行 shell 命令（跟随系统：
+16. **命令型任务**（`command` 非空）：触发后直接执行 shell 命令（跟随系统：
     Windows=cmd，Unix=sh），**不经模型、无执行会话**。cwd=任务工作区；
     退出码 0=ok、非 0=error（带退出码与 stderr）、超时=timeout；
     stdout+stderr 截断后写入 run 记录的 `outputText`/`summary`。

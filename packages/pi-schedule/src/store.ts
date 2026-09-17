@@ -29,6 +29,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+	DEFAULTS,
 	DEFAULT_ROOT_DIRNAME,
 	LIMITS,
 	ROOT_ENV,
@@ -287,6 +288,16 @@ export function mutateJobs<T>(fn: (file: JobsFile) => T): T {
 
 // ── 任务 ────────────────────────────────────────────────────
 
+/**
+ * 旧数据兼容：向后兼容新增的字段在读取时补默认值，确保旧 jobs.json 不炸。
+ * 只补缺失/形状不对的，不覆盖用户已写的合法值。
+ */
+function normalizeJob(job: Job): Job {
+	if (!job || typeof job !== "object") return job;
+	if (typeof job.notify !== "string") return { ...job, notify: DEFAULTS.notify };
+	return job;
+}
+
 export function readJobsFile(): JobsFile {
 	const file = readJsonFile<JobsFile>(paths().jobsFile, { version: STORE_VERSION, jobs: [] });
 	if (!file || typeof file !== "object" || !Array.isArray(file.jobs)) {
@@ -300,7 +311,7 @@ export function readJobsFile(): JobsFile {
 		console.error(`[pi-schedule] jobs.json 结构非法，已隔离：${quarantine}`);
 		return { version: STORE_VERSION, jobs: [] };
 	}
-	return { version: STORE_VERSION, jobs: file.jobs };
+	return { version: STORE_VERSION, jobs: file.jobs.map(normalizeJob) };
 }
 
 const TRIGGER_TYPES = new Set(["manual", "once", "interval", "cron"]);

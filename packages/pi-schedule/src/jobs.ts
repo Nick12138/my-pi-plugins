@@ -23,6 +23,7 @@ import {
 	type Job,
 	type MissedWindow,
 	type ModelRef,
+	type NotifyMode,
 	type PermissionTier,
 	type ThinkingLevelName,
 	type Trigger,
@@ -30,6 +31,7 @@ import {
 
 const THINKING_LEVELS: ThinkingLevelName[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MISSED_WINDOWS: MissedWindow[] = ["catch_up_one", "skip"];
+const NOTIFY_MODES: NotifyMode[] = ["none", "system", "tg"];
 
 export interface JobInput {
 	name: string;
@@ -41,6 +43,7 @@ export interface JobInput {
 	permission?: PermissionTier;
 	model?: ModelRef | null;
 	missedWindow?: MissedWindow;
+	notify?: NotifyMode;
 	timeoutMs?: number;
 	maxRuns?: number | null;
 	loadExtensions?: boolean;
@@ -102,6 +105,14 @@ function assertTags(tags: string[] | undefined): string[] {
 	return tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 10);
 }
 
+function assertNotify(notify: NotifyMode | undefined): NotifyMode {
+	if (notify === undefined) return DEFAULTS.notify;
+	if (!NOTIFY_MODES.includes(notify)) {
+		throw new ScheduleError(`notify 非法：${notify}（可选 ${NOTIFY_MODES.join("/")}）`);
+	}
+	return notify;
+}
+
 /** 命令校验：非空（显式传 null/undefined 视为「不用命令型」）；与 prompt 互斥。 */
 function assertCommand(command: string | null | undefined): string | null {
 	if (command === null || command === undefined) return null;
@@ -139,6 +150,7 @@ export function createJob(input: JobInput, actor: Actor): Job {
 		model: assertModel(input.model),
 		trigger,
 		missedWindow: input.missedWindow ?? DEFAULTS.missedWindow,
+		notify: assertNotify(input.notify),
 		timeoutMs: assertTimeout(input.timeoutMs),
 		maxRuns: assertMaxRuns(input.maxRuns),
 		loadExtensions: input.loadExtensions ?? false,
@@ -171,6 +183,7 @@ export interface JobPatch {
 	permission?: PermissionTier;
 	model?: ModelRef | null;
 	missedWindow?: MissedWindow;
+	notify?: NotifyMode;
 	timeoutMs?: number;
 	maxRuns?: number | null;
 	loadExtensions?: boolean;
@@ -204,6 +217,7 @@ export function updateJob(id: string, patch: JobPatch, actor: Actor): Job {
 		}
 		next.missedWindow = patch.missedWindow;
 	}
+	if (patch.notify !== undefined) next.notify = assertNotify(patch.notify);
 	if (patch.timeoutMs !== undefined) next.timeoutMs = assertTimeout(patch.timeoutMs);
 	if (patch.maxRuns !== undefined) next.maxRuns = assertMaxRuns(patch.maxRuns);
 	if (patch.loadExtensions !== undefined) next.loadExtensions = Boolean(patch.loadExtensions);

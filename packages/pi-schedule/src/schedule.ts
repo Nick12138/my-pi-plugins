@@ -14,29 +14,73 @@ const UNIT_MS: Record<string, number> = {
 	m: 60 * 1000,
 	h: 60 * 60 * 1000,
 	d: 24 * 60 * 60 * 1000,
+	w: 7 * 24 * 60 * 60 * 1000,
 };
 
-const INTERVAL_RE = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)\s*$/i;
+/** mo 按平均月长近似为毫秒，仅用于上限校验与宽限期估算（排期推进走日历月）。 */
+const AVG_MONTH_MS = Math.round(30.44 * UNIT_MS.d!);
 
-/** 解析 `30m` / `2h` / `1d` / `45s`。 */
-export function parseInterval(input: string): number {
+const INTERVAL_RE = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|mo|m|h|d|w)\s*$/i;
+
+/** 解析结果：非 mo 单位给出等价毫秒；mo 给出整月数（日历月，不能折算成固定毫秒）。 */
+export interface ParsedEvery {
+	/** 非 mo 单位：等价毫秒数；mo 为 null。 */
+	ms: number | null;
+	/** mo 单位：整数月数；其他为 null。 */
+	months: number | null;
+	/** 近似毫秒（mo 按平均月长估算），仅用于上限校验/宽限期估算。 */
+	approxMs: number;
+}
+
+/**
+ * 解析 interval 的 `every`：`30s` / `30m` / `2h` / `1d` / `1w` / `1mo`。
+ *
+ * - `s` 最小 10s（避免调度打爆）；其余单位最小 1m；
+ * - `w` = 7d，语义等价；
+ * - `mo` 必须是 ≥1 的整数月，上限同样生效（约 2mo）。
+ */
+export function parseEvery(input: string): ParsedEvery {
 	const match = INTERVAL_RE.exec(input);
 	if (!match) {
-		throw new ScheduleError(`interval 格式非法："${input}"，示例：30m、2h、1d、45s`);
+		throw new ScheduleError(`interval 格式非法："${input}"，示例：30s、30m、2h、1d、1w、1mo`);
 	}
 	const value = Number.parseFloat(match[1]!);
 	const unit = match[2]!.toLowerCase();
+	if (unit === "mo") {
+		if (!Number.isInteger(value) || value < 1) {
+			throw new ScheduleError(`mo 必须是 ≥1 的整数月（实际 ${input}）`);
+		}
+		const approxMs = value * AVG_MONTH_MS;
+		if (approxMs > DEFAULTS.maxIntervalMs) {
+			throw new ScheduleError(`interval 不能大于 90d（实际 ${input} ≈ ${Math.round(approxMs / UNIT_MS.d!)}d，最多约 2mo）`);
+		}
+		return { ms: null, months: value, approxMs };
+	}
 	const ms = Math.round(value * UNIT_MS[unit]!);
-	if (ms < DEFAULTS.minIntervalMs) {
+	if (unit === "s") {
+		if (ms < 10 * 1000) {
+			throw new ScheduleError(`interval（秒）不能小于 10s（实际 ${input}）`);
+		}
+	} else if (ms < DEFAULTS.minIntervalMs) {
 		throw new ScheduleError(`interval 不能小于 1m（实际 ${input}）`);
 	}
 	if (ms > DEFAULTS.maxIntervalMs) {
 		throw new ScheduleError(`interval 不能大于 90d（实际 ${input}）`);
 	}
-	return ms;
+	return { ms, months: null, approxMs: ms };
+}
+
+/** 兼容入口：返回等价毫秒（mo 是日历月，无固定毫秒语义，会报错）。 */
+export function parseInterval(input: string): number {
+	const parsed = parseEvery(input);
+	if (parsed.ms === null) {
+		throw new ScheduleError(`mo 单位按日历月推进，不能用 parseInterval 当固定毫秒间隔：${input}（请用 parseEvery）`);
+	}
+	return parsed.ms;
 }
 
 export function intervalToText(ms: number): string {
+	if (ms % UNIT_MS.w! === 0) return `${ms / UNIT_MS.w!}w`;
 	if (ms % UNIT_MS.d! === 0) return `${ms / UNIT_MS.d!}d`;
 	if (ms % UNIT_MS.h! === 0) return `${ms / UNIT_MS.h!}h`;
 	if (ms % UNIT_MS.m! === 0) return `${ms / UNIT_MS.m!}m`;
@@ -64,7 +108,7 @@ export function normalizeTrigger(trigger: Trigger, now: Date, timezone?: string)
 			return { type: "once", at: at.toISOString() };
 		}
 		case "interval":
-			parseInterval(trigger.every);
+			parseEvery(trigger.every);
 			return { type: "interval", every: trigger.every.trim() };
 		case "cron": {
 			const tz = trigger.timezone ?? timezone;
@@ -95,6 +139,20 @@ export function isValidTimezone(timezone: string): boolean {
 	}
 }
 
+/**
+ * 日历月推进：保留日/时/分/秒，日超出目标月天数时收敛到当月最后一天
+ * （如 1/31 +1mo → 2/28，类似 cron 对不存在时刻的收敛语义）。
+ * 内部按 UTC 日历计算（job 全程使用绝对 ISO 时刻，与 cron 的墙钟语义互不影响）。
+ */
+export function addCalendarMonths(from: Date, months: number): Date {
+	const target = new Date(from.getTime());
+	target.setUTCDate(1); // 先固定到 1 号，避免日溢出连跳两个月
+	target.setUTCMonth(target.getUTCMonth() + months);
+	const daysInTarget = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+	target.setUTCDate(Math.min(from.getUTCDate(), daysInTarget));
+	return target;
+}
+
 /** 计算下一次触发时刻；manual 返回 null。 */
 export function computeNextRunAt(
 	trigger: Trigger,
@@ -109,8 +167,11 @@ export function computeNextRunAt(
 			// once 是固定的绝对时刻：调用方必须自己判断它是否已过（不会前进）
 			return new Date(trigger.at).toISOString();
 		case "interval": {
-			const ms = parseInterval(trigger.every);
-			return new Date(from.getTime() + ms).toISOString();
+			const every = parseEvery(trigger.every);
+			if (every.months !== null) {
+				return addCalendarMonths(from, every.months).toISOString();
+			}
+			return new Date(from.getTime() + every.ms!).toISOString();
 		}
 		case "cron": {
 			const expr = parseCron(trigger.cron);
@@ -151,7 +212,21 @@ export function advanceNextRunAt(
 	}
 
 	// interval：从原计划时刻按周期**一次性跳**到未来（O(1)，避免循环上限导致返回过去时间）
-	const period = parseInterval(trigger.every);
+	const every = parseEvery(trigger.every);
+	if (every.months !== null) {
+		// 日历月推进：每次都从「原计划时刻」+ k*months，保留日/时/分/秒；
+		// 日超出当月天数收敛到月末（1/31 → 2/28 → 3/31），不因 2 月短而永久漂到 28 号。
+		const baseMs = anchor.getTime();
+		let k = 1;
+		let next = addCalendarMonths(new Date(baseMs), every.months * k);
+		// 防御上限：1000 年的月步数内必然收敛
+		while (next.getTime() <= now.getTime() && k < 12_000) {
+			k += 1;
+			next = addCalendarMonths(new Date(baseMs), every.months * k);
+		}
+		return next.toISOString();
+	}
+	const period = every.ms!;
 	const anchorMs = anchor.getTime();
 	const elapsed = now.getTime() - anchorMs;
 	const steps = elapsed >= 0 ? Math.floor(elapsed / period) + 1 : 1;
@@ -161,7 +236,7 @@ export function advanceNextRunAt(
 /** interval 的宽限期：max(2×tick, 25% 周期)，上限 15 分钟。 */
 export function graceMsFor(trigger: Trigger): number {
 	if (trigger.type === "interval") {
-		const period = parseInterval(trigger.every);
+		const period = parseEvery(trigger.every).approxMs;
 		return Math.min(15 * 60 * 1000, Math.max(2 * DEFAULTS.tickMs, period * 0.25));
 	}
 	// once / cron：1 小时宽限
@@ -258,7 +333,9 @@ export function humanizeUntil(iso: string | null, now: Date): string {
 	if (m < 60) return `${m}m 后`;
 	const h = Math.floor(m / 60);
 	if (h < 24) return `${h}h${m % 60}m 后`;
-	return `${Math.floor(h / 24)}d${h % 24}h 后`;
+	const d = Math.floor(h / 24);
+	if (d < 7) return `${d}d${h % 24}h 后`;
+	return `${Math.floor(d / 7)}w${d % 7}d 后`;
 }
 
 /** 供 UI 展示的墙钟时间戳（带时区）。 */

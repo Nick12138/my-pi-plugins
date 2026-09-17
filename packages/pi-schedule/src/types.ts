@@ -30,6 +30,9 @@ export type Trigger =
 /** 错过窗口策略。 */
 export type MissedWindow = "catch_up_one" | "skip";
 
+/** 完成通知推送方式。"tg" 为未来 Telegram 推送预留，当前无行为差异（面板仍以 notify-queue 为准）。 */
+export type NotifyMode = "none" | "system" | "tg";
+
 /** 执行终态。command 型任务不会出现 aborted（无会话可中止）。 */
 export type RunStatus = "running" | "ok" | "error" | "timeout" | "aborted";
 
@@ -55,6 +58,8 @@ export interface Job {
 	model: ModelRef | null;
 	trigger: Trigger;
 	missedWindow: MissedWindow;
+	/** 完成通知推送方式（默认 none）。 */
+	notify: NotifyMode;
 	/** 单次执行超时（ms），默认 30 分钟。 */
 	timeoutMs: number;
 	/** 投递次数上限（ok+error+timeout 计数），到达后自动终止。 */
@@ -160,6 +165,7 @@ export const DEFAULTS = {
 	tickMs: 30 * 1000,
 	maxConcurrentRuns: 2,
 	missedWindow: "catch_up_one" as MissedWindow,
+	notify: "none" as NotifyMode,
 	permission: "read_only" as PermissionTier,
 	httpPort: 18766,
 	/** interval 最小粒度 */
