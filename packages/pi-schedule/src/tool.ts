@@ -50,7 +50,8 @@ const ScheduleParams = Type.Object({
 	id: Type.Optional(Type.String({ description: "任务 id（get/update/cancel/enable/disable/run_now/history 用）" })),
 	runId: Type.Optional(Type.String({ description: "执行记录 id（history/reply 用）" })),
 	name: Type.Optional(Type.String({ description: "任务名（create/update）" })),
-	prompt: Type.Optional(Type.String({ description: "任务内容（create/update）：自包含的指令，会作为全新会话的任务书" })),
+	prompt: Type.Optional(Type.String({ description: "任务内容（create/update）：自包含的指令，会作为全新会话的任务书；与 command 互斥" })),
+	command: Type.Optional(Type.String({ description: "命令型任务（create/update）：直接执行的 shell 命令（可跑 python/node/git 等），不经模型、无会话；与 prompt 互斥" })),
 	cwd: Type.Optional(Type.String({ description: "工作区绝对路径（create/update），默认当前目录" })),
 	trigger: Type.Optional(
 		StringEnum(["manual", "once", "interval", "cron"] as const, {
@@ -149,6 +150,7 @@ export function registerScheduleTool(pi: ExtensionAPI, scheduler: Scheduler): vo
 		promptGuidelines: [
 			"用户说「每天/每小时/定时/cron/提醒我/定期检查」时用 schedule 工具建任务。",
 			"任务 prompt 必须自包含：执行时是全新会话，没有当前对话上下文。",
+			"用户明确要「直接跑命令、不要走模型」时用 command 参数建命令型任务（与 prompt 互斥）；输出会直接进通知。",
 			"需要跑命令（git/npm/gh/脚本）的任务必须 permission=full；只读检索用 read_only（默认）；要改文件但不用命令用 write。",
 		],
 		parameters: ScheduleParams,
@@ -157,11 +159,14 @@ export function registerScheduleTool(pi: ExtensionAPI, scheduler: Scheduler): vo
 			try {
 				switch (action) {
 					case "create": {
-						if (!params.name || !params.prompt) throw new ScheduleError("create 需要 name 与 prompt");
+						if (!params.name || (!params.prompt && !params.command)) {
+							throw new ScheduleError("create 需要 name 与 prompt（或 command）");
+						}
 						const job = createJob(
 							{
 								name: params.name,
-								prompt: params.prompt,
+								prompt: params.prompt ?? "",
+								command: params.command,
 								cwd: params.cwd ?? ctx.cwd,
 								trigger: triggerFromParams(params),
 								permission: params.permission as PermissionTier | undefined,
@@ -191,6 +196,7 @@ export function registerScheduleTool(pi: ExtensionAPI, scheduler: Scheduler): vo
 						const patch: JobPatch = {};
 						if (params.name !== undefined) patch.name = params.name;
 						if (params.prompt !== undefined) patch.prompt = params.prompt;
+						if (params.command !== undefined) patch.command = params.command;
 						if (params.cwd !== undefined) patch.cwd = params.cwd;
 						if (params.trigger !== undefined) patch.trigger = triggerFromParams(params, job.trigger);
 						if (params.permission !== undefined) patch.permission = assertPermissionTier(params.permission);
@@ -292,7 +298,13 @@ export function registerScheduleTool(pi: ExtensionAPI, scheduler: Scheduler): vo
 						if (!record) throw new ScheduleError(`执行记录不存在：${params.runId}`);
 						const job = getJob(record.jobId);
 						if (!job) throw new ScheduleError(`任务已被删除：${record.jobId}`);
-						if (!record.sessionPath) throw new ScheduleError("该执行没有可续聊的会话文件");
+						if (!record.sessionPath) {
+							throw new ScheduleError(
+								record.command
+									? "命令型任务没有会话，不支持续聊（可修改任务后重新执行）"
+									: "该执行没有可续聊的会话文件",
+							);
+						}
 						appendLedger({
 							at: new Date().toISOString(),
 							event: "reply",

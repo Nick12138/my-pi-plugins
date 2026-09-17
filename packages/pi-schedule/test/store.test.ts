@@ -109,6 +109,7 @@ test("执行记录：写入 / 读取 / 汇总 / 跨 job 查找", () => {
 		toolCalls: 1,
 		error: null,
 		idempotencyKey: `${job.id}:manual`,
+		command: null,
 	};
 	store.writeRun(record);
 	const loaded = store.readRun(job.id, "run0001");

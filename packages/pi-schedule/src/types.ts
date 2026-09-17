@@ -30,7 +30,7 @@ export type Trigger =
 /** 错过窗口策略。 */
 export type MissedWindow = "catch_up_one" | "skip";
 
-/** 执行终态。 */
+/** 执行终态。command 型任务不会出现 aborted（无会话可中止）。 */
 export type RunStatus = "running" | "ok" | "error" | "timeout" | "aborted";
 
 /** 触发来源，落进 run 记录用于审计。 */
@@ -43,8 +43,10 @@ export interface Job {
 	/** 8 位十六进制。 */
 	id: string;
 	name: string;
-	/** 任务内容，即发给执行会话的 prompt。 */
+	/** 任务内容，即发给执行会话的 prompt。命令型任务（command 非空）不用。 */
 	prompt: string;
+	/** 命令型任务：非空时触发后直接执行 shell 命令（不经模型、无执行会话），与 prompt 互斥。 */
+	command: string | null;
 	/** 工作区绝对路径，作为执行会话的 cwd。 */
 	cwd: string;
 	enabled: boolean;
@@ -102,8 +104,10 @@ export interface RunRecord {
 	/** 用户在该历史下的追问原文（trigger=reply 时有值）。 */
 	replyText: string | null;
 	usage: UsageSummary | null;
-	/** 结果摘要（截断），供列表展示。 */
+		/** 结果摘要（截断），供列表展示。 */
 	summary: string;
+	/** 本次执行的命令（仅命令型任务非空）。 */
+	command: string | null;
 	/** 最后一条 assistant 文本（截断）。 */
 	outputText: string;
 	/** 工具调用次数。 */
@@ -167,6 +171,7 @@ export const DEFAULTS = {
 export const LIMITS = {
 	maxJobs: 200,
 	maxPromptChars: 20_000,
+	maxCommandChars: 2_000,
 	maxOutputChars: 20_000,
 	maxSummaryChars: 2_000,
 	maxHistoryRows: 200,

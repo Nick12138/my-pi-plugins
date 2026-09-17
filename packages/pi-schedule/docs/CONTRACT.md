@@ -59,7 +59,8 @@
     {
       "id": "a1b2c3d4",              // 8 位 hex
       "name": "安全审查",
-      "prompt": "审查 src/ ...",      // 任务内容，运行时作为独立会话的任务书
+      "prompt": "审查 src/ ...",      // 任务内容，运行时作为独立会话的任务书；命令型任务为 ""
+      "command": null,                // 命令型任务：非空时触发后直接执行 shell 命令（不经模型、无执行会话），与 prompt 互斥
       "cwd": "D:/proj/foo",          // 工作区绝对路径（执行会话的 cwd）
       "enabled": true,
       "permission": "read_only",     // read_only | write | full
@@ -110,6 +111,7 @@
   "replyText": null,               // 续聊时用户的追问原文
   "usage": { "input": 1713, "output": 54, "total": 1767, "cost": 0 },
   "summary": "首段输出摘要（≤2000 字）",
+  "command": null,                 // 本次执行的命令（仅命令型任务非空）
   "outputText": "最后一条 assistant 文本（≤20000 字）",
   "toolCalls": 2,
   "error": null,                   // 失败原因（模型 451/超时/越权等）
@@ -183,6 +185,7 @@
 {
   "name": "安全审查",
   "prompt": "审查 src/ ...",
+  "command": null,         // 命令型任务：直接执行的 shell 命令（不经模型），与 prompt 互斥
   "cwd": "D:/proj/foo",
   "trigger": { "type": "cron", "cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai" },
   "permission": "read_only",
@@ -244,6 +247,12 @@
 14. **通知策略**：所有终态都进 `notify-queue.jsonl`（面板自行决定弹什么）；
     但**进会话的消息**只发「失败类」或「用户主动触发（run_now/reply）」——
     高频成功轮询保持安静（自定义消息会进入 LLM 上下文，不能刷屏）。
+15. **命令型任务**（`command` 非空）：触发后直接执行 shell 命令（跟随系统：
+    Windows=cmd，Unix=sh），**不经模型、无执行会话**。cwd=任务工作区；
+    退出码 0=ok、非 0=error（带退出码与 stderr）、超时=timeout；
+    stdout+stderr 截断后写入 run 记录的 `outputText`/`summary`。
+    权限档/模型/工具白名单对它无意义；`reply` 续聊不可用（返回 409）；
+    runCount/maxRuns/单飞/错过窗口/台账照常生效。
 
 ---
 
@@ -273,7 +282,8 @@
    - 读盘投影（列表/历史/转录，参考 `subagent-runs.ts` 的有界截断常量）；
    - 通知桥：轮询 `notify-queue.jsonl` → `server.emit("schedule.notification")` → 前端 toast / 系统通知。
 3. **前端**：RightDock 新增 tab（`DockTabId` 加 `"schedule"`）或顶级 page。
-   - 表单：name / prompt / cwd / trigger（四选一）/ permission / model / missedWindow / timeout / maxRuns
+   - 表单：name / prompt（或 command，互斥）/ cwd / trigger（四选一）/ permission / model / missedWindow / timeout / maxRuns
+   - 命令型任务（command 非空）不经模型、无执行会话，表单里无需展示 permission/model，改展示命令输入框
    - 列表：状态、下次触发倒计时、最近结果、启停/立即执行
    - 历史：run 列表 → 展开转录 → 「继续」按钮调 `/runs/:runId/reply`
 4. **模型选择器**：可直接用 Host 已有的 `provider.*` 模型列表，或让插件返回

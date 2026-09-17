@@ -185,6 +185,7 @@ function toJobInput(body: Record<string, unknown>): JobInput {
 	return {
 		name: String(body.name ?? ""),
 		prompt: String(body.prompt ?? ""),
+		command: body.command === undefined ? undefined : body.command === null ? null : String(body.command),
 		cwd: String(body.cwd ?? process.cwd()),
 		trigger: toTrigger(body.trigger),
 		permission: body.permission ? (String(body.permission) as JobInput["permission"]) : undefined,
@@ -202,6 +203,7 @@ function toJobPatch(body: Record<string, unknown>): JobPatch {
 	const patch: JobPatch = {};
 	if (body.name !== undefined) patch.name = String(body.name);
 	if (body.prompt !== undefined) patch.prompt = String(body.prompt);
+	if (body.command !== undefined) patch.command = body.command === null ? null : String(body.command);
 	if (body.cwd !== undefined) patch.cwd = String(body.cwd);
 	if (body.trigger !== undefined) patch.trigger = toTrigger(body.trigger);
 	if (body.permission !== undefined) patch.permission = String(body.permission) as JobPatch["permission"];
@@ -449,7 +451,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 				return;
 			}
 			if (!record.sessionPath || !existsSync(record.sessionPath)) {
-				json(res, 409, { error: "该执行没有可续聊的会话文件（可能已被清理）" });
+				json(res, 409, {
+					error: record.command
+						? "命令型任务没有会话，不支持续聊（可修改任务后重新执行）"
+						: "该执行没有可续聊的会话文件（可能已被清理）",
+				});
 				return;
 			}
 			const next = await scheduler.trigger(job, {

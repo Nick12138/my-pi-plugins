@@ -34,6 +34,8 @@ const MISSED_WINDOWS: MissedWindow[] = ["catch_up_one", "skip"];
 export interface JobInput {
 	name: string;
 	prompt: string;
+	/** 命令型任务：非空时直接执行 shell 命令（不经模型），与 prompt 互斥。 */
+	command?: string | null;
 	cwd: string;
 	trigger: Trigger;
 	permission?: PermissionTier;
@@ -100,6 +102,17 @@ function assertTags(tags: string[] | undefined): string[] {
 	return tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 10);
 }
 
+/** 命令校验：非空（显式传 null/undefined 视为「不用命令型」）；与 prompt 互斥。 */
+function assertCommand(command: string | null | undefined): string | null {
+	if (command === null || command === undefined) return null;
+	const trimmed = command.trim();
+	if (!trimmed) return null;
+	if (trimmed.length > LIMITS.maxCommandChars) {
+		throw new ScheduleError(`command 过长（>${LIMITS.maxCommandChars}）`);
+	}
+	return trimmed;
+}
+
 export function createJob(input: JobInput, actor: Actor): Job {
 	const existing = listJobs();
 	if (existing.length >= LIMITS.maxJobs) {
@@ -111,10 +124,15 @@ export function createJob(input: JobInput, actor: Actor): Job {
 	const trigger = normalizeTrigger(input.trigger, now, timezone);
 	const permission = input.permission ?? DEFAULTS.permission;
 	if (!isPermissionTier(permission)) throw new ScheduleError(`permission 非法：${permission}`);
+	const command = assertCommand(input.command);
+	if (command && input.prompt?.trim()) {
+		throw new ScheduleError("command 与 prompt 互斥：命令型任务不需要 prompt");
+	}
 	const job: Job = {
 		id: newJobId(),
 		name: assertName(input.name),
-		prompt: assertPromptOk(input.prompt),
+		prompt: command ? "" : assertPromptOk(input.prompt),
+		command,
 		cwd: assertCwd(input.cwd),
 		enabled: input.enabled ?? true,
 		permission,
@@ -146,6 +164,8 @@ export function createJob(input: JobInput, actor: Actor): Job {
 export interface JobPatch {
 	name?: string;
 	prompt?: string;
+	/** 非空字符串切到命令型（自动清空 prompt）；null/空串切回模型型（需同时给 prompt）。 */
+	command?: string | null;
 	cwd?: string;
 	trigger?: Trigger;
 	permission?: PermissionTier;
@@ -167,6 +187,10 @@ export function updateJob(id: string, patch: JobPatch, actor: Actor): Job {
 	const next: Job = { ...current };
 	if (patch.name !== undefined) next.name = assertName(patch.name);
 	if (patch.prompt !== undefined) next.prompt = assertPromptOk(patch.prompt);
+	if (patch.command !== undefined) {
+		next.command = assertCommand(patch.command);
+		if (next.command) next.prompt = ""; // 切到命令型：prompt 不再使用
+	}
 	if (patch.cwd !== undefined) next.cwd = assertCwd(patch.cwd);
 	if (patch.trigger !== undefined) next.trigger = normalizeTrigger(patch.trigger, now, timezone);
 	if (patch.permission !== undefined) {
@@ -186,6 +210,10 @@ export function updateJob(id: string, patch: JobPatch, actor: Actor): Job {
 	if (patch.tags !== undefined) next.tags = assertTags(patch.tags);
 
 	const scheduleChanged = patch.trigger !== undefined;
+
+	if (!next.command && !next.prompt) {
+		throw new ScheduleError("任务缺少 prompt：非命令型任务必须有 prompt（或改用 command）");
+	}
 
 	// 用 patchJobsWith：补丁在锁内基于**最新 job** 计算，不会用陈旧快照
 	// 覆盖并发产生的新值（runCount/lastStatus/nextRunAt）——两个宿主共用一个
@@ -238,7 +266,9 @@ export function describeJob(job: Job, timezone = systemTimezone()): string {
 		`${state} ${job.name} (${job.id})`,
 		`  触发：${triggerLabel(job.trigger, timezone)}${job.enabled && !job.terminated ? ` · 下次 ${humanizeUntil(job.nextRunAt, new Date())}` : ""}`,
 		`  工作区：${job.cwd}`,
-		`  权限：${job.permission} · 模型：${model}`,
+		job.command
+			? `  命令型：${job.command}`
+			: `  权限：${job.permission} · 模型：${model}`,
 		job.lastStatus ? `  上次：${job.lastStatus}${job.lastRunAt ? ` @ ${formatLocal(job.lastRunAt, timezone)}` : ""} · 已跑 ${job.runCount} 次` : "  尚未执行",
 	];
 	return lines.join("\n");

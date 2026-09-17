@@ -10,6 +10,7 @@
 | 能力 | 说明 |
 |---|---|
 | 触发方式 | `cron`（5 段表达式，支持时区与 DST）/ `interval`（30m、2h、1d）/ `once`（绝对时刻）/ `manual`（仅手动） |
+| 命令型任务 | `command` 直接到点执行 shell 命令（python/node/git/ps1…）：**不经模型、无会话、零 token**，退出码即状态，输出进通知 |
 | 独立会话 | 每次执行 = `sessions/<jobId>/<runId>.jsonl`，标准 pi 会话文件 |
 | 历史与续聊 | run 记录 + 会话转录；`reply` 用 fork 语义继续（源文件不变） |
 | 选模型 | 每个任务可指定 `provider/id:thinking`；不指定用宿主默认；指定但不可用则**失败**而不是静默换模型 |
@@ -49,6 +50,10 @@ schedule(action:"list")
 schedule(action:"run_now", id:"a1b2c3d4")
 schedule(action:"history", id:"a1b2c3d4", limit:5)
 schedule(action:"reply", runId:"2fa6a8c56cc8", text:"继续分析第 3 条")
+
+// 命令型任务：不经模型，到点直接跑命令
+schedule(action:"create", name:"每日备份", trigger:"cron", cron:"0 2 * * *",
+         cwd:"D:/proj/foo", command:"python backup.py")
 ```
 
 ## HTTP 控制面
@@ -84,7 +89,7 @@ locks/                           单飞锁 / 写锁
 ## 开发
 
 ```bash
-node --test "packages/pi-schedule/test/*.test.ts"      # 单测（52 个，零 LLM 调用）
+node --test "packages/pi-schedule/test/*.test.ts"      # 单测（57 个，零 LLM 调用）
 node packages/pi-schedule/test/smoke.e2e.mjs         # 端到端冒烟：真跑一次 + fork 续聊
 node packages/pi-schedule/test/smoke.http.mjs        # HTTP 控制面冒烟（18 项）
 ```

@@ -248,6 +248,7 @@ function makeRun(job: { id: string; name: string }, runId: string, status: strin
 		toolCalls: 0,
 		error: null,
 		idempotencyKey: `${job.id}:${runId}`,
+		command: null,
 	};
 }
 

@@ -8,6 +8,7 @@
  * - noExtensions 默认开启，避免执行会话重复加载扩展（防递归 + 降开销）。
  */
 import { existsSync, mkdirSync } from "node:fs";
+import { exec } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -165,8 +166,10 @@ function inspectAssistantOutcome(messages: Array<{
  * 执行一次任务。返回最终 run 记录（含终态）。
  *
  * 该函数**不抛异常**：失败也会落一条 error run，保证历史完整。
+ * 命令型任务（job.command 非空）直接执行 shell 命令，不经模型。
  */
 export async function runJob(job: Job, options: RunOptions): Promise<RunRecord> {
+	if (job.command) return runCommandJob(job, options);
 	ensureRoot();
 	const trigger = options.trigger;
 	const runId = newRunId();
@@ -208,6 +211,7 @@ export async function runJob(job: Job, options: RunOptions): Promise<RunRecord> 
 		summary: "",
 		outputText: "",
 		toolCalls: 0,
+		command: null,
 		error: null,
 		idempotencyKey: `${job.id}:${options.scheduledFor ?? runId}`,
 	};
@@ -367,4 +371,87 @@ function aggregateUsage(messages: Array<{ role?: string; usage?: unknown }>): Us
 	}
 	if (!seen) return null;
 	return { input, output, total: input + output, cost };
+}
+
+/**
+ * 命令型任务执行：直接跑 shell 命令，不经模型、无执行会话。
+ *
+ * - shell 跟随系统（Windows=cmd，Unix=/bin/sh）；
+ * - timeoutMs 到点杀进程，保留已捕获的输出；
+ * - 退出码 0 → ok；非 0 → error；超时 → timeout；
+ * - stdout+stderr 写进 run 记录（summary），终态照常走 onRunFinished → 通知队列/会话。
+ */
+async function runCommandJob(job: Job, options: RunOptions): Promise<RunRecord> {
+	ensureRoot();
+	const runId = newRunId();
+	const startedAt = new Date();
+	const timeoutMs = options.timeoutMsOverride ?? job.timeoutMs;
+	const command = job.command!;
+
+	const record: RunRecord = {
+		runId,
+		jobId: job.id,
+		jobName: job.name,
+		trigger: options.trigger,
+		scheduledFor: options.scheduledFor ?? null,
+		startedAt: startedAt.toISOString(),
+		finishedAt: null,
+		status: "running",
+		cwd: job.cwd,
+		model: null,
+		permission: job.permission,
+		tools: [], // 不经模型：没有工具调用
+		sessionId: null,
+		sessionPath: null,
+		forkOf: options.forkOfRunId ?? null,
+		replyText: options.replyText ?? null,
+		usage: null,
+		summary: "",
+		outputText: "",
+		toolCalls: 0,
+		command,
+		error: null,
+		idempotencyKey: `${job.id}:${options.scheduledFor ?? runId}`,
+	};
+	writeRun(record);
+	options.onStatusChange?.(record);
+
+	await new Promise<void>((resolve) => {
+		exec(
+			command,
+			{ cwd: job.cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+			(error, stdout, stderr) => {
+				const combined = `${stdout ?? ""}${stderr ? (stdout ? "\n" : "") + stderr : ""}`.trim();
+				record.outputText = truncate(combined, LIMITS.maxOutputChars);
+				record.summary = summarize(record.outputText, LIMITS.maxSummaryChars);
+				if (error && (error as { killed?: boolean }).killed) {
+					record.status = "timeout";
+					record.error = `执行超时（${Math.round(timeoutMs / 1000)}s）`;
+				} else if (error) {
+					const code = (error as { code?: unknown }).code;
+					record.status = "error";
+					record.error = `退出码 ${String(code ?? "?")}：${truncate(String(stderr || error.message), 600)}`;
+				} else {
+					record.status = "ok";
+					record.error = null;
+				}
+				resolve();
+			},
+		);
+	});
+
+	record.finishedAt = new Date().toISOString();
+	writeRun(record);
+
+	appendLedger({
+		at: record.finishedAt,
+		event: record.status === "ok" ? "fire" : "error",
+		jobId: job.id,
+		jobName: job.name,
+		runId: record.runId,
+		detail: `command ${record.status}${record.error ? `: ${record.error}` : ""}`,
+	});
+
+	options.onStatusChange?.(record);
+	return record;
 }

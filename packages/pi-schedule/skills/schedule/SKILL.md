@@ -19,6 +19,22 @@ description: 'Create and manage scheduled agent tasks (cron / interval / once / 
 
 经验法则：**轮询/心跳用 interval；报告/审查用 cron**（`0 9 * * *` = 每天 9 点）。
 
+## 命令型任务（command）—— 不走模型的极速档
+
+用户明确要「直接跑命令、不要过 AI」时，用 `command` 参数代替 `prompt`：
+
+```text
+schedule(action:"create", name:"每日备份", trigger:"cron", cron:"0 2 * * *",
+  cwd:"D:/proj/foo", command:"python backup.py")
+```
+
+- **不经模型、无会话、零 token**：到点直接执行，shell 跟随系统（Windows=cmd，Unix=sh）
+- **退出码即状态**：0=ok；非 0=error（通知带退出码和 stderr）；卡死超时=timeout
+- **输出进通知**：stdout/stderr 截断后进 run 记录和通知（成功安静、失败必发会话）
+- `command` 与 `prompt` **互斥**；权限档/模型/续聊对它无意义（reply 返回 409）
+- 适合：备份、脚本跑批、git pull、清理临时文件等确定性任务；
+  需要 AI 判断/分析/总结的仍然用 prompt 型
+
 ## 权限（permission）—— 按任务**实际要跑什么**选
 
 | 档位 | 能用 | 什么时候用 |
@@ -71,6 +87,10 @@ schedule(action:"create", name:"提醒", trigger:"once", at:"2026-01-01T10:30:00
 # 指定模型 + 有界轮询（跑 10 次就停）
 schedule(action:"create", name:"部署观察", trigger:"interval", every:"5m", maxRuns:10,
   model:"5/deepseek-v4.1-flash:medium", permission:"full", prompt:"...")
+
+# 命令型：到点直接跑脚本，不经模型（零 token）
+schedule(action:"create", name:"每日备份", trigger:"cron", cron:"0 2 * * *",
+  cwd:"D:/proj/foo", command:"python backup.py")
 
 # 管理
 schedule(action:"list")
