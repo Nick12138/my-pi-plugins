@@ -9,6 +9,7 @@
  */
 import { existsSync, mkdirSync } from "node:fs";
 import { exec } from "node:child_process";
+import { decodeConsoleOutput } from "./console-decode.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -417,11 +418,15 @@ async function runCommandJob(job: Job, options: RunOptions): Promise<RunRecord> 
 	options.onStatusChange?.(record);
 
 	await new Promise<void>((resolve) => {
+		// encoding:"buffer"：Windows 中文系统控制台是 GBK，不能让 exec 按 utf-8 解码
+		//（中文会变成不可逆的 U+FFFD），拿原始字节交给 decodeConsoleOutput 处理。
 		exec(
 			command,
-			{ cwd: job.cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+			{ cwd: job.cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true, encoding: "buffer" },
 			(error, stdout, stderr) => {
-				const combined = `${stdout ?? ""}${stderr ? (stdout ? "\n" : "") + stderr : ""}`.trim();
+				const out = decodeConsoleOutput(stdout);
+				const err = decodeConsoleOutput(stderr);
+				const combined = `${out}${err ? (out ? "\n" : "") + err : ""}`.trim();
 				record.outputText = truncate(combined, LIMITS.maxOutputChars);
 				record.summary = summarize(record.outputText, LIMITS.maxSummaryChars);
 				if (error && (error as { killed?: boolean }).killed) {
@@ -430,7 +435,7 @@ async function runCommandJob(job: Job, options: RunOptions): Promise<RunRecord> 
 				} else if (error) {
 					const code = (error as { code?: unknown }).code;
 					record.status = "error";
-					record.error = `退出码 ${String(code ?? "?")}：${truncate(String(stderr || error.message), 600)}`;
+					record.error = `退出码 ${String(code ?? "?")}：${truncate(String(err || error.message), 600)}`;
 				} else {
 					record.status = "ok";
 					record.error = null;
