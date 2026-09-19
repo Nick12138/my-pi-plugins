@@ -93,6 +93,46 @@ test("notify：默认值 / patch 更新", () => {
 	deleteJob(job.id, { by: "test" });
 });
 
+test("updateJob：命令型任务全量回传 prompt:\"\" 不报错，command 不变", () => {
+	const job = createJob(
+		{ name: "cmd-edit", command: "echo hello", cwd: CWD, trigger: { type: "manual" } },
+		{ by: "test" },
+	);
+	assert.equal(job.command, "echo hello");
+	assert.equal(job.prompt, "");
+	// 面板编辑对话框会全量回传表单字段（含 prompt:""），应与 createJob 语义对齐
+	const updated = updateJob(
+		job.id,
+		{ prompt: "", command: "echo hello", name: "cmd-edit-renamed" },
+		{ by: "piabyss" },
+	);
+	assert.equal(updated.name, "cmd-edit-renamed");
+	assert.equal(updated.command, "echo hello", "command 不应被改动");
+	assert.equal(updated.prompt, "", "命令型任务的 prompt 应保持空串");
+	deleteJob(job.id, { by: "test" });
+});
+
+test("updateJob：命令型切回模型型（command:null）且不带 prompt 时报错", () => {
+	const job = createJob(
+		{ name: "cmd-switch-back", command: "echo hello", cwd: CWD, trigger: { type: "manual" } },
+		{ by: "test" },
+	);
+	assert.throws(
+		() => updateJob(job.id, { command: null }, { by: "test" }),
+		/任务缺少 prompt/,
+	);
+	deleteJob(job.id, { by: "test" });
+});
+
+test("updateJob：纯 prompt 型任务带空 prompt 仍报错", () => {
+	const job = makeJob("prompt-empty-guard");
+	assert.throws(
+		() => updateJob(job.id, { prompt: "" }, { by: "test" }),
+		/prompt（任务内容）不能为空/,
+	);
+	deleteJob(job.id, { by: "test" });
+});
+
 test("单飞锁：同 job 二次获取失败，释放后可再获取", () => {
 	const release1 = store.tryAcquireRunLock("joblock");
 	assert.ok(release1, "首次应获取成功");

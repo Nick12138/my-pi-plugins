@@ -199,10 +199,13 @@ export function updateJob(id: string, patch: JobPatch, actor: Actor): Job {
 
 	const next: Job = { ...current };
 	if (patch.name !== undefined) next.name = assertName(patch.name);
-	if (patch.prompt !== undefined) next.prompt = assertPromptOk(patch.prompt);
 	if (patch.command !== undefined) {
 		next.command = assertCommand(patch.command);
 		if (next.command) next.prompt = ""; // 切到命令型：prompt 不再使用
+	}
+	if (patch.prompt !== undefined) {
+		// 命令型任务的 prompt 恒为空串（面板全量回传表单时会带 prompt:""），不校验非空
+		next.prompt = next.command ? "" : assertPromptOk(patch.prompt);
 	}
 	if (patch.cwd !== undefined) next.cwd = assertCwd(patch.cwd);
 	if (patch.trigger !== undefined) next.trigger = normalizeTrigger(patch.trigger, now, timezone);
