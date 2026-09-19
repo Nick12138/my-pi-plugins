@@ -93,7 +93,12 @@ export function intervalToText(ms: number): string {
  * 时区优先级：**任务自己的 timezone 优先**，未指定才用传入的默认时区。
  * （曾经写反成 timezone ?? trigger.timezone，导致任务时区被系统时区静默吞掉。）
  */
-export function normalizeTrigger(trigger: Trigger, now: Date, timezone?: string): Trigger {
+export function normalizeTrigger(
+	trigger: Trigger,
+	now: Date,
+	timezone?: string,
+	options?: { allowPast?: boolean },
+): Trigger {
 	switch (trigger.type) {
 		case "manual":
 			return { type: "manual" };
@@ -102,8 +107,11 @@ export function normalizeTrigger(trigger: Trigger, now: Date, timezone?: string)
 			if (Number.isNaN(at.getTime())) {
 				throw new ScheduleError(`once.at 不是合法时间：${trigger.at}`);
 			}
-			if (at.getTime() <= now.getTime()) {
-				throw new ScheduleError(`once.at 必须晚于当前时间（${at.toISOString()}）`);
+			// 停用任务允许过去时间（如「复制」副本、先建后改），启用时才要求未来时刻
+			if (!options?.allowPast && at.getTime() <= now.getTime()) {
+				throw new ScheduleError(
+					`once.at 必须晚于当前时间（${formatLocal(at.toISOString(), timezone ?? systemTimezone())}）`,
+				);
 			}
 			return { type: "once", at: at.toISOString() };
 		}

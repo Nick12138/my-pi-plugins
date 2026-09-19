@@ -132,7 +132,9 @@ export function createJob(input: JobInput, actor: Actor): Job {
 
 	const now = new Date();
 	const timezone = systemTimezone();
-	const trigger = normalizeTrigger(input.trigger, now, timezone);
+	const trigger = normalizeTrigger(input.trigger, now, timezone, {
+		allowPast: input.enabled === false,
+	});
 	const permission = input.permission ?? DEFAULTS.permission;
 	if (!isPermissionTier(permission)) throw new ScheduleError(`permission 非法：${permission}`);
 	const command = assertCommand(input.command);
@@ -208,7 +210,11 @@ export function updateJob(id: string, patch: JobPatch, actor: Actor): Job {
 		next.prompt = next.command ? "" : assertPromptOk(patch.prompt);
 	}
 	if (patch.cwd !== undefined) next.cwd = assertCwd(patch.cwd);
-	if (patch.trigger !== undefined) next.trigger = normalizeTrigger(patch.trigger, now, timezone);
+	// 结果任务是否停用（patch.enabled 优先于当前值）：停用任务允许过去的一次性时刻
+	const effectiveEnabled = patch.enabled !== undefined ? Boolean(patch.enabled) : next.enabled;
+	if (patch.trigger !== undefined) {
+		next.trigger = normalizeTrigger(patch.trigger, now, timezone, { allowPast: !effectiveEnabled });
+	}
 	if (patch.permission !== undefined) {
 		if (!isPermissionTier(patch.permission)) throw new ScheduleError(`permission 非法：${patch.permission}`);
 		next.permission = patch.permission;
