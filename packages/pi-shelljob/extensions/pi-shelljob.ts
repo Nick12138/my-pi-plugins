@@ -30,6 +30,7 @@ import {
 	type ShellJobStatusData,
 } from "../src/store.ts";
 import { initRunner, killShellJob, spawnShellJob, startMonitorLoop } from "../src/runner.ts";
+import { createStopHandler, resolveControlPort, startControlServer, stopControlServer } from "../src/control.ts";
 
 const NOTIFY_MESSAGE_TYPE = "shelljob-notify";
 const DEFAULT_WAIT_MS = 30 * 60 * 1000;
@@ -45,6 +46,11 @@ interface SessionPipe {
 }
 const sessionPipes = new Map<string, SessionPipe>();
 let initialized = false;
+const CONTROL_STATE_KEY = Symbol.for("pi-shelljob.control-state");
+function controlState(): { started: boolean; sessions: Set<string> } {
+	const root = globalThis as unknown as Record<symbol, { started: boolean; sessions: Set<string> } | undefined>;
+	return (root[CONTROL_STATE_KEY] ??= { started: false, sessions: new Set() });
+}
 
 // ── 完成通知（精简版 Notifier：批量窗口 + 投递确认 + 失败重试）──
 
@@ -294,7 +300,7 @@ function executeLog(params: ShelljobParamsT): AgentToolResult<unknown> {
 	return text(head + prefix + body, { jobId: record.job.id, total, shown: lines.length });
 }
 
-function executeKill(jobId: string): AgentToolResult<unknown> {
+function executeKill(jobId: string): Promise<AgentToolResult<unknown>> | AgentToolResult<unknown> {
 	if (!jobId?.trim()) return text("kill 需要 jobId。");
 	const record = resolveJob(jobId);
 	if (!record) return text(`任务 ${jobId} 不存在。`);
@@ -432,6 +438,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		const sessionId = safeSessionId(ctx);
 		mySessionId = sessionId;
+		if (sessionId) controlState().sessions.add(sessionId);
 		if (sessionId) {
 			// 同一 sessionId 重入（重开/恢复会话）时先释放旧 pipe，避免旧 Notifier 的 5s 定时器泄漏
 			sessionPipes.get(sessionId)?.notifier.dispose();
@@ -444,6 +451,19 @@ export default function (pi: ExtensionAPI) {
 			sessionPipes.set(sessionId, pipe);
 		}
 		initRunner({ maxLogBytes: maxLogBytes(), settle });
+		const state = controlState();
+		if (!state.started) {
+			state.started = true;
+			const stopHandler = createStopHandler({
+				load: loadJobRecord,
+				isTerminal,
+				kill: killShellJob,
+			});
+			void startControlServer(stopHandler, resolveControlPort()).catch((error: unknown) => {
+				state.started = false;
+				console.error(`[pi-shelljob] control endpoint startup failed: ${error instanceof Error ? error.message : String(error)}`);
+			});
+		}
 		if (!initialized) {
 			initialized = true;
 			// 进程级监控：接管宿主重启遗留的 running 任务（僵尸定终态 + 超时兜底）
@@ -468,6 +488,13 @@ export default function (pi: ExtensionAPI) {
 			sessionPipes.get(mySessionId)?.notifier.dispose();
 			sessionPipes.delete(mySessionId);
 		}
+		if (mySessionId) controlState().sessions.delete(mySessionId);
 		mySessionId = null;
+		const state = controlState();
+		if (state.sessions.size === 0 && state.started) {
+			stopControlServer();
+			state.started = false;
+		}
 	});
+
 }

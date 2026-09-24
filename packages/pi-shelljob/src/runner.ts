@@ -24,6 +24,9 @@ interface LiveChild {
 const liveChildren = new Map<string, LiveChild>();
 /** kill 在途的任务：期间 exit 事件不自行定终态，由 killShellJob 统一按终止原因落盘 */
 const killing = new Set<string>();
+/** Single-flight per job: duplicate requests share the actual kill result. */
+const killOperations = new Map<string, Promise<{ ok: boolean; error?: string }>>();
+const exitsDuringKill = new Map<string, { code: number | null; signal: NodeJS.Signals | null }>();
 
 export interface SpawnDeps {
 	/** 单任务日志保护上限：超过后保护性 kill（防失控输出塞满磁盘） */
@@ -91,9 +94,12 @@ export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 	child.on("exit", (code, signal) => {
 		liveChildren.delete(job.id);
 		if (live.timer) clearTimeout(live.timer);
-		// kill 在途：终态由 killShellJob 统一按终止原因写入，避免 taskkill 引起的
-		// exit(1) 抢先落成 failed（丢失“手动终止/超时”语义）
-		if (killing.has(job.id)) return;
+		// kill 在途时暂存真实 exit：先区分“自然退出抢先发生”和“kill 导致退出”，
+		// 后者仍由 killShellJob 统一按终止原因落盘。
+		if (killing.has(job.id)) {
+			exitsDuringKill.set(job.id, { code, signal });
+			return;
+		}
 		const st = readStatus(job.id);
 		// kill/超时已先行定终态（killed/failed），exit 只兜底正常退出
 		if (st && isTerminal(st)) return;
@@ -112,7 +118,20 @@ export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 
 /** 终止任务：Windows taskkill /T /F 杀整棵进程树；Unix 杀 detached 进程组。
  * timedOut/reason 非空时终态记为 failed（带原因），否则记为 killed。 */
-export async function killShellJob(
+export function killShellJob(
+	jobId: string,
+	opts?: { timedOut?: boolean; reason?: string },
+): Promise<{ ok: boolean; error?: string }> {
+	const existing = killOperations.get(jobId);
+	if (existing) return existing;
+	const operation = killShellJobOnce(jobId, opts).finally(() => {
+		if (killOperations.get(jobId) === operation) killOperations.delete(jobId);
+	});
+	killOperations.set(jobId, operation);
+	return operation;
+}
+
+async function killShellJobOnce(
 	jobId: string,
 	opts?: { timedOut?: boolean; reason?: string },
 ): Promise<{ ok: boolean; error?: string }> {
@@ -124,6 +143,18 @@ export async function killShellJob(
 
 	const live = liveChildren.get(jobId);
 	killing.add(jobId);
+	// Fence the exit listener before the async liveness check. If it has already
+	// exited, preserve its real outcome instead of claiming a user stop.
+	if (!(await isProcessAlive(pid))) {
+		killing.delete(jobId);
+		const exited = exitsDuringKill.get(jobId);
+		exitsDuringKill.delete(jobId);
+		if (live?.timer) clearTimeout(live.timer);
+		if (exited?.signal) deps?.settle(jobId, { status: "killed", finishedAt: Date.now(), errorMessage: `被信号 ${exited.signal} 终止` });
+		else if (exited) deps?.settle(jobId, { status: exited.code === 0 ? "succeeded" : "failed", exitCode: exited.code ?? undefined, finishedAt: Date.now() });
+		else deps?.settle(jobId, { status: "interrupted", finishedAt: Date.now(), errorMessage: "进程已退出，退出码未知" });
+		return { ok: false, error: "进程已退出，任务已按自然结束收尾" };
+	}
 	let ok = true;
 	let error: string | undefined;
 	try {
@@ -153,6 +184,7 @@ export async function killShellJob(
 	} finally {
 		killing.delete(jobId);
 	}
+	exitsDuringKill.delete(jobId);
 
 	if (!ok) {
 		// kill 失败：不落终态，否则谎报成功且丢失真实运行状态；超时 timer 也已失效，重置为 null

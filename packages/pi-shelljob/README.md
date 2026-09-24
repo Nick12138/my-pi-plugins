@@ -50,6 +50,23 @@
 | 默认单任务超时 | `SHELLJOB_DEFAULT_TIMEOUT_MS` | `0`（不限） | 未显式传 `timeoutMs` 时生效 |
 | 单任务日志保护上限 | `SHELLJOB_MAX_LOG_BYTES` | `5242880`（5MB） | 超过后保护性 kill，防失控输出塞满磁盘 |
 
+## PiAbyss Host 停止接口
+
+扩展在首个会话启动时额外启动一个仅绑定 `127.0.0.1` 的窄权限 HTTP 控制面（默认 `18767`，可用 `SHELLJOB_CONTROL_PORT` 配置）。它只接受停止动作，内部走 `killShellJob()`，由既有 settle/Notifier 链路通知任务所属 Agent；Host 不应再发送 prompt/followUp。
+
+```http
+POST http://127.0.0.1:18767/api/jobs/stop
+X-Pi-Shelljob-Token: <~/.pi/shelljob/token>
+X-Pi-Session-Id: <当前 UI 会话对应的 Pi sessionId>
+Content-Type: application/json
+
+{"jobId":"job_..."}
+```
+
+响应状态：成功停止 `{ok:true,status:"killed",jobId}`；目标已结束 `{ok:true,status:"already_ended",jobId,state}`；缺失 `404 {ok:false,status:"not_found",jobId}`；任务不属于给定 session `403 {ok:false,status:"forbidden",jobId,error}`；杀进程失败仍运行 `500 {ok:false,status:"failed",jobId,error}`。请求体仅允许 `jobId`。认证失败为 401，Host 非回环为 403，格式错误为 400。
+
+Token 首次生成到 `~/.pi/shelljob/token`（文件权限 0600），也可由 `SHELLJOB_CONTROL_TOKEN` 注入；写请求必须用 header。PiAbyss Host 必须保管该 bearer 凭据并仅向当前会话 UI 转发控制请求，同时以可信的当前 Pi sessionId 设置 `X-Pi-Session-Id`。端点在首个会话启动时开启、最后一个会话关闭时关闭，插件扩展重载时由进程级服务单例防重复监听。
+
 ## 命令
 
 - `/shelljobs`：列出全部后台任务及状态
