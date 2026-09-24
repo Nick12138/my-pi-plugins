@@ -30,7 +30,7 @@ import {
 	type ShellJobStatusData,
 } from "../src/store.ts";
 import { initRunner, killShellJob, spawnShellJob, startMonitorLoop } from "../src/runner.ts";
-import { createStopHandler, resolveControlPort, startControlServer, stopControlServer } from "../src/control.ts";
+import { createStopHandler, resolveControlPort, resolveControlToken, startControlServer, stopControlServer } from "../src/control.ts";
 
 const NOTIFY_MESSAGE_TYPE = "shelljob-notify";
 const DEFAULT_WAIT_MS = 30 * 60 * 1000;
@@ -313,6 +313,14 @@ function executeKill(jobId: string): Promise<AgentToolResult<unknown>> | AgentTo
 // ── 扩展入口 ─────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// Prepare the Host credential as soon as Pi loads the extension, not on the
+	// first UI stop request. This avoids a startup race where Host checks the
+	// token before session_start has opened the control server.
+	try {
+		resolveControlToken();
+	} catch (error) {
+		console.error(`[pi-shelljob] cannot prepare control token: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	let mySessionId: string | null = null;
 
 	pi.registerTool({

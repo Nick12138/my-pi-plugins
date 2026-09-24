@@ -1,7 +1,7 @@
 /** Authenticated loopback control plane for the PiAbyss UI. */
 import * as http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -40,22 +40,34 @@ let activeHandler: StopHandler | null = null;
 let authToken: string | null = null;
 
 export function resolveControlToken(): string {
-	const fromEnv = process.env[TOKEN_ENV]?.trim();
-	if (fromEnv) return fromEnv;
 	const file = path.join(ROOT, "token");
+	const fromEnv = process.env[TOKEN_ENV]?.trim();
+	if (fromEnv) {
+		// PiAbyss reads the token file; keep it aligned with explicit plugin config.
+		mkdirSync(ROOT, { recursive: true, mode: 0o700 });
+		writeFileSync(file, fromEnv, { encoding: "utf8", mode: 0o600 });
+		try { chmodSync(file, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }
+		return fromEnv;
+	}
 	try {
 		const existing = readFileSync(file, "utf8").trim();
-		if (existing) return existing;
+		if (existing) {
+			try { chmodSync(file, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }
+			return existing;
+		}
 	} catch { /* create token */ }
 	const value = randomBytes(32).toString("hex");
+	mkdirSync(ROOT, { recursive: true, mode: 0o700 });
 	try {
-		mkdirSync(ROOT, { recursive: true, mode: 0o700 });
-		try { writeFileSync(file, value, { encoding: "utf8", mode: 0o600, flag: "wx" }); }
-		catch {
-			const winner = readFileSync(file, "utf8").trim();
-			if (winner) return winner;
-		}
-	} catch { /* memory-only token */ }
+		writeFileSync(file, value, { encoding: "utf8", mode: 0o600, flag: "wx" });
+	} catch {
+		// Another plugin instance may have won the create race. Never silently
+		// fall back to a memory-only token: PiAbyss must be able to read it.
+		const winner = readFileSync(file, "utf8").trim();
+		if (!winner) throw new Error(`shelljob token file is empty: ${file}`);
+		try { chmodSync(file, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }
+		return winner;
+	}
 	return value;
 }
 function token(): string { return authToken ??= resolveControlToken(); }
@@ -77,6 +89,9 @@ export function resolveControlPort(): number {
 }
 
 export function startControlServer(handler: StopHandler, port = resolveControlPort()): Promise<number> {
+	// Resolve/persist credentials synchronously before reporting the endpoint as
+	// ready. The Host can safely read ~/.pi/shelljob/token after session_start.
+	token();
 	activeHandler = handler;
 	if (server) {
 		const addr = server.address();

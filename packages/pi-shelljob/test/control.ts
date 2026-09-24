@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { createStopHandler, startControlServer, stopControlServer } from "../src/control.ts";
+import { createStopHandler, resolveControlToken, startControlServer, stopControlServer } from "../src/control.ts";
 
 process.env.SHELLJOB_CONTROL_TOKEN = "control-test-token";
+assert.equal(resolveControlToken(), "control-test-token", "configured token is available before server startup");
 const jobId = "job_test123";
 let state = "running";
 let kills = 0;
