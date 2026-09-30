@@ -1,7 +1,7 @@
 {
   "name": "pi-computer-control",
-  "version": "0.1.0",
-  "description": "Pi extension: let the AI see and operate the real desktop (screenshot, click, drag, type incl. CJK, key combos, scroll).",
+  "version": "0.2.0",
+  "description": "Pi extension: let the AI see and operate the real desktop (screenshots incl. per-window, foreground & background input, window management, UIA element-level find/invoke; CJK supported).",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -9,7 +9,9 @@
     "pi-extension",
     "computer-use",
     "desktop-automation",
-    "windows"
+    "windows",
+    "uia",
+    "window-management"
   ],
   "pi": {
     "extensions": [
