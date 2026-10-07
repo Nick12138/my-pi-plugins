@@ -2,18 +2,28 @@
   "name": "my-pi-plugins",
   "version": "0.1.0",
   "description": "My collection of pi coding agent plugins. Currently includes pi-web: a minimal web search plugin (Tavily + free Exa MCP).",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "author": "Nick12138",
   "repository": "github:Nick12138/my-pi-plugins",
   "type": "module",
   "pi": {
-    "extensions": ["./packages/*/extensions"]
+    "extensions": [
+      "./packages/*/extensions"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

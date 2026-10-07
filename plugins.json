@@ -147,6 +147,74 @@
       ]
     },
     {
+      "id": "pi-ask-user-question",
+      "name": "提问问卷",
+      "description": "ask_user_question 工具：向用户发起结构化问卷（最多 4 题、每题 2-4 选项），支持单选/多选/自由文本补充；选项元数据（optionDetails、allowFreeform）供桌面端渲染下拉与输入框。源自 PiAbyss 内置工具外移，details 信封 { answers, cancelled } 与桌面端兼容。可在 PiAbyss 设置页用“提问工具”开关整体启停。",
+      "icon": "❓",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "提问",
+        "问卷",
+        "用户交互"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-ask-user-question"
+      }
+    },
+    {
+      "id": "piabyss-memo",
+      "name": "PiAbyss 备忘录",
+      "description": "piabyss_memo 工具：PiAbyss 备忘录板的 Agent 侧读写（list/complete/reopen/update），complete 覆盖式写入结果并记录会话信息。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面备忘录页面/同步引擎共用同一文件）。",
+      "icon": "📌",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "备忘录",
+        "memo",
+        "PiAbyss"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/piabyss-memo"
+      }
+    },
+    {
+      "id": "piabyss-present-files",
+      "name": "PiAbyss 文件交付",
+      "description": "piabyss_present_files 工具：声明本次交付给用户的文件清单（路径 + 可选标签），PiAbyss 桌面端按工具名从会话历史还原文件胶囊；对路径做 stat 软校验（缺失仅警告不阻断），不落盘不改状态。",
+      "icon": "📎",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "文件交付",
+        "PiAbyss",
+        "声明式"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/piabyss-present-files"
+      }
+    },
+    {
+      "id": "pi-pixie",
+      "name": "Pixie 委派",
+      "description": "pixie_dispatch / pixie_report 工具壳：把任务派发给常驻小精灵会话并在完成后回调结果；委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT）转发请求。dispatch 仅在常驻小精灵会话激活，report 仅在已派发（armed）会话可见，普通工作区会话不可见。",
+      "icon": "🧚",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "pixie",
+        "委派",
+        "PiAbyss"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-pixie"
+      }
+    },
+    {
       "id": "pi-todo",
       "name": "Agent 任务列表",
       "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",

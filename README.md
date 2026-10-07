@@ -33,6 +33,10 @@ my-pi-plugins/
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
 | **⚡ [pi-shelljob](packages/pi-shelljob)** | 后台 Shell：长任务（构建/装依赖/dev server/批量转换）提交后台立即返回，完成自动通知主 agent；短任务仍用同步 bash，进程树终止、跨会话任务落盘 |
 | **⏰ [pi-schedule](packages/pi-schedule)** | 定时任务：cron / 周期 / 一次性 / 仅手动；每次执行在**独立新会话**里跑（不污染对话），历史可查可 fork 续聊；按工作区、选模型、三档权限白名单、超时与 maxRuns 有界执行；文件即真相源 + 本地 HTTP 控制面供面板对接 |
+| **❓ [pi-ask-user-question](packages/pi-ask-user-question)** | 提问问卷：ask_user_question 工具（最多 4 题、每题 2-4 选项、多选/自由文本），源自 PiAbyss 内置工具外移，details 信封与桌面端兼容；设置页“提问工具”开关可整体启停 |
+| **📌 [piabyss-memo](packages/piabyss-memo)** | PiAbyss 备忘录：piabyss_memo 工具（list/complete/reopen/update），磁盘格式/软删除墓碑/原子写与 PiAbyss Host 完全一致，桌面备忘录页面共用同一份 notes.json |
+| **📎 [piabyss-present-files](packages/piabyss-present-files)** | PiAbyss 文件交付：piabyss_present_files 工具声明交付文件清单，桌面端按工具名从会话历史还原文件胶囊（纯声明式，不落盘） |
+| **🧚 [pi-pixie](packages/pi-pixie)** | Pixie 委派：pixie_dispatch / pixie_report 工具壳，经环回 HTTP 控制面调用 PiAbyss Host 委派引擎；dispatch 仅常驻小精灵会话可见，report 仅已派发（armed）会话可见 |
 
 ## 手动安装（不走 PiDeck 时）
 
