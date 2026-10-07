@@ -78,6 +78,7 @@ pi install git:github.com/Nick12138/my-pi-plugins
 | `author` | string | - | 作者 |
 | `tags` | string[] | - | 分类标签 |
 | `install` | object | ✓ | 安装源，见下 |
+| `toggleScopes` | string[] | - | 启用/禁用开关允许写到哪些作用域：`["user"]` = 只能全局启停（工作区视图不提供开关）；**省略 = `["user", "project"]`**（全局 + 每个工作区各自覆盖） |
 | `config` | ConfigItem[] | - | **省略 = 该插件无需配置** |
 
 ### 安装源（install）
@@ -97,6 +98,10 @@ pi install git:github.com/Nick12138/my-pi-plugins
   git 源加入 `settings.json`，并用对象形式把 `extensions` 过滤到该 path（见上面的示例）。
 - `type: "npm" / "git"`：`source` 原样写入 `settings.json` 的 `packages`。
 - 启用/禁用 = 在 `settings.json` 中增删/调过滤条目（或调 `pi config` 等价逻辑）。
+- 作用域：默认插件在两处都能开关——「全局」写用户级偏好（所有工作区继承），
+  「工作区」写该工作区的 `.pi/settings.json` 覆盖。声明 `"toggleScopes": ["user"]`
+  的插件不提供工作区开关（如 `piabyss-memo` / `pi-pixie` 这类与桌面端全局状态耦合的插件）；
+  该字段由前端消费，登记后无需改插件代码。
 
 ### 配置规范（config）
 

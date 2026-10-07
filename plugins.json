@@ -178,7 +178,10 @@
       "install": {
         "type": "repo",
         "path": "packages/piabyss-memo"
-      }
+      },
+      "toggleScopes": [
+        "user"
+      ]
     },
     {
       "id": "piabyss-present-files",
@@ -212,7 +215,10 @@
       "install": {
         "type": "repo",
         "path": "packages/pi-pixie"
-      }
+      },
+      "toggleScopes": [
+        "user"
+      ]
     },
     {
       "id": "pi-todo",
