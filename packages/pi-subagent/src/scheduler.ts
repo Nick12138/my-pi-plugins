@@ -7,6 +7,14 @@ import { createWorktree, isGitRepo } from "./worktree.ts";
 import type { RunRecord, RunResultData, RunTask } from "./types.ts";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_RETRY, MAX_RESUME_COUNT } from "./types.ts";
 import { statSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	channelDir,
+	ensureSteerDirs,
+	steerRequestPath,
+	writeAtomicJson,
+	type SteerRequest,
+} from "./supervisor-protocol.ts";
 
 export interface SchedulerDeps {
 	maxConcurrency: number;
@@ -340,8 +348,49 @@ class Scheduler {
 		return { ok: true };
 	}
 
+	/** 用户消息发送（PiAbyss 子代理会话视图输入框）：
+	 *  - running/paused → 写入 steer 信箱，子进程侧轮询注入为 user 消息
+	 *  - 终态（completed/failed/stopped/interrupted）→ 同 session-id 以新消息续跑 */
+	async send(runId: string, message: string, operator: "user" | "agent" = "user"): Promise<{ ok: boolean; mode?: "steer" | "resume"; error?: string }> {
+		const status = readStatus(runId);
+		const task = readTask(runId);
+		if (!status || !task) return { ok: false, error: "run 不存在" };
+		const text = message.trim();
+		if (!text) return { ok: false, error: "消息内容为空" };
+		if (status.status === "pending") return { ok: false, error: "run 还在排队中，无法发送消息" };
+		if (status.status === "running" || status.status === "paused") {
+			const steerDir = channelDir(task.id, task.agent);
+			try {
+				ensureSteerDirs(steerDir);
+				const request: SteerRequest = {
+					type: "subagent.steer.request",
+					id: randomUUID(),
+					createdAt: Date.now(),
+					message: text,
+					mode: "steer",
+					runId: task.id,
+					agent: task.agent,
+					childIndex: 0,
+				};
+				writeAtomicJson(steerRequestPath(steerDir, request.id), request);
+			} catch (error) {
+				return { ok: false, error: `发送失败：${error instanceof Error ? error.message : String(error)}` };
+			}
+			return { ok: true, mode: "steer" };
+		}
+		// 终态：以新消息续跑
+		if (status.resumeCount >= MAX_RESUME_COUNT) {
+			return { ok: false, error: `恢复次数已达上限 ${MAX_RESUME_COUNT} 次` };
+		}
+		status.resumeCount += 1;
+		status.lastError = status.lastError || status.errorMessage || "用户追加指令";
+		writeStatus(runId, { ...status, status: "running", operator });
+		this.spawnResume(runId, task, { message: text });
+		return { ok: true, mode: "resume" };
+	}
+
 	/** 用同 session-id 续跑（自动重试与手动恢复共用）。内部负责 active 登记 + exit 监听。 */
-	private spawnResume(runId: string, task: RunTask, opts?: { model?: string; inheritModel?: boolean }): void {
+	private spawnResume(runId: string, task: RunTask, opts?: { model?: string; inheritModel?: boolean; message?: string }): void {
 		const status = readStatus(runId)!;
 		// inheritModel：忽略 task.model，用继承的主 agent 模型（兜底场景）
 		const effectiveTask = opts?.inheritModel ? { ...task, model: undefined } : opts?.model ? { ...task, model: opts.model } : task;
@@ -353,6 +402,7 @@ class Scheduler {
 			resume: true,
 			lastError: status.lastError,
 			projectTrusted: this.deps.projectTrusted,
+			...(opts?.message ? { message: opts.message } : {}),
 		});
 		this.active.set(runId, { handle });
 		this.monitorSet.add(runId);

@@ -21,6 +21,9 @@ export interface SpawnOptions {
 	lastError?: string;
 	/** 项目信任：--approve / --no-approve */
 	projectTrusted?: boolean;
+	/** 用户追加消息（PiAbyss 子代理会话视图输入框）：终态续跑时作为新指令
+	 * 写入 prompt，优先于恢复模板。 */
+	message?: string;
 }
 
 /** PATH 上是否有 pi 命令（agent CLI）。探测一次并缓存。 */
@@ -145,7 +148,13 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 		options.resume === true
 			? `\n\n--- 恢复运行 ---\n你上次执行此任务时因以下原因中断：${options.lastError ?? "未知原因"}\n已完成的工作仍然有效，会话历史已保留。请先检查当前实际进度，只继续完成剩余部分（包括最终总结），不要重复已完成的工作。`
 			: "";
-	fs.writeFileSync(promptFile, `Task: ${task.task}${resumeNote}`, "utf-8");
+	// 用户追加消息（终态续跑）：新指令优先于恢复模板，附带上次中断原因。
+	const followUpNote = options.message
+		? `\n\n--- 用户新指令 ---\n${options.message}${
+				options.resume === true && options.lastError ? `\n（上次中断原因：${options.lastError}）` : ""
+			}`
+		: "";
+	fs.writeFileSync(promptFile, `Task: ${task.task}${followUpNote || resumeNote}`, "utf-8");
 	args.push(`@${promptFile}`);
 
 	return args;

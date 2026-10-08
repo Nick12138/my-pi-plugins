@@ -18,6 +18,38 @@ function json(res: http.ServerResponse, code: number, data: unknown): void {
 	res.end(body);
 }
 
+/** 读取请求 JSON body（上限 128KB；解析失败/超限返回 undefined）。 */
+function readBody(req: http.IncomingMessage): Promise<unknown> {
+	return new Promise((resolve) => {
+		const chunks: Buffer[] = [];
+		let size = 0;
+		let settled = false;
+		const finish = (value: unknown): void => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
+		req.on("data", (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > 128 * 1024) {
+				req.destroy();
+				finish(undefined);
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on("end", () => {
+			if (chunks.length === 0) return finish(undefined);
+			try {
+				finish(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+			} catch {
+				finish(undefined);
+			}
+		});
+		req.on("error", () => finish(undefined));
+	});
+}
+
 /** 列表项（前端需要的精简字段） */
 function toSummary(run: RunRecord): Record<string, unknown> {
 	const { task, status, result } = run;
@@ -135,6 +167,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
 		if (req.method === "POST" && parts[3] === "resume") {
 			const outcome = await scheduler.resume(runId, undefined, "user");
+			json(res, outcome.ok ? 200 : 400, outcome);
+			return;
+		}
+
+		if (req.method === "POST" && parts[3] === "send") {
+			const body = (await readBody(req)) as { message?: unknown } | undefined;
+			const message = typeof body?.message === "string" ? body.message : "";
+			const outcome = await scheduler.send(runId, message, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}
