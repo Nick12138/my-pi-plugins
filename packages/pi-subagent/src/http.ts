@@ -62,6 +62,7 @@ function toSummary(run: RunRecord): Record<string, unknown> {
 		statusLabel: STATUS_LABEL[status.status],
 		pid: status.pid ?? null,
 		model: result?.model ?? task.model ?? null,
+		thinking: task.thinking ?? null,
 		createdAt: task.createdAt,
 		startedAt: status.startedAt ?? null,
 		finishedAt: status.finishedAt ?? null,
@@ -166,15 +167,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 		}
 
 		if (req.method === "POST" && parts[3] === "resume") {
-			const outcome = await scheduler.resume(runId, undefined, "user");
+			const body = (await readBody(req)) as { model?: unknown; thinking?: unknown } | undefined;
+			const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+			const thinking = typeof body?.thinking === "string" && body.thinking.trim() ? body.thinking.trim() : undefined;
+			const outcome = await scheduler.resume(runId, { ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) }, "user");
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}
 
 		if (req.method === "POST" && parts[3] === "send") {
-			const body = (await readBody(req)) as { message?: unknown } | undefined;
+			const body = (await readBody(req)) as { message?: unknown; model?: unknown; thinking?: unknown } | undefined;
 			const message = typeof body?.message === "string" ? body.message : "";
-			const outcome = await scheduler.send(runId, message, "user");
+			const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+			const thinking = typeof body?.thinking === "string" && body.thinking.trim() ? body.thinking.trim() : undefined;
+			const outcome = await scheduler.send(runId, message, "user", { ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) });
 			json(res, outcome.ok ? 200 : 400, outcome);
 			return;
 		}

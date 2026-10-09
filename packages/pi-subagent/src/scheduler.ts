@@ -329,8 +329,10 @@ class Scheduler {
 		return { ok: true };
 	}
 
-	/** 手动恢复：failed/interrupted/stopped 的 run，同 session-id 续跑 */
-	async resume(runId: string, opts?: { model?: string }, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
+	/** 手动恢复：failed/interrupted/stopped 的 run，同 session-id 续跑。
+	 *  opts.model / opts.thinking 作为下一次 spawn 的显式覆盖；未显式指定模型时
+	 *  忽略原 task.model（上次的模型已失败），回退继承主 agent。 */
+	async resume(runId: string, opts?: { model?: string; thinking?: string }, operator: "user" | "agent" = "agent"): Promise<{ ok: boolean; error?: string }> {
 		const status = readStatus(runId);
 		const task = readTask(runId);
 		if (!status || !task) return { ok: false, error: "run 不存在" };
@@ -343,15 +345,18 @@ class Scheduler {
 		status.resumeCount += 1;
 		status.lastError = status.lastError || status.errorMessage || "手动恢复";
 		writeStatus(runId, { ...status, status: "running", operator });
-		// resume 未显式指定模型时，忽略原 task.model（上次的模型已失败），回退继承主 agent
-		this.spawnResume(runId, opts?.model ? task : { ...task, model: undefined });
+		// 显式模型走 model 覆盖；否则 inheritModel 忽略 task.model 继承主 agent。
+		this.spawnResume(runId, task, {
+			...(opts?.model !== undefined ? { model: opts.model } : { inheritModel: true }),
+			...(opts?.thinking !== undefined ? { thinking: opts.thinking } : {}),
+		});
 		return { ok: true };
 	}
 
 	/** 用户消息发送（PiAbyss 子代理会话视图输入框）：
-	 *  - running/paused → 写入 steer 信箱，子进程侧轮询注入为 user 消息
-	 *  - 终态（completed/failed/stopped/interrupted）→ 同 session-id 以新消息续跑 */
-	async send(runId: string, message: string, operator: "user" | "agent" = "user"): Promise<{ ok: boolean; mode?: "steer" | "resume"; error?: string }> {
+	 *  - running/paused → 写入 steer 信箱，子进程侧轮询注入为 user 消息（opts.model/thinking 无法热切换，忽略）
+	 *  - 终态（completed/failed/stopped/interrupted）→ 同 session-id 以新消息续跑；opts.model / opts.thinking 作为下一次 spawn 的覆盖 */
+	async send(runId: string, message: string, operator: "user" | "agent" = "user", opts?: { model?: string; thinking?: string }): Promise<{ ok: boolean; mode?: "steer" | "resume"; error?: string }> {
 		const status = readStatus(runId);
 		const task = readTask(runId);
 		if (!status || !task) return { ok: false, error: "run 不存在" };
@@ -385,15 +390,27 @@ class Scheduler {
 		status.resumeCount += 1;
 		status.lastError = status.lastError || status.errorMessage || "用户追加指令";
 		writeStatus(runId, { ...status, status: "running", operator });
-		this.spawnResume(runId, task, { message: text });
+		this.spawnResume(runId, task, {
+			message: text,
+			...(opts?.model !== undefined ? { model: opts.model } : {}),
+			...(opts?.thinking !== undefined ? { thinking: opts.thinking } : {}),
+		});
 		return { ok: true, mode: "resume" };
 	}
 
 	/** 用同 session-id 续跑（自动重试与手动恢复共用）。内部负责 active 登记 + exit 监听。 */
-	private spawnResume(runId: string, task: RunTask, opts?: { model?: string; inheritModel?: boolean; message?: string }): void {
+	private spawnResume(runId: string, task: RunTask, opts?: { model?: string; thinking?: string; inheritModel?: boolean; message?: string }): void {
 		const status = readStatus(runId)!;
-		// inheritModel：忽略 task.model，用继承的主 agent 模型（兜底场景）
-		const effectiveTask = opts?.inheritModel ? { ...task, model: undefined } : opts?.model ? { ...task, model: opts.model } : task;
+		// inheritModel：忽略 task.model，用继承的主 agent 模型（兜底场景，
+		// 优先于 model 覆盖）；model / thinking 为下一次 spawn 的显式覆盖。
+		const hasOverride = opts?.model !== undefined || opts?.thinking !== undefined;
+		const effectiveTask: RunTask = { ...task };
+		if (opts?.inheritModel) effectiveTask.model = undefined;
+		else if (opts?.model !== undefined) effectiveTask.model = opts.model;
+		if (opts?.thinking !== undefined) effectiveTask.thinking = opts.thinking;
+		// 显式覆盖时固化回 task.json：run 列表/会话视图的字段随之更新，
+		// 续跑失败后的自动重试也不会换回旧值。
+		if (hasOverride) writeTask(effectiveTask);
 		const { model, thinking } = this.deps.resolveModel(effectiveTask);
 		const handle = spawnChild({
 			task: effectiveTask,
