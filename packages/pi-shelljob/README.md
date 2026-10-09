@@ -9,7 +9,7 @@
 | `shelljob` | `submit`（默认）提交后台命令；`list` 列表；`log` 看输出尾部；`kill` 终止（杀整棵进程树） |
 | `shell_wait` | 阻塞等待任务完成（单任务 / 本会话全部），支持超时与中止；超时后任务在后台继续 |
 
-命令经由系统 shell 解释（Windows 为 cmd，Unix 为 sh），支持管道、重定向等一切 shell 语法。
+命令以 POSIX shell 语法执行：Unix 为 `sh -c`；Windows 下自动探测 Git Bash（优先 `SHELL` 环境变量，探测不到时回退 cmd）并以 `bash -lc` 启动——与同步 bash 工具同一 shell，无需区分两套语法，中文输出也不再因 cmd 的 GBK 代码页而乱码。支持管道、重定向等一切 shell 语法。
 
 ## 使用边界（写进 promptGuidelines）
 
@@ -32,16 +32,16 @@
 
 | | Windows | Unix |
 | --- | --- | --- |
-| 进程模式 | 非 detached（CREATE_NEW_PROCESS_GROUP 下 cmd 不执行命令且静默返回 0，实测不可用） | `detached`（setsid 语义，完全脱离会话） |
+| 进程模式 | 非 detached（CREATE_NEW_PROCESS_GROUP 下 cmd 不执行命令且静默返回 0，实测不可用）；shell 优先为探测到的 Git Bash（`bash -lc`），无 bash 时为 cmd | `detached`（setsid 语义，完全脱离会话），`sh -c` 执行 |
 | 日志采集 | stdio fd 重定向到 output.log | 同左 |
 | 终止 | `taskkill /PID <pid> /T /F`（按进程树） | `kill(-pid, SIGKILL)` 杀整个进程组 |
 | 宿主退出 | 正常退出不影响任务；直接关终端窗口会终止任务 | 不影响 |
 
-日志为命令输出的原始字节（node/git 等为 UTF-8）。Windows 下 cmd 内置 `echo` 按控制台代码页（简体中文系统为 GBK）输出，中文会显示为乱码；需要用 `echo` 输出中文时请改用支持 UTF-8 的程序。
+日志为命令输出的原始字节。Git Bash / Unix 下为 UTF-8；仅当 Windows 未探测到 bash 而回退 cmd 时，cmd 内置 `echo` 按控制台代码页（简体中文系统为 GBK）输出，中文会显示为乱码——需要用 `echo` 输出中文时请改用支持 UTF-8 的程序。
 
 ## 状态
 
-`running` 运行中 / `succeeded` 已完成（exit 0）/ `failed` 失败（非零退出、启动失败、超时）/ `killed` 手动终止 / `interrupted` 已中断（宿主重启期间退出，退出码未知）。
+`running` 运行中 / `succeeded` 已完成（exit 0）/ `failed` 失败（非零退出、启动失败、超时）/ `killed` 手动终止（区分来源：`killedBy: "user"` 用户界面手动停止 / `"agent"` agent 主动 kill，通知中会标明）/ `interrupted` 已中断（宿主重启期间退出，退出码未知）。
 
 ## 配置（PiDeck 自动生成配置界面）
 
@@ -52,7 +52,7 @@
 
 ## PiAbyss Host 停止接口
 
-扩展在首个会话启动时额外启动一个仅绑定 `127.0.0.1` 的窄权限 HTTP 控制面（默认 `18767`，可用 `SHELLJOB_CONTROL_PORT` 配置）。它只接受停止动作，内部走 `killShellJob()`，由既有 settle/Notifier 链路通知任务所属 Agent；Host 不应再发送 prompt/followUp。
+扩展在首个会话启动时额外启动一个仅绑定 `127.0.0.1` 的窄权限 HTTP 控制面（默认 `18767`，可用 `SHELLJOB_CONTROL_PORT` 配置）。它只接受停止动作，内部走 `killShellJob({ by: "user" })`——终态标记为用户手动停止，通知 Agent 时会明确「用户在界面上手动停止，并非异常退出」；由既有 settle/Notifier 链路通知任务所属 Agent；Host 不应再发送 prompt/followUp。
 
 ```http
 POST http://127.0.0.1:18767/api/jobs/stop
@@ -74,6 +74,6 @@ Token 首次生成到 `~/.pi/shelljob/token`（文件权限 0600），也可由 
 
 ## 注意
 
-- 任务进程以 `shell` 方式启动（Windows 下进程树根是 `cmd.exe`）：**命令自己把工作丢到后台**（如 `start /b`、`nohup ... &`、`&` 结尾）时，根进程会提前退出，此时任务会被当作已结束（`interrupted`/`succeeded`）而实际工作仍在跑，且 `kill` 也无法回收——需要真正的常驻服务请直接用相应命令正常前台运行。
+- 任务进程以 shell 方式启动（Windows 下进程树根是 bash，无 bash 时为 `cmd.exe`；Unix 为 `sh`）：**命令自己把工作丢到后台**（如 `start /b`、`nohup ... &`、`&` 结尾）时，根进程会提前退出，此时任务会被当作已结束（`interrupted`/`succeeded`）而实际工作仍在跑，且 `kill` 也无法回收——需要真正的常驻服务请直接用相应命令正常前台运行。
 - 任务退出码在宿主进程重启期间丢失的场景下不可知，此类任务标记为 `interrupted` 而非真实终态。
 - 插件不重复内置 bash 的审批/沙箱能力，命令执行权限与会话同级。

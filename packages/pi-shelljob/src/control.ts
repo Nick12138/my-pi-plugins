@@ -17,14 +17,15 @@ export type StopHandler = (jobId: string, sessionId: string) => Promise<StopResu
 export function createStopHandler(deps: {
 	load: (jobId: string) => { job: { id: string; sessionId?: string }; status: { status: string } } | null;
 	isTerminal: (status: { status: string }) => boolean;
-	kill: (jobId: string) => Promise<{ ok: boolean; error?: string }>;
+	kill: (jobId: string, opts?: { by?: "user" | "agent" }) => Promise<{ ok: boolean; error?: string }>;
 }): StopHandler {
 	return async (jobId, sessionId) => {
 		const record = deps.load(jobId);
 		if (!record) return { ok: false, status: "not_found", jobId };
 		if (!record.job.sessionId || record.job.sessionId !== sessionId) return { ok: false, status: "forbidden", jobId, error: "job does not belong to caller session" };
 		if (deps.isTerminal(record.status)) return { ok: true, status: "already_ended", jobId, state: record.status.status };
-		const result = await deps.kill(jobId);
+		// control 端点只服务 PiAbyss UI 的停止按钮：标记来源为用户手动停止
+		const result = await deps.kill(jobId, { by: "user" });
 		if (result.ok) return { ok: true, status: "killed", jobId };
 		const current = deps.load(jobId);
 		if (current && deps.isTerminal(current.status)) return { ok: true, status: "already_ended", jobId, state: current.status.status };

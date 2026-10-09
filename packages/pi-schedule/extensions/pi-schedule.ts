@@ -131,12 +131,35 @@ function deliverNotification(runtime: ScheduleRuntime, record: RunRecord): void 
 	if (!pipe) return; // 宿主内暂无会话：通知已在队列里，等面板消费
 
 	try {
+		// presentation 声明让 PiDeck 把通知渲染为折叠卡片（非用户气泡）：
+		// 收起时只显示 图标+标题+来源，展开可查看全文。字段受 Host 的
+		// extension-presentation 校验约束（title≤160、correlationId≤256…），
+		// 超界会让整个 presentation 被拒、回落到中性折叠行。
+		// 触发到这里的状态只会是 失败类（error/timeout/aborted）或用户主动
+		// 触发的 ok——「ok」按成功结果卡片渲染，其余按警示渲染。
+		const ok = record.status === "ok";
+		const presentation = {
+			version: 1 as const,
+			extensionId: "pi-schedule",
+			audience: "user" as const,
+			kind: (ok ? "result" : "warning") as "result" | "warning",
+			correlationId: record.runId.slice(0, 256) || `run:${record.jobId}`,
+			sourceLabel: "Schedule",
+			status: (ok ? "resolved" : "failed") as "resolved" | "failed",
+			severity: (ok ? "info" : "danger") as "info" | "danger",
+			title: `定时任务：${record.jobName}`.slice(0, 160),
+		};
 		pipe.pi.sendMessage?.(
 			{
 				customType: NOTIFY_TYPE,
 				content,
 				display: true,
-				details: { runId: record.runId, jobId: record.jobId, status: record.status },
+				details: {
+					runId: record.runId,
+					jobId: record.jobId,
+					status: record.status,
+					presentation,
+				},
 			},
 			{ triggerTurn: false },
 		);

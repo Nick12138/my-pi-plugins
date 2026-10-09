@@ -155,13 +155,43 @@ export class Notifier {
 		while (map.size > 0) {
 			const items = [...map.values()].map((run) => ({ run }));
 			const content = formatGrouped(items);
+			// presentation 声明让 PiDeck 把通知渲染为折叠卡片（非用户气泡）：
+			// 收起时只显示 图标+标题+来源，展开可查看全文。字段受 Host 的
+			// extension-presentation 校验约束（title≤160、correlationId≤256…），
+			// 超界会让整个 presentation 被拒、回落到中性折叠行。
+			const hasFailed = items.some(
+				({ run }) => run.status.status === "failed" || run.status.status === "interrupted",
+			);
+			const hasStopped = items.some(({ run }) => run.status.status === "stopped");
+			const presentation = {
+				version: 1 as const,
+				extensionId: "pi-subagent",
+				audience: "user" as const,
+				kind: (hasFailed || hasStopped ? "warning" : "result") as "warning" | "result",
+				correlationId: items
+					.map(({ run }) => run.task.id)
+					.join(",")
+					.slice(0, 256),
+				sourceLabel: "Subagents",
+				status: (hasFailed ? "failed" : hasStopped ? "cancelled" : "resolved") as
+					| "failed"
+					| "cancelled"
+					| "resolved",
+				severity: (hasFailed ? "danger" : hasStopped ? "warning" : "info") as
+					| "danger"
+					| "warning"
+					| "info",
+				...(items.length === 1
+					? { title: `子代理任务：${items[0]!.run.task.title}`.slice(0, 160) }
+					: {}),
+			};
 			try {
 				this.send({
 					customType: SUBAGENT_NOTIFY_MESSAGE_TYPE,
 					content,
-					// 不注入会话 UI：custom 消息不参与 LLM 上下文，仅作为内部触发信号，
-					// 避免“工具提示”直接显示在主会话里。
-					display: false,
+					// display 只控制会话 UI 渲染（true = 折叠卡片可见），
+					// 不影响 LLM 上下文：custom 消息经 convertToLlm 始终进入主 agent。
+					display: true,
 					details: {
 						count: items.length,
 						runs: items.map(({ run }) => ({
@@ -170,6 +200,7 @@ export class Notifier {
 							agent: run.task.agent,
 							status: run.status.status,
 						})),
+						presentation,
 					},
 				});
 				// 投递确认：sendMessage 接受后才写 notified 标记

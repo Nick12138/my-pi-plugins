@@ -33,6 +33,8 @@ export interface ShellJobStatusData {
 	notified?: boolean;
 	/** 因超时被 kill */
 	timedOut?: boolean;
+	/** killed 来源："user" = 用户界面手动停止，"agent" = agent 主动 kill；仅 status 为 killed 时有意义 */
+	killedBy?: "user" | "agent";
 	errorMessage?: string;
 }
 

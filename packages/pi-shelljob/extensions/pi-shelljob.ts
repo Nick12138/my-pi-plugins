@@ -64,9 +64,11 @@ function durationText(record: ShellJobRecord): string {
 function formatJobNotice(record: ShellJobRecord, detail: boolean): string {
 	const { job, status } = record;
 	const label = STATUS_LABEL(status.status);
+	const userStop = status.status === "killed" && status.killedBy === "user";
 	const meta = `（${durationText(record)}${status.exitCode !== undefined ? ` · exit ${status.exitCode}` : ""}${status.timedOut ? " · 超时" : ""}）`;
 	const lines = [`【后台任务通知】「${job.title}」${label}${meta}`];
-	if (status.errorMessage) lines.push(`原因：${status.errorMessage}`);
+	if (userStop) lines.push("原因：用户在界面上手动停止了该任务（并非任务异常退出，无需排查错误）。");
+	else if (status.errorMessage) lines.push(`原因：${status.errorMessage}`);
 	if (detail) {
 		const tail = readOutputTail(job.id, NOTIFY_TAIL_LINES);
 		if (tail.lines.length > 0) {
@@ -118,15 +120,49 @@ class Notifier {
 				const content =
 					items.length === 1
 						? formatJobNotice(items[0]!, true)
-						: `【后台任务通知】${items.length} 个任务已结束：\n${items.map((r) => `- 「${r.job.title}」${STATUS_LABEL(r.status.status)}（${durationText(r)}）`).join("\n")}\n\n查看详情：shelljob(action:"log", jobId:"<id>")。`;
+						: `【后台任务通知】${items.length} 个任务已结束：\n${items
+								.map((r) => {
+									const userStop = r.status.status === "killed" && r.status.killedBy === "user";
+									return `- 「${r.job.title}」${STATUS_LABEL(r.status.status)}（${durationText(r)}${userStop ? " · 用户手动停止" : ""}）`;
+								})
+								.join("\n")}\n\n查看详情：shelljob(action:"log", jobId:"<id>")。`;
+				// presentation 声明让 PiDeck 把通知渲染为折叠卡片（非用户气泡）：
+				// 收起时只显示 图标+标题+来源，展开可查看全文。字段受 Host 的
+				// extension-presentation 校验约束（title≤160、correlationId≤256…）。
+				const hasFailed = items.some((r) => r.status.status === "failed");
+				const hasUserKilled = items.some(
+					(r) => r.status.status === "killed" && r.status.killedBy === "user",
+				);
+				const presentation = {
+					version: 1 as const,
+					extensionId: "pi-shelljob",
+					audience: "user" as const,
+					kind: (hasFailed ? "warning" : "result") as "warning" | "result",
+					correlationId: items.map((r) => r.job.id).join(",").slice(0, 256),
+					sourceLabel: "ShellJobs",
+					status: (hasFailed ? "failed" : hasUserKilled ? "cancelled" : "resolved") as
+						| "failed"
+						| "cancelled"
+						| "resolved",
+					severity: (hasFailed ? "danger" : hasUserKilled ? "warning" : "info") as
+						| "danger"
+						| "warning"
+						| "info",
+					...(items.length === 1
+						? { title: `后台任务：${items[0]!.job.title}`.slice(0, 160) }
+						: {}),
+				};
 				try {
 					this.send({
 						customType: NOTIFY_MESSAGE_TYPE,
 						content,
-						display: false,
+						// display 只控制会话 UI 渲染（true = 折叠卡片可见），
+						// 不影响 LLM 上下文：custom 消息经 convertToLlm 始终进入主 agent。
+						display: true,
 						details: {
 							count: items.length,
-							jobs: items.map(({ job, status }) => ({ id: job.id, title: job.title, status: status.status, exitCode: status.exitCode })),
+							jobs: items.map(({ job, status }) => ({ id: job.id, title: job.title, status: status.status, exitCode: status.exitCode, killedBy: status.killedBy })),
+							presentation,
 						},
 					});
 					for (const record of items) {
@@ -215,7 +251,7 @@ const Action = StringEnum(["submit", "list", "log", "kill"] as const, {
 
 const ShelljobParams = Type.Object({
 	action: Type.Optional(Action),
-	command: Type.Optional(Type.String({ description: "submit 用：要执行的命令（经系统 shell 解释，Windows 为 cmd、Unix 为 sh）" })),
+	command: Type.Optional(Type.String({ description: "submit 用：要执行的命令（POSIX/bash 语法；Windows 下自动探测 Git Bash 执行，探测不到时为 cmd）" })),
 	cwd: Type.Optional(Type.String({ description: "submit 用：工作目录，默认当前会话目录" })),
 	title: Type.Optional(Type.String({ description: "submit 用：任务标题（显示用），默认取命令前 40 字符" })),
 	timeoutMs: Type.Optional(Type.Number({ description: "submit 用：单任务超时毫秒，超时自动终止；0 = 不限。默认取全局配置" })),
@@ -268,7 +304,7 @@ function executeList(limit = 30): AgentToolResult<unknown> {
 	if (records.length === 0) return text("暂无后台任务。");
 	const lines = records.map(({ job, status }) => {
 		const exit = status.exitCode !== undefined ? ` · exit ${status.exitCode}` : "";
-		const who = status.timedOut ? " · 超时" : "";
+		const who = status.timedOut ? " · 超时" : status.killedBy === "user" ? " · 用户手动停止" : status.killedBy === "agent" ? " · agent 终止" : "";
 		return `- ${job.id}  [${STATUS_LABEL(status.status)}${exit}${who}]  ${durationText({ job, status })}  「${job.title}」\n  $ ${job.command}`;
 	});
 	const running = records.filter((r) => r.status.status === "running").length;
@@ -305,7 +341,7 @@ function executeKill(jobId: string): Promise<AgentToolResult<unknown>> | AgentTo
 	const record = resolveJob(jobId);
 	if (!record) return text(`任务 ${jobId} 不存在。`);
 	if (isTerminal(record.status)) return text(`任务「${record.job.title}」已结束（${STATUS_LABEL(record.status.status)}），无需终止。`);
-	return killShellJob(record.job.id).then((r) =>
+	return killShellJob(record.job.id, { by: "agent" }).then((r) =>
 		text(r.ok ? `已终止「${record.job.title}」（${record.job.id}）。` : `终止失败：${r.error}`),
 	);
 }

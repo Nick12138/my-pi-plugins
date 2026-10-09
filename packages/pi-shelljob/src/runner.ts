@@ -2,7 +2,7 @@
  * 注意：Windows 下 detached + 管道 stdio 会丢失子进程输出，因此日志采集必须用 fd 重定向
  * （子进程继承文件句柄直接写盘，宿主退出后照样落日志）。 */
 import * as fs from "node:fs";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
 	isTerminal,
 	loadAllJobs,
@@ -41,27 +41,88 @@ export function initRunner(d: SpawnDeps): void {
 	deps = d;
 }
 
+/** Windows 下的 bash 路径（与同步 bash 工具同为 Git Bash，模型无需区分两套 shell 语法）；
+ * 探测不到时为 null，回退 cmd.exe（shell: true）。探测只在进程生命周期内做一次。 */
+let windowsBash: string | null | undefined;
+
+function resolveWindowsBash(): string | null {
+	if (windowsBash !== undefined) return windowsBash;
+	windowsBash = null;
+	if (process.platform === "win32") {
+		// 优先 SHELL（pi 同步 bash 工具即由它指定 Git Bash），再退 where bash
+		const candidates = [process.env.SHELL, process.env.MSYS_BASH].filter((v) => typeof v === "string" && v !== "");
+		for (const candidate of candidates) {
+			const p = (candidate as string).trim();
+			if (p && fs.existsSync(p)) {
+				windowsBash = p;
+				break;
+			}
+		}
+		if (!windowsBash) {
+			try {
+				const found = execFileSync("where", ["bash"], { windowsHide: true, encoding: "utf-8" })
+					.split("\n")
+					.map((l) => l.trim())
+					.filter(Boolean);
+				// where 可能同时命中 Git Bash 与 WSL bash；WSL 的 bash 不是 Windows 进程，不能直接 spawn
+				const gitBash = found.find((p) => !/\\Windows\\System32\\|system32\\linux/i.test(p));
+				if (gitBash) windowsBash = gitBash;
+			} catch {
+				/* where bash 不可用，回退 cmd */
+			}
+		}
+	}
+	return windowsBash;
+}
+
 /** 后台启动命令：windowsHide，stdout/stderr 通过文件描述符重定向到 output.log（追加）。
  * Windows：不能用 detached —— CREATE_NEW_PROCESS_GROUP 下的 cmd.exe 直接不执行命令
  * （实测 echo 都不跑且静默返回 0），故非 detached（正常退出宿主不影响任务，终端窗口
  * 被直接关闭才会终止，与 VS Code 任务行为一致）；kill 用 taskkill /T /F 按进程树杀。
+ * Windows 优先用探测到的 bash（与同步 bash 工具同一 Git Bash），避免模型混用两套
+ * shell 语法（cmd 不认 while/$(...) 等 bash 语法，且中文输出按 GBK 落日志会乱码）；
+ * bash 以 `-lc` 启动（登录 shell 保证 nvm 等环境就绪，UTF-8 编码顺带解决乱码）。
+ * 注意：
+ * - spawn bash 时不能用 windowsVerbatimArguments——Node 把参数原样拼给 Windows，
+ *   带引号/空格的命令字符串在 bash 收到前就被吃掉引号，导致 exit 127。
+ * - MSYS 程序（bash/echo 等）不认 Node 通过 stdio 传入的文件句柄（写时 EBADF，
+ *   exit 1，实测 Git Bash 2.x + Node 24），fd 重定向对 cmd/node 生效但对 bash 失效。
+ *   故 bash 路径改为让 bash 自己 exec 重定向打开日志（父进程 stdio 全 ignore），
+ *   子进程持有真正的打开句柄，宿主退出后照样写盘，与 fd 继承语义等价。
  * Unix：detached 脱离会话（setsid 语义），宿主退出不影响，kill(-pid) 杀整组。返回 pid。 */
 export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 	if (!deps) throw new Error("runner 未初始化");
+	const bash = process.platform === "win32" ? resolveWindowsBash() : null;
 	let logFd: number | undefined;
-	try {
-		logFd = fs.openSync(outputPath(job.id), "a");
-	} catch {
-		logFd = undefined; // 打不开文件则丢弃输出，任务照跑
+	let argv: string[] | null = null;
+	if (!bash) {
+		try {
+			logFd = fs.openSync(outputPath(job.id), "a");
+		} catch {
+			logFd = undefined; // 打不开文件则丢弃输出，任务照跑
+		}
+	} else {
+		// bash 自己重定向日志：'…' 单引号转义（' → '\''），log 路径来自插件自身的 JOBS_ROOT，不含单引号
+		const shq = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
+		const log = outputPath(job.id).replaceAll("\\", "/");
+		argv = ["-lc", `exec >> ${shq(log)} 2>&1\n${job.command}`];
 	}
-	const child = spawn(job.command, {
-		shell: true,
-		cwd: job.cwd,
-		detached: process.platform !== "win32",
-		windowsHide: true,
-		stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
-		env: process.env,
-	});
+	const child = bash
+		? spawn(bash, argv!, {
+				cwd: job.cwd,
+				detached: false,
+				windowsHide: true,
+				stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+				env: process.env,
+			})
+		: spawn(job.command, {
+				shell: true,
+				cwd: job.cwd,
+				detached: process.platform !== "win32",
+				windowsHide: true,
+				stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+				env: process.env,
+			});
 	// 父进程侧关闭 fd：子进程已继承句柄，宿主保留只会锁住文件
 	if (logFd !== undefined) fs.closeSync(logFd);
 	const pid = child.pid ?? -1;
@@ -117,10 +178,12 @@ export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 }
 
 /** 终止任务：Windows taskkill /T /F 杀整棵进程树；Unix 杀 detached 进程组。
- * timedOut/reason 非空时终态记为 failed（带原因），否则记为 killed。 */
+ * timedOut/reason 非空时终态记为 failed（带原因），否则记为 killed。
+ * opts.by 标记停止来源（"user" = 用户界面手动停止 / "agent" = agent 主动 kill），
+ * 落盘到 status.killedBy，通知据此区分「用户手动停止」与「异常终止」。 */
 export function killShellJob(
 	jobId: string,
-	opts?: { timedOut?: boolean; reason?: string },
+	opts?: { timedOut?: boolean; reason?: string; by?: "user" | "agent" },
 ): Promise<{ ok: boolean; error?: string }> {
 	const existing = killOperations.get(jobId);
 	if (existing) return existing;
@@ -133,7 +196,7 @@ export function killShellJob(
 
 async function killShellJobOnce(
 	jobId: string,
-	opts?: { timedOut?: boolean; reason?: string },
+	opts?: { timedOut?: boolean; reason?: string; by?: "user" | "agent" },
 ): Promise<{ ok: boolean; error?: string }> {
 	const st = readStatus(jobId);
 	if (!st) return { ok: false, error: "任务不存在" };
@@ -198,7 +261,7 @@ async function killShellJobOnce(
 	if (opts?.timedOut || opts?.reason) {
 		deps?.settle(jobId, { status: "failed", finishedAt: Date.now(), timedOut: opts.timedOut, errorMessage: opts.reason });
 	} else {
-		deps?.settle(jobId, { status: "killed", finishedAt: Date.now() });
+		deps?.settle(jobId, { status: "killed", finishedAt: Date.now(), ...(opts?.by ? { killedBy: opts.by } : {}) });
 	}
 	return { ok: true };
 }
