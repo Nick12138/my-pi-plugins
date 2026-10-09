@@ -202,7 +202,7 @@
     },
     {
       "id": "pi-pixie",
-      "name": "Pixie 委派",
+      "name": "Pixie 小精灵",
       "description": "pixie_dispatch / pixie_report 工具壳：把任务派发给常驻小精灵会话并在完成后回调结果；委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT）转发请求。dispatch 仅在常驻小精灵会话激活，report 仅在已派发（armed）会话可见，普通工作区会话不可见。",
       "icon": "🧚",
       "version": "0.1.0",
@@ -222,7 +222,7 @@
     },
     {
       "id": "pi-todo",
-      "name": "Agent 任务列表",
+      "name": "任务列表",
       "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
       "icon": "📋",
       "version": "0.1.0",

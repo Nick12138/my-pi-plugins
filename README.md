@@ -27,7 +27,7 @@ my-pi-plugins/
 | **🔍 [pi-web](packages/pi-web)** | 极简联网搜索：Tavily（需 key）优先、免费 Exa MCP 兜底，自动回退 |
 | **📝 [OCR](packages/pi-ocr)** | 百度智能云 OCR 图片文字识别（标准版）、方向检测、证照关键词提示 |
 | **🖨️ [WPS-CLI](packages/pi-wpscli)** | 本机 wpscli 封装：扫描件 OCR 转 Word、Office 转 PDF、PDF 压缩/水印/转图/转 MD 等 9 合 1 |
-| **✅ [Agent 任务列表](packages/pi-todo)** | 轻量级 Agent todo：任务快照持久化到 session，供 PiDeck 等前端读取，不包含终端 UI |
+| **✅ [任务列表](packages/pi-todo)** | 轻量级 Agent todo：任务快照持久化到 session，供 PiDeck 等前端读取，不包含终端 UI |
 | **👁 [pi-vision](packages/pi-vision)** | 视觉理解：让无识图能力的模型调用 `see_image`/`see_images` 看懂截图/图片/照片（单图 + 多图批量对比），默认视觉模型 + 回退模型两级兜底 |
 | **🤖 [pi-subagent](packages/pi-subagent)** | Windows 子代理运行时：3 角色（探索/执行/审查）并行后台运行、队列排队、失败断点恢复+自动重试、完成自动回调主 agent、worktree 隔离、HTTP API 供 PiDeck 面板查看 |
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
@@ -36,7 +36,7 @@ my-pi-plugins/
 | **❓ [pi-ask-user-question](packages/pi-ask-user-question)** | 提问问卷：ask_user_question 工具（最多 4 题、每题 2-4 选项、多选/自由文本），源自 PiAbyss 内置工具外移，details 信封与桌面端兼容；设置页“提问工具”开关可整体启停 |
 | **📌 [piabyss-memo](packages/piabyss-memo)** | PiAbyss 备忘录：piabyss_memo 工具（list/complete/reopen/update），磁盘格式/软删除墓碑/原子写与 PiAbyss Host 完全一致，桌面备忘录页面共用同一份 notes.json |
 | **📎 [piabyss-present-files](packages/piabyss-present-files)** | PiAbyss 文件交付：piabyss_present_files 工具声明交付文件清单，桌面端按工具名从会话历史还原文件胶囊（纯声明式，不落盘） |
-| **🧚 [pi-pixie](packages/pi-pixie)** | Pixie 委派：pixie_dispatch / pixie_report 工具壳，经环回 HTTP 控制面调用 PiAbyss Host 委派引擎；dispatch 仅常驻小精灵会话可见，report 仅已派发（armed）会话可见 |
+| **🧚 [pi-pixie](packages/pi-pixie)** | Pixie 小精灵：pixie_dispatch / pixie_report 工具壳，经环回 HTTP 控制面调用 PiAbyss Host 委派引擎；dispatch 仅常驻小精灵会话可见，report 仅已派发（armed）会话可见 |
 
 ## 手动安装（不走 PiDeck 时）
 
