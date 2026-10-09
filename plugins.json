@@ -461,6 +461,9 @@
         "type": "repo",
         "path": "packages/pi-schedule"
       },
+      "toggleScopes": [
+        "user"
+      ],
       "config": [
         {
           "key": "tickMs",
