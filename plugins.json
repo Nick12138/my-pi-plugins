@@ -578,9 +578,6 @@
         "type": "repo",
         "path": "packages/pi-reimburse"
       },
-      "toggleScopes": [
-        "user"
-      ],
       "config": [
         {
           "key": "r2AccountId",
