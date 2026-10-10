@@ -4,8 +4,8 @@
  * 两个工具：
  *   - `reimburse`：报销单（类别/日期/项目/事宜/费用/票据/备注）与替票的
  *     增删改查；票据图片从本地路径复制托管，替票是可被多条报销单共享的实体；
- *   - `reimburse_sync`：R2 云同步（配置/测试/立即同步/状态），见
- *     extensions/pi-reimburse-sync.ts。
+ *   - `reimburse_sync`：R2 云同步（测试/立即同步/状态），配置由插件设置页的
+ *     配置表单管理，见 extensions/pi-reimburse-sync.ts。
  *
  * 数据落盘在 `<agentDir>/reimburse/`（磁盘权威，无内存缓存），跨会话、
  * 跨工作区共享同一份个人报销数据。任何变更成功后防抖触发 autoSync。

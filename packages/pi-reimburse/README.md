@@ -55,15 +55,29 @@ reimburse({
 
 ```
 reimburse_sync({
-  action: "config" | "test" | "sync_now" | "status",
-  accountId?, accessKeyId?, secretAccessKey?, bucket?, autoSync?,
+  action: "test" | "sync_now" | "status",
 })
 ```
 
-- `config`：读取/保存 R2 配置（只覆盖传入字段；secretAccessKey 输出永远打码）；
-- `test`：连接测试（不落盘不改动状态）；
+- `test`：用当前配置测一次 R2 连通性（不落盘不改动状态）；
 - `sync_now`：立即双向同步，返回统计；
-- `status`：最近同步状态 + 数据概况。
+- `status`：配置来源 + 最近同步状态 + 数据概况。
+
+**配置不进工具**：R2 密钥与 autoSync 由插件设置页「报销管家」的配置表单
+管理（与 PiAbyss 备忘录同一模式），写入以下环境变量（扩展与其同进程，
+实时生效）：
+
+| 环境变量 | 说明 |
+|---|---|
+| `PI_REIMBURSE_R2_ACCOUNT_ID` | Cloudflare 账户 ID |
+| `PI_REIMBURSE_R2_ACCESS_KEY_ID` | R2 Access Key ID |
+| `PI_REIMBURSE_R2_SECRET_ACCESS_KEY` | R2 Secret Access Key（敏感，打码显示） |
+| `PI_REIMBURSE_R2_BUCKET` | R2 桶名 |
+| `PI_REIMBURSE_AUTO_SYNC` | `true` / `false`，变更后防抖自动同步 |
+
+环境变量缺失时回退读旧版 `~/.pi/reimburse/sync-config.json` 里的同名字段
+（工具 config 时代的配置文件，老设备免重填）。
+
 - `autoSync` 开启时，`reimburse` 每次成功变更后 5 秒防抖后台同步；进程启动
   10 秒后还会做一次启动同步（每次进程只一次）。
 
@@ -81,7 +95,8 @@ reimburse_sync({
 - **图片**：同步时从云端补齐本地缺失的图片（云端也没有 → 丢弃引用防悬空）；
   上传按 sha256 内容指纹跳过未变化对象（指纹缓存 `upload-hashes.json`，
   切换桶/账号整体作废）。
-- **状态落盘**：`sync-config.json`（配置 + lastSyncAt/Ok/Error）。
+- **状态落盘**：`sync-config.json`（最近同步状态 lastSyncAt/Ok/Error，
+  并保留旧版配置字段供回退）。
 - **已知取舍**：时钟漂移影响胜负判断；图片跟随记录整体胜负，不做单图合并；
   云端文件不含自增 id 游标（本地 readFile/replaceAll 有 max 防御）。
 

@@ -563,20 +563,76 @@
     {
       "id": "pi-reimburse",
       "name": "报销管家",
-      "description": "reimburse + reimburse_sync 双工具：管理个人报销单（类别/日期/项目名称/事宜/费用/票据/备注；直票=发票/车票图片，或替票组合=交易截图+共享替票，替票可被多条报销单复用），支持按状态/月份/类别/项目过滤与两状态流转。内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、内容指纹免重传、变更后 5 秒防抖 autoSync。数据落盘 ~/.pi/reimburse/，图片复制托管、原图可删，跨会话跨工作区保留。",
+      "description": "reimburse + reimburse_sync 双工具：管理个人报销单（类别/日期/项目名称/事宜/费用/票据/备注；直票=发票/车票图片，或替票组合=交易截图+共享替票，替票可被多条报销单复用），支持按状态/月份/类别/项目过滤与两状态流转。内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、内容指纹免重传、变更后 5 秒防抖 autoSync。R2 密钥与 autoSync 在下方的配置表单里填写。数据落盘 ~/.pi/reimburse/，图片复制托管、原图可删，跨会话跨工作区保留。",
       "icon": "💰",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": [
         "报销",
         "reimburse",
         "个人财务",
-        "垫付"
+        "垫付",
+        "云同步"
       ],
       "install": {
         "type": "repo",
         "path": "packages/pi-reimburse"
-      }
+      },
+      "toggleScopes": [
+        "user"
+      ],
+      "config": [
+        {
+          "key": "r2AccountId",
+          "type": "text",
+          "label": "Cloudflare Account ID",
+          "env": "PI_REIMBURSE_R2_ACCOUNT_ID",
+          "required": false,
+          "placeholder": "xxxxxxxxxxxxxxxx",
+          "description": "Cloudflare 账户 ID（同步端点为 https://<accountId>.r2.cloudflarestorage.com）。四项连接信息填齐后云同步才可用。"
+        },
+        {
+          "key": "r2AccessKeyId",
+          "type": "text",
+          "label": "R2 Access Key ID",
+          "env": "PI_REIMBURSE_R2_ACCESS_KEY_ID",
+          "required": false,
+          "placeholder": "<在 Cloudflare R2「管理 API 令牌」创建>",
+          "description": "R2 API 令牌的 Access Key ID。"
+        },
+        {
+          "key": "r2SecretAccessKey",
+          "type": "text",
+          "label": "R2 Secret Access Key",
+          "env": "PI_REIMBURSE_R2_SECRET_ACCESS_KEY",
+          "secret": true,
+          "required": false,
+          "placeholder": "<与 Access Key ID 配对使用>",
+          "description": "R2 API 令牌的秘密密钥（敏感信息，保存后打码显示；仅存本机）。"
+        },
+        {
+          "key": "r2Bucket",
+          "type": "text",
+          "label": "R2 桶名",
+          "env": "PI_REIMBURSE_R2_BUCKET",
+          "required": false,
+          "placeholder": "my-reimburse",
+          "description": "存放报销数据的 R2 桶名（对象固定落在 reimburse/ 前缀下，可与其他插件共用一个桶）。"
+        },
+        {
+          "key": "autoSync",
+          "type": "select",
+          "label": "自动同步",
+          "env": "PI_REIMBURSE_AUTO_SYNC",
+          "required": false,
+          "default": "false",
+          "options": [
+            { "value": "true", "label": "开启（报销数据变更后防抖同步 + 启动时拉齐一次）" },
+            { "value": "false", "label": "关闭（仅手动「立即同步」）" }
+          ],
+          "description": "开启后每次报销数据变更延迟 5 秒自动双向同步；进程启动后也会拉齐一次。"
+        }
+      ]
     }
   ]
 }

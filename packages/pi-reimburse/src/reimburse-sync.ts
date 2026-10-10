@@ -15,9 +15,15 @@
  *   4. 上传合并后的 claims.json 与图片，供其他设备拉取；
  *   5. 超过 30 天的删除墓碑物理清除（本地图片目录 + 云端对象）。
  *
- * 配置与同步状态持久化在 <agentDir>/reimburse/sync-config.json；上传指纹
- * 缓存在 upload-hashes.json（内容未变化的对象跳过上传；切换桶/账号时整体
- * 作废）。autoSync 开启时，报销数据每次变更后防抖触发后台同步。
+ * 配置来源（插件自持，密钥不进对话/工具）：
+ *   - 环境变量优先——由插件设置页「报销管家」的配置表单写入
+ *     （PI_REIMBURSE_R2_* / PI_REIMBURSE_AUTO_SYNC，扩展与其同进程因此实时生效）；
+ *   - 兼容回退：环境变量缺失时读旧版 <agentDir>/reimburse/sync-config.json
+ *     里的同名字段（工具 config action 时代的配置文件，老设备免重填）。
+ *
+ * 同步状态（lastSyncAt/Ok/Error）持久化在 sync-config.json（保留旧版配置字段）；
+ * 上传指纹缓存在 upload-hashes.json（内容未变化的对象跳过上传；切换桶/账号时
+ * 整体作废）。autoSync 开启时，报销数据每次变更后防抖触发后台同步。
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -44,6 +50,17 @@ const STARTUP_SYNC_DELAY_MS = 10_000;
 /** 删除墓碑保留时长：过期后物理清除（本地与云端）。 */
 const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
 
+/* ----------------------------- 配置项（env） ------------------------------ */
+
+export const ENV_ACCOUNT_ID = "PI_REIMBURSE_R2_ACCOUNT_ID";
+export const ENV_ACCESS_KEY_ID = "PI_REIMBURSE_R2_ACCESS_KEY_ID";
+export const ENV_SECRET_ACCESS_KEY = "PI_REIMBURSE_R2_SECRET_ACCESS_KEY";
+export const ENV_BUCKET = "PI_REIMBURSE_R2_BUCKET";
+export const ENV_AUTO_SYNC = "PI_REIMBURSE_AUTO_SYNC";
+
+/** autoSync 的 env 值：真值集合（其余一律视为关）。 */
+const AUTO_SYNC_TRUTHY = new Set(["true", "1", "on", "yes"]);
+
 export type ReimburseSyncConfig = {
   accountId: string;
   accessKeyId: string;
@@ -53,17 +70,25 @@ export type ReimburseSyncConfig = {
 };
 
 export type ReimburseSyncSettings = ReimburseSyncConfig & {
+  /** 四项连接信息是否齐备（决定「立即同步/测试」是否可用）。 */
+  configured: boolean;
+  /** 各配置项当前来源：true = 设置注入的环境变量；false = 旧配置文件回退。 */
+  configSource: { accountId: boolean; accessKeyId: boolean; secretAccessKey: boolean; bucket: boolean };
   lastSyncAt: number | null;
   lastSyncOk: boolean | null;
   lastSyncError: string | null;
 };
 
-const EMPTY_CONFIG: ReimburseSyncConfig = {
-  accountId: "",
-  accessKeyId: "",
-  secretAccessKey: "",
-  bucket: "",
-  autoSync: false,
+/** 磁盘状态文件（旧版 = 配置 + 状态；新版只依赖其中的状态与回退配置）。 */
+type SyncStateFile = {
+  accountId?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  bucket?: string;
+  autoSync?: boolean;
+  lastSyncAt?: number | null;
+  lastSyncOk?: boolean | null;
+  lastSyncError?: string | null;
 };
 
 /** 上传指纹缓存（与 sync-config.json 同目录；切换目标桶/账号时整体作废）。 */
@@ -105,6 +130,30 @@ function credentialsOf(config: ReimburseSyncConfig): R2Credentials {
 
 function configPath(agentDir: string): string {
   return join(agentDir, "reimburse", CONFIG_FILE_NAME);
+}
+
+/** 读取磁盘状态文件（缺失/损坏 → 空对象）。 */
+function readStateFile(agentDir: string): Partial<SyncStateFile> {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(agentDir), "utf8")) as Partial<SyncStateFile>;
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 原子写 JSON（临时文件 + rename）。 */
+function writeJsonAtomic(path: string, data: unknown): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(data, null, 2), "utf8");
+  renameSync(tempPath, path);
+}
+
+/** env 值（trim；空串视为未设置）。 */
+function envValue(name: string): string | null {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : null;
 }
 
 /** 云端记录的最小形状过滤（无有效 id/时间戳的条目丢弃）。 */
@@ -179,57 +228,65 @@ export class ReimburseSync {
     return getReimburseStore(this.agentDir);
   }
 
-  /** 读取配置与最近同步状态（文件缺失或损坏 → 空配置）。 */
+  /** 解析当前生效配置：env 优先，缺失回退旧配置文件；并附最近同步状态。 */
   getSettings(): ReimburseSyncSettings {
-    try {
-      const raw = JSON.parse(readFileSync(configPath(this.agentDir), "utf8")) as Partial<ReimburseSyncSettings>;
-      return {
-        accountId: typeof raw.accountId === "string" ? raw.accountId : "",
-        accessKeyId: typeof raw.accessKeyId === "string" ? raw.accessKeyId : "",
-        secretAccessKey: typeof raw.secretAccessKey === "string" ? raw.secretAccessKey : "",
-        bucket: typeof raw.bucket === "string" ? raw.bucket : "",
-        autoSync: raw.autoSync === true,
-        lastSyncAt: typeof raw.lastSyncAt === "number" ? raw.lastSyncAt : null,
-        lastSyncOk: typeof raw.lastSyncOk === "boolean" ? raw.lastSyncOk : null,
-        lastSyncError: typeof raw.lastSyncError === "string" ? raw.lastSyncError : null,
-      };
-    } catch {
-      return { ...EMPTY_CONFIG, lastSyncAt: null, lastSyncOk: null, lastSyncError: null };
-    }
-  }
-
-  /** 保存连接配置（只覆盖传入字段；保留既有同步状态）。 */
-  setConfig(patch: Partial<ReimburseSyncConfig>): ReimburseSyncSettings {
-    const current = this.getSettings();
-    const next: ReimburseSyncSettings = {
-      accountId: patch.accountId?.trim() ?? current.accountId,
-      accessKeyId: patch.accessKeyId?.trim() ?? current.accessKeyId,
-      secretAccessKey: patch.secretAccessKey?.trim() ?? current.secretAccessKey,
-      bucket: patch.bucket?.trim() ?? current.bucket,
-      autoSync: patch.autoSync ?? current.autoSync,
-      lastSyncAt: current.lastSyncAt,
-      lastSyncOk: current.lastSyncOk,
-      lastSyncError: current.lastSyncError,
+    const state = readStateFile(this.agentDir);
+    const envAccountId = envValue(ENV_ACCOUNT_ID);
+    const envAccessKeyId = envValue(ENV_ACCESS_KEY_ID);
+    const envSecret = envValue(ENV_SECRET_ACCESS_KEY);
+    const envBucket = envValue(ENV_BUCKET);
+    const envAutoSync = envValue(ENV_AUTO_SYNC);
+    const accountId = envAccountId ?? (typeof state.accountId === "string" ? state.accountId : "");
+    const accessKeyId =
+      envAccessKeyId ?? (typeof state.accessKeyId === "string" ? state.accessKeyId : "");
+    const secretAccessKey =
+      envSecret ?? (typeof state.secretAccessKey === "string" ? state.secretAccessKey : "");
+    const bucket = envBucket ?? (typeof state.bucket === "string" ? state.bucket : "");
+    const autoSync =
+      envAutoSync !== null
+        ? AUTO_SYNC_TRUTHY.has(envAutoSync.toLowerCase())
+        : state.autoSync === true;
+    return {
+      accountId,
+      accessKeyId,
+      secretAccessKey,
+      bucket,
+      autoSync,
+      configured: Boolean(accountId && accessKeyId && secretAccessKey && bucket),
+      configSource: {
+        accountId: envAccountId !== null,
+        accessKeyId: envAccessKeyId !== null,
+        secretAccessKey: envSecret !== null,
+        bucket: envBucket !== null,
+      },
+      lastSyncAt: typeof state.lastSyncAt === "number" ? state.lastSyncAt : null,
+      lastSyncOk: typeof state.lastSyncOk === "boolean" ? state.lastSyncOk : null,
+      lastSyncError: typeof state.lastSyncError === "string" ? state.lastSyncError : null,
     };
-    const path = configPath(this.agentDir);
-    mkdirSync(join(path, ".."), { recursive: true });
-    const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync(tempPath, JSON.stringify(next, null, 2), "utf8");
-    renameSync(tempPath, path);
-    // 目标可能变化：指纹缓存按目标校验，不匹配会自动作废，无需手动清理。
-    return next;
   }
 
-  /** 仅把最近一次同步状态写回配置文件（失败不影响主流程）。 */
+  /** 当前生效配置（内部用，含明文密钥）。 */
+  private resolvedConfig(): ReimburseSyncConfig {
+    const settings = this.getSettings();
+    return {
+      accountId: settings.accountId,
+      accessKeyId: settings.accessKeyId,
+      secretAccessKey: settings.secretAccessKey,
+      bucket: settings.bucket,
+      autoSync: settings.autoSync,
+    };
+  }
+
+  /** 仅把最近一次同步状态写回状态文件（保留其余字段；失败不影响主流程）。 */
   private recordState(at: number, ok: boolean, error: string | null): void {
     try {
-      const path = configPath(this.agentDir);
-      mkdirSync(join(path, ".."), { recursive: true });
-      const raw = this.getSettings();
-      const next: ReimburseSyncSettings = { ...raw, lastSyncAt: at, lastSyncOk: ok, lastSyncError: error };
-      const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
-      writeFileSync(tempPath, JSON.stringify(next, null, 2), "utf8");
-      renameSync(tempPath, path);
+      const state = readStateFile(this.agentDir);
+      writeJsonAtomic(configPath(this.agentDir), {
+        ...state,
+        lastSyncAt: at,
+        lastSyncOk: ok,
+        lastSyncError: error,
+      });
     } catch (error) {
       warn("failed to record sync state", error);
     }
@@ -276,15 +333,20 @@ export class ReimburseSync {
     }
   }
 
-  /** 测试连接（不落盘，不改动状态）。 */
-  async test(config: ReimburseSyncConfig): Promise<{ ok: boolean; error: string | null }> {
-    return testConnection(credentialsOf(config));
+  /**
+   * 测试连接（不落盘，不改动状态）。
+   * 不传参时用当前生效配置；传入则测试给定配置（诊断用）。
+   */
+  async test(config?: ReimburseSyncConfig): Promise<{ ok: boolean; error: string | null }> {
+    return testConnection(credentialsOf(config ?? this.resolvedConfig()));
   }
 
   private requireCreds(): { creds: R2Credentials; config: ReimburseSyncConfig } {
-    const config = this.getSettings();
-    if (!config.accountId || !config.bucket) {
-      throw new Error("尚未配置 R2 连接信息（先用 sync_config 配置 accountId / accessKeyId / secretAccessKey / bucket）");
+    const config = this.resolvedConfig();
+    if (!config.accountId || !config.bucket || !config.accessKeyId || !config.secretAccessKey) {
+      throw new Error(
+        "尚未配置 R2 连接信息（在插件设置 → 报销管家的配置表单里填写 accountId / accessKeyId / secretAccessKey / bucket）",
+      );
     }
     return { creds: credentialsOf(config), config };
   }

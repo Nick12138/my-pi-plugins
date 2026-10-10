@@ -1,9 +1,23 @@
-import { existsSync } from "node:fs";
+/**
+ * 报销管家云同步引擎单测：配置解析（env 优先 / 旧配置文件回退）、固定前缀
+ * 上传、指纹跳过、失败状态、双向合并、墓碑传播与复活、autoSync 防抖。
+ */
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mergeById, ReimburseSync, scheduleReimburseAutoSync } from "../src/reimburse-sync.js";
+import {
+  ENV_ACCOUNT_ID,
+  ENV_ACCESS_KEY_ID,
+  ENV_AUTO_SYNC,
+  ENV_BUCKET,
+  ENV_SECRET_ACCESS_KEY,
+  getReimburseSync,
+  mergeById,
+  ReimburseSync,
+  scheduleReimburseAutoSync,
+} from "../src/reimburse-sync.js";
 import { ReimburseStore } from "../src/reimburse-store.js";
 
 const tempDirs: string[] = [];
@@ -11,6 +25,16 @@ vi.useFakeTimers();
 
 afterEach(async () => {
   vi.clearAllTimers();
+  vi.unstubAllGlobals();
+  for (const name of [
+    ENV_ACCOUNT_ID,
+    ENV_ACCESS_KEY_ID,
+    ENV_SECRET_ACCESS_KEY,
+    ENV_BUCKET,
+    ENV_AUTO_SYNC,
+  ]) {
+    delete process.env[name];
+  }
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -21,13 +45,21 @@ async function tempLayout(): Promise<{ agentDir: string; store: ReimburseStore; 
   return { agentDir, store: new ReimburseStore(agentDir), sync: new ReimburseSync(agentDir) };
 }
 
-const CONFIG = {
-  accountId: "abc123",
-  accessKeyId: "AKID",
-  secretAccessKey: "secret",
-  bucket: "bucket",
-  autoSync: false,
-};
+/** env 方式注入一份完整可用配置（模拟插件设置页配置表单写入）。 */
+function setEnvConfig(autoSync = false): void {
+  process.env[ENV_ACCOUNT_ID] = "abc123";
+  process.env[ENV_ACCESS_KEY_ID] = "AKID";
+  process.env[ENV_SECRET_ACCESS_KEY] = "secret";
+  process.env[ENV_BUCKET] = "bucket";
+  process.env[ENV_AUTO_SYNC] = autoSync ? "true" : "false";
+}
+
+/** 直接写旧版（工具 config 时代）的配置文件。 */
+function writeLegacyConfig(agentDir: string, data: Record<string, unknown>): void {
+  const path = join(agentDir, "reimburse", "sync-config.json");
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
+}
 
 /** 收集 R2 请求并返回键 → 体的映射的 mock fetch（桶名 bucket）。 */
 function mockR2() {
@@ -85,24 +117,63 @@ describe("mergeById（纯函数 LWW）", () => {
   });
 });
 
-describe("ReimburseSync（配置与状态）", () => {
-  it("persists config separately from sync state", async () => {
+describe("ReimburseSync 配置解析", () => {
+  it("env 优先，缺失回退旧配置文件，并报告来源", async () => {
     const { agentDir, sync } = await tempLayout();
-    expect(sync.getSettings().accountId).toBe("");
+    expect(sync.getSettings().configured).toBe(false);
 
-    sync.setConfig(CONFIG);
-    const settings = sync.getSettings();
-    expect(settings.accountId).toBe("abc123");
-    expect(settings.lastSyncAt).toBeNull();
-    expect(existsSync(join(agentDir, "reimburse", "sync-config.json"))).toBe(true);
+    // 旧版工具 config 留下的配置文件：env 未设置时整体回退。
+    writeLegacyConfig(agentDir, {
+      accountId: "legacy-acc",
+      accessKeyId: "legacy-akid",
+      secretAccessKey: "legacy-secret",
+      bucket: "legacy-bucket",
+      autoSync: true,
+    });
+    const legacy = sync.getSettings();
+    expect(legacy.configured).toBe(true);
+    expect(legacy.accountId).toBe("legacy-acc");
+    expect(legacy.autoSync).toBe(true);
+    expect(legacy.configSource.accountId).toBe(false);
 
-    // 重开实例读到同一份配置；部分更新只覆盖传入字段。
-    const reopened = new ReimburseSync(agentDir);
-    expect(reopened.getSettings().accountId).toBe("abc123");
-    const patched = reopened.setConfig({ bucket: "other", autoSync: true });
-    expect(patched.bucket).toBe("other");
-    expect(patched.autoSync).toBe(true);
-    expect(patched.accountId).toBe("abc123");
+    // env 设置后逐项覆盖。
+    process.env[ENV_ACCOUNT_ID] = "env-acc";
+    const mixed = sync.getSettings();
+    expect(mixed.accountId).toBe("env-acc");
+    expect(mixed.bucket).toBe("legacy-bucket");
+    expect(mixed.configSource.accountId).toBe(true);
+    expect(mixed.configSource.bucket).toBe(false);
+
+    // autoSync 的 env 值：truthy 集合之外一律视为关。
+    process.env[ENV_AUTO_SYNC] = "yes";
+    expect(sync.getSettings().autoSync).toBe(true);
+    process.env[ENV_AUTO_SYNC] = "off";
+    expect(sync.getSettings().autoSync).toBe(false);
+  });
+
+  it("同步状态写回 sync-config.json（保留旧版配置字段）", async () => {
+    const { agentDir, sync } = await tempLayout();
+    writeLegacyConfig(agentDir, {
+      accountId: "legacy-acc",
+      accessKeyId: "legacy-akid",
+      secretAccessKey: "legacy-secret",
+      bucket: "legacy-bucket",
+    });
+    const { fetchImpl } = mockR2();
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      await sync.syncNow();
+      const raw = JSON.parse(
+        await readFile(join(agentDir, "reimburse", "sync-config.json"), "utf8"),
+      ) as Record<string, unknown>;
+      // 旧版配置字段原样保留（供 env 缺失时回退），状态已更新。
+      expect(raw.accountId).toBe("legacy-acc");
+      expect(raw.secretAccessKey).toBe("legacy-secret");
+      expect(raw.lastSyncOk).toBe(true);
+      expect(raw.lastSyncAt).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -118,7 +189,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       const stats = await sync.syncNow();
       expect(stats.uploadedClaims).toBe(1);
       expect(stats.uploadedReceipts).toBe(1);
@@ -154,7 +225,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       await sync.syncNow();
       const calls = vi.mocked(fetchImpl).mock.calls.length;
 
@@ -177,7 +248,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
 
   it("records failures in lastSync state", async () => {
     const { sync } = await tempLayout();
-    sync.setConfig(CONFIG);
+    setEnvConfig();
     const failing = vi.fn(async () => new Response("denied", { status: 403 }));
     vi.stubGlobal("fetch", failing as unknown as typeof fetch);
     try {
@@ -201,7 +272,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
 
       // 模拟另一台设备把记录 + 图片放到云端。
       const cloudClaim = {
@@ -259,7 +330,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       // 云端记录引用一张不存在的图片。
       objects.set(
         "reimburse/claims.json",
@@ -305,7 +376,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       await sync.syncNow(); // 推上云
       store.remove(claim.id); // 墓碑
       const stats = await sync.syncNow();
@@ -324,7 +395,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       await sync.syncNow(); // 推 v1 上云
       const tombstoneAt = store.remove(claim.id).deletedAt as number;
       const cloudEdited = { ...store.listAll()[0], deletedAt: null, subject: "v2 复活版", updatedAt: tombstoneAt + 1000 };
@@ -358,7 +429,7 @@ describe("ReimburseSync（全链路，mock R2）", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      sync.setConfig(CONFIG);
+      setEnvConfig();
       // 先把带图记录推上云，再模拟墓碑过期的本地状态同步。
       // （推上云时本地已是墓碑，所以图片从未上传；云端只有 claims.json。）
       await sync.syncNow();
@@ -374,8 +445,8 @@ describe("ReimburseSync（全链路，mock R2）", () => {
 
 describe("ReimburseSync（autoSync 防抖）", () => {
   it("debounces mutations and skips when disabled", async () => {
-    const { agentDir, store, sync } = await tempLayout();
-    sync.setConfig({ ...CONFIG, autoSync: true });
+    const { agentDir, store } = await tempLayout();
+    setEnvConfig(true);
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
@@ -386,9 +457,8 @@ describe("ReimburseSync（autoSync 防抖）", () => {
       // 防抖后一次同步 = GET 云端 claims.json + PUT 合并结果（无图片）。
       expect(fetchImpl).toHaveBeenCalledTimes(2);
 
-      // autoSync 关闭时不触发。
-      const sync2 = new ReimburseSync(agentDir);
-      sync2.setConfig({ ...CONFIG, autoSync: false });
+      // autoSync 关闭（env 实时生效）时不触发。
+      process.env[ENV_AUTO_SYNC] = "false";
       store.create({ category: "差旅", subject: "b", amount: 2 });
       scheduleReimburseAutoSync(agentDir);
       await vi.advanceTimersByTimeAsync(6_000);
@@ -400,7 +470,7 @@ describe("ReimburseSync（autoSync 防抖）", () => {
 
   it("startupSync runs once per process when configured", async () => {
     const { agentDir, sync } = await tempLayout();
-    sync.setConfig({ ...CONFIG, autoSync: true });
+    setEnvConfig(true);
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
@@ -411,5 +481,11 @@ describe("ReimburseSync（autoSync 防抖）", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("getReimburseSync 返回同 agentDir 的单例", async () => {
+    const { agentDir, sync } = await tempLayout();
+    expect(getReimburseSync(agentDir)).toBe(getReimburseSync(agentDir));
+    expect(sync).toBeInstanceOf(ReimburseSync);
   });
 });
