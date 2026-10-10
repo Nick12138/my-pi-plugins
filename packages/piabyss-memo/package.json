@@ -1,8 +1,8 @@
 {
   "name": "piabyss-memo",
-  "version": "0.1.0",
-  "description": "PiAbyss memo board tool for Pi: list/complete/reopen/update the user's memo notes, sharing the exact same on-disk format as PiAbyss built-in piabyss_memo.",
-  "keywords": ["pi-package", "memo", "piabyss"],
+  "version": "0.2.0",
+  "description": "PiAbyss memo board tool for Pi: list/complete/reopen/update the user's memo notes, plus a self-contained Cloudflare R2 cloud sync (engine + loopback control plane), sharing the exact same on-disk format as PiAbyss.",
+  "keywords": ["pi-package", "memo", "piabyss", "sync"],
   "license": "MIT",
   "author": "Nick12138",
   "type": "module",

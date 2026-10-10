@@ -166,13 +166,14 @@
     {
       "id": "piabyss-memo",
       "name": "PiAbyss 备忘录",
-      "description": "piabyss_memo 工具：PiAbyss 备忘录板的 Agent 侧读写（list/complete/reopen/update），complete 覆盖式写入结果并记录会话信息。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面备忘录页面/同步引擎共用同一文件）。",
+      "description": "piabyss_memo + piabyss_memo_sync 双工具：PiAbyss 备忘录板的 Agent 侧读写（list/complete/reopen/update，complete 覆盖式写入结果并记录会话信息），以及内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss Host）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、变更后 5 秒防抖 autoSync；桌面备忘录页的「测试/立即同步」经插件本地控制面（127.0.0.1:18768）触达本引擎。R2 密钥与 autoSync 在下方的配置表单里填写。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面备忘录页面共用同一文件）。",
       "icon": "📌",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": [
         "备忘录",
         "memo",
+        "云同步",
         "PiAbyss"
       ],
       "install": {
@@ -181,6 +182,58 @@
       },
       "toggleScopes": [
         "user"
+      ],
+      "config": [
+        {
+          "key": "r2AccountId",
+          "type": "text",
+          "label": "Cloudflare Account ID",
+          "env": "PIABYSS_MEMO_R2_ACCOUNT_ID",
+          "required": false,
+          "placeholder": "xxxxxxxxxxxxxxxx",
+          "description": "Cloudflare 账户 ID（同步端点为 https://<accountId>.r2.cloudflarestorage.com）。四项连接信息填齐后云同步才可用。"
+        },
+        {
+          "key": "r2AccessKeyId",
+          "type": "text",
+          "label": "R2 Access Key ID",
+          "env": "PIABYSS_MEMO_R2_ACCESS_KEY_ID",
+          "required": false,
+          "placeholder": "<在 Cloudflare R2「管理 API 令牌」创建>",
+          "description": "R2 API 令牌的 Access Key ID。"
+        },
+        {
+          "key": "r2SecretAccessKey",
+          "type": "text",
+          "label": "R2 Secret Access Key",
+          "env": "PIABYSS_MEMO_R2_SECRET_ACCESS_KEY",
+          "secret": true,
+          "required": false,
+          "placeholder": "<与 Access Key ID 配对使用>",
+          "description": "R2 API 令牌的秘密密钥（敏感信息，保存后打码显示；仅存本机）。"
+        },
+        {
+          "key": "r2Bucket",
+          "type": "text",
+          "label": "R2 桶名",
+          "env": "PIABYSS_MEMO_R2_BUCKET",
+          "required": false,
+          "placeholder": "my-memos",
+          "description": "存放备忘录的 R2 桶名（对象固定落在 piabyss/memo/ 前缀下，可与其他插件共用一个桶）。"
+        },
+        {
+          "key": "autoSync",
+          "type": "select",
+          "label": "自动同步",
+          "env": "PIABYSS_MEMO_AUTO_SYNC",
+          "required": false,
+          "default": "false",
+          "options": [
+            { "value": "true", "label": "开启（备忘录变更后防抖同步 + 启动时拉齐一次）" },
+            { "value": "false", "label": "关闭（仅手动「立即同步」）" }
+          ],
+          "description": "开启后每次备忘录变更（桌面端或 Agent 工具）延迟 5 秒自动双向同步；进程启动后也会拉齐一次。"
+        }
       ]
     },
     {

@@ -9,17 +9,22 @@
  * 任何字段写错都会让整个备忘录页面异常，因此读写逻辑逐行保持一致：
  *   - `schemaVersion: 1` + `notes` 数组；
  *   - 删除是软删除（墓碑 deletedAt）：记录体保留在磁盘上，供同步引擎把
- *     删除传播到其他设备；超过 TTL（30 天）的墓碑由 purgeDeleted 物理清除
- *     （插件本身不清扫，由 Host 侧按 `now - 30 天` 调 purge）；
+ *     删除传播到其他设备；超过 TTL（30 天）的墓碑由同步引擎在合并时
+ *     物理清除（含本地图片目录与云端对象）；
  *   - 写入走「临时文件 + rename」原子替换，进程中断不会留下半截 JSON；
  *   - 每次操作都从磁盘读、写回磁盘，不持有内存缓存。备忘录的数据量很小，
  *     多个消费者各自持有实例也不会互相覆盖，天然多实例安全。
  *
  * 与原实现的差异（不影响磁盘格式）：
  *   - 不依赖 @piabyss/protocol，类型在本文件内自定义（结构与原类型一致）；
- *   - 图片附件（images/<noteId>/…）与「新建」草稿（draft.json）由 Host 端
- *     UI/协议层负责，插件只维护 notes.json，故省略相关方法；
+ *   - 「新建」草稿（draft.json）由 Host 端 UI/协议层负责，插件只维护
+ *     notes.json，故省略草稿相关方法；
  *   - 错误用本地的 MemoStoreError（code 与原 HostError 相同）。
+ *
+ * v2（云同步插件自持）：补齐同步引擎需要的图片文件方法
+ * （hardRemove / readImageFile / hasImageFile / writeImageFile）。图片目录
+ * `<agentDir>/piabyss/memo/images/<noteId>/<fileName>` 与 Host 端共用，
+ * 读写逻辑与 Host 侧逐行一致。
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -160,10 +165,12 @@ function normalizeTags(tags: string[] | undefined): string[] {
 export class MemoStore {
   private readonly root: string;
   private readonly filePath: string;
+  private readonly imagesRoot: string;
 
   constructor(agentDir: string) {
     this.root = join(agentDir, "piabyss", "memo");
     this.filePath = join(this.root, "notes.json");
+    this.imagesRoot = join(this.root, "images");
   }
 
   /** 存储根目录（诊断/展示用）。 */
@@ -281,16 +288,29 @@ export class MemoStore {
     return note;
   }
 
+  /** 物理删除：移除记录体与图片目录（墓碑过期清理 / 同步引擎使用）。 */
+  hardRemove(id: string): void {
+    const file = this.readFile();
+    const index = file.notes.findIndex((entry) => entry.id === id);
+    if (index < 0) return;
+    const note = file.notes[index];
+    if (note) rmSync(join(this.imagesRoot, note.id), { recursive: true, force: true });
+    file.notes.splice(index, 1);
+    this.writeFile(file);
+  }
+
   /**
-   * 清理超过 TTL 的墓碑：物理删除记录体。
-   * 返回被清理的记录，供同步引擎删除云端对应对象。
-   * （图片目录归 Host 侧管理，插件不清扫 images/<noteId>/。）
+   * 清理超过 TTL 的墓碑：物理删除记录体与图片目录。
+   * 返回被清理的记录（含图片名列表），供同步引擎删除云端对应对象。
    */
   purgeDeleted(cutoff: number): MemoNote[] {
     const file = this.readFile();
     const expired = file.notes.filter(
       (note) => note.deletedAt !== null && note.deletedAt <= cutoff,
     );
+    for (const note of expired) {
+      rmSync(join(this.imagesRoot, note.id), { recursive: true, force: true });
+    }
     if (expired.length > 0) {
       const expiredIds = new Set(expired.map((note) => note.id));
       file.notes = file.notes.filter((note) => !expiredIds.has(note.id));
@@ -299,9 +319,39 @@ export class MemoStore {
     return expired;
   }
 
-  /** 用给定记录集整体替换 notes.json（同步引擎合并结果落盘用）。 */
+  /** 用给定记录集整体替换 notes.json（同步引擎合并结果落盘用；图片文件不动）。 */
   replaceAll(notes: MemoNote[]): void {
     this.writeFile({ schemaVersion: 1, notes });
+  }
+
+  /** 任意记录（含墓碑）按 id 查找（同步引擎图片校验用）。 */
+  getAny(id: string): MemoNote | null {
+    return this.listAll().find((note) => note.id === id) ?? null;
+  }
+
+  /** 读取图片文件原始字节（云同步用；文件缺失抛 RESOURCE_NOT_FOUND）。 */
+  readImageFile(noteId: string, fileName: string): Buffer {
+    if (!this.getAny(noteId)?.images.some((entry) => entry.fileName === fileName)) {
+      throw memoError("RESOURCE_NOT_FOUND", `备忘录图片不存在：${fileName}`);
+    }
+    const path = join(this.imagesRoot, noteId, fileName);
+    try {
+      return readFileSync(path);
+    } catch {
+      throw memoError("RESOURCE_NOT_FOUND", `备忘录图片文件缺失：${fileName}`);
+    }
+  }
+
+  /** 图片文件是否已存在于本地（同步补图判断用）。 */
+  hasImageFile(noteId: string, fileName: string): boolean {
+    return existsSync(join(this.imagesRoot, noteId, fileName));
+  }
+
+  /** 写入图片文件（同步下载补图用；调用方保证 noteId 与 fileName 已在记录中）。 */
+  writeImageFile(noteId: string, fileName: string, body: Buffer): void {
+    const dir = join(this.imagesRoot, noteId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, fileName), body);
   }
 
   private readFile(): MemoFile {

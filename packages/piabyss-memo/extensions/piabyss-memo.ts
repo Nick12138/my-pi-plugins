@@ -12,12 +12,15 @@
  *   - 用户会话中手动发送的指令优先级最高，可覆盖备忘录内嵌提示词。
  *
  * 工具直接读写 MemoStore（磁盘权威，无缓存），与 PiAbyss 桌面备忘录页面、
- * 协议 handler、同步引擎共享同一份数据（磁盘格式见 src/memo-store.ts）。
+ * 协议 handler、以及本插件自带的云同步引擎（extensions/piabyss-memo-sync.ts
+ * + src/memo-sync.ts）共享同一份数据（磁盘格式见 src/memo-store.ts）。
+ * 记录变更后触发 autoSync 防抖同步（引擎未配置/未开启时静默跳过）。
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { getMemoStore, type MemoNote } from "../src/memo-store.js";
+import { scheduleMemoAutoSync } from "../src/memo-sync.js";
 
 const MEMO_TOOL_NAME = "piabyss_memo";
 
@@ -109,7 +112,8 @@ export default function (pi: ExtensionAPI) {
     parameters: ParamsSchema,
 
     async execute(_toolCallId, params: MemoParams, _signal, _onUpdate, ctx) {
-      const store = getMemoStore(getAgentDir());
+      const agentDir = getAgentDir();
+      const store = getMemoStore(agentDir);
       try {
         if (params.action === "list") {
           const notes = store.list();
@@ -159,6 +163,8 @@ export default function (pi: ExtensionAPI) {
             sessionTitle: info.sessionName,
             sessionCwd: info.cwd,
           });
+          // 变更后触发云同步防抖（autoSync 开启时生效；引擎未配置时静默跳过）。
+          scheduleMemoAutoSync(agentDir);
           return {
             content: [
               {
@@ -173,6 +179,7 @@ export default function (pi: ExtensionAPI) {
         // reopen
         if (params.action === "reopen") {
           const note = store.update(id, { status: "open", sessionId: null });
+          scheduleMemoAutoSync(agentDir);
           return {
             content: [
               {
@@ -197,6 +204,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
         const note = store.update(id, patch);
+        scheduleMemoAutoSync(agentDir);
         return {
           content: [{ type: "text" as const, text: `Memo note updated:\n${formatNote(note)}` }],
           details: undefined,
