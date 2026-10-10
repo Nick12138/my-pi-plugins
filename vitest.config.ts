@@ -10,6 +10,7 @@ export default defineConfig({
       "packages/piabyss-memo/**/*.test.ts",
       "packages/piabyss-present-files/**/*.test.ts",
       "packages/pi-pixie/**/*.test.ts",
+      "packages/pi-reimburse/**/*.test.ts",
     ],
     environment: "node",
   },

@@ -506,6 +506,24 @@
           "description": "cron 未显式指定 timezone 时使用；留空取系统时区。"
         }
       ]
+    },
+    {
+      "id": "pi-reimburse",
+      "name": "报销管家",
+      "description": "reimburse + reimburse_sync 双工具：管理个人报销单（类别/日期/项目名称/事宜/费用/票据/备注；直票=发票/车票图片，或替票组合=交易截图+共享替票，替票可被多条报销单复用），支持按状态/月份/类别/项目过滤与两状态流转。内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、内容指纹免重传、变更后 5 秒防抖 autoSync。数据落盘 ~/.pi/reimburse/，图片复制托管、原图可删，跨会话跨工作区保留。",
+      "icon": "💰",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "报销",
+        "reimburse",
+        "个人财务",
+        "垫付"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-reimburse"
+      }
     }
   ]
 }

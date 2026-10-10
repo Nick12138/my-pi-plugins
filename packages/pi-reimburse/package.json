@@ -1,0 +1,16 @@
+{
+  "name": "pi-reimburse",
+  "version": "0.1.0",
+  "description": "个人报销管家：登记、查询、状态追踪个人垫付报销单，数据落盘跨会话保留。",
+  "keywords": ["pi-package", "reimburse", "报销"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
