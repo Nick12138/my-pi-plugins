@@ -38,7 +38,6 @@ const MAX_TITLE_LENGTH = 300;
 const MAX_TAG_LENGTH = 60;
 const MAX_TAGS_PER_NOTE = 20;
 
-export type MemoNoteType = "memo" | "idea" | "task";
 export type MemoNoteStatus = "open" | "in_progress" | "done" | "archived";
 
 /** 备忘录记录的图片引用（图片文件由 Host 存储；插件只保留字段形状）。 */
@@ -69,7 +68,6 @@ export type MemoAgentResult = {
 /** 备忘录记录（全局共享，不随工作区隔离；workspaceHint 仅作关联标签）。 */
 export type MemoNote = {
   id: string;
-  type: MemoNoteType;
   title: string;
   contentMd: string;
   status: MemoNoteStatus;
@@ -99,7 +97,6 @@ type MemoFile = {
 };
 
 export type MemoCreateInput = {
-  type: MemoNoteType;
   title: string;
   contentMd: string;
   tags?: string[];
@@ -107,7 +104,6 @@ export type MemoCreateInput = {
 };
 
 export type MemoUpdatePatch = {
-  type?: MemoNoteType;
   title?: string;
   contentMd?: string;
   status?: MemoNoteStatus;
@@ -127,7 +123,6 @@ export type MemoCompleteResultInput = {
   sessionCwd: string | null;
 };
 
-const NOTE_TYPES: readonly MemoNoteType[] = ["memo", "idea", "task"];
 const NOTE_STATUSES: readonly MemoNoteStatus[] = ["open", "in_progress", "done", "archived"];
 
 /** 与 PiAbyss HostError 对齐的存储错误（code 取值一致）。 */
@@ -198,7 +193,6 @@ export class MemoStore {
     const now = Date.now();
     const note: MemoNote = {
       id: randomUUID(),
-      type: this.requireType(input.type),
       title,
       contentMd,
       status: "open",
@@ -223,7 +217,6 @@ export class MemoStore {
     const note = file.notes.find((entry) => entry.id === id);
     if (!note) throw memoError("RESOURCE_NOT_FOUND", `备忘录记录不存在：${id}`);
 
-    if (patch.type !== undefined) note.type = this.requireType(patch.type);
     if (patch.title !== undefined) note.title = this.requireTitle(patch.title);
     if (patch.contentMd !== undefined) note.contentMd = this.requireContent(patch.contentMd);
     if (patch.tags !== undefined) note.tags = normalizeTags(patch.tags);
@@ -321,6 +314,8 @@ export class MemoStore {
 
   /** 用给定记录集整体替换 notes.json（同步引擎合并结果落盘用；图片文件不动）。 */
   replaceAll(notes: MemoNote[]): void {
+    // v0.3.0 起不再落盘类别字段：合并结果里云端旧数据可能仍带 type，这里统一剔除。
+    for (const note of notes) delete (note as { type?: unknown }).type;
     this.writeFile({ schemaVersion: 1, notes });
   }
 
@@ -364,6 +359,8 @@ export class MemoStore {
           if (note.result === undefined) note.result = null;
           if (note.deletedAt === undefined) note.deletedAt = null;
           if (note.sessionId === undefined) note.sessionId = null;
+          // v0.3.0 起取消类别（type）字段：读盘时丢弃旧记录遗留的类别，下次写盘不再落盘。
+          delete (note as { type?: unknown }).type;
         }
         return raw;
       }
@@ -383,13 +380,6 @@ export class MemoStore {
     const tempPath = `${this.filePath}.tmp-${process.pid}-${Date.now()}`;
     writeFileSync(tempPath, JSON.stringify(file, null, 2), "utf8");
     renameSync(tempPath, this.filePath);
-  }
-
-  private requireType(value: MemoNoteType): MemoNoteType {
-    if (!NOTE_TYPES.includes(value)) {
-      throw memoError("INVALID_REQUEST", `无效的记录类型：${String(value)}`);
-    }
-    return value;
   }
 
   private requireStatus(value: MemoNoteStatus): MemoNoteStatus {

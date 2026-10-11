@@ -65,7 +65,7 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** 造一条带本地图片文件的记录（插件 store 的 create 不收图片，走 replaceAll）。 */
 function createNoteWithImage(store: MemoStore, title: string): MemoNote {
-  const note = store.create({ type: "memo", title, contentMd: "正文" });
+  const note = store.create({ title, contentMd: "正文" });
   const withImage: MemoNote = {
     ...note,
     images: [{ id: "img-1", fileName: "a.png", mediaType: "image/png", bytes: PNG.byteLength }],
@@ -132,7 +132,7 @@ describe("MemoSync 配置解析", () => {
     setEnvConfig();
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
-    store.create({ type: "memo", title: "a", contentMd: "x" });
+    store.create({ title: "a", contentMd: "x" });
 
     await sync.syncNow();
     const settings = sync.getSettings();
@@ -223,7 +223,7 @@ describe("MemoSync 同步", () => {
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      store.create({ type: "memo", title: "a", contentMd: "x" });
+      store.create({ title: "a", contentMd: "x" });
       scheduleMemoAutoSync(agentDir);
       scheduleMemoAutoSync(agentDir); // 防抖窗口内重复触发只算一次。
       await vi.advanceTimersByTimeAsync(6_000);
@@ -232,7 +232,7 @@ describe("MemoSync 同步", () => {
 
       // autoSync 关闭时不触发。
       process.env[ENV_AUTO_SYNC] = "false";
-      store.create({ type: "memo", title: "b", contentMd: "x" });
+      store.create({ title: "b", contentMd: "x" });
       scheduleMemoAutoSync(agentDir);
       await vi.advanceTimersByTimeAsync(6_000);
       expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -247,7 +247,7 @@ describe("MemoSync 同步", () => {
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     try {
-      store.create({ type: "memo", title: "a", contentMd: "x" });
+      store.create({ title: "a", contentMd: "x" });
       sync.startupSync();
       sync.startupSync(); // 每进程只做一次。
       await vi.advanceTimersByTimeAsync(11_000);
@@ -263,7 +263,7 @@ describe("MemoSync 同步", () => {
   it("adopts cloud-only notes and downloads their images (two-way sync)", async () => {
     const { store, sync } = await tempLayout();
     // 本地已有自己的记录。
-    store.create({ type: "memo", title: "本地", contentMd: "x" });
+    store.create({ title: "本地", contentMd: "x" });
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     setEnvConfig();
@@ -271,7 +271,6 @@ describe("MemoSync 同步", () => {
     // 模拟另一台设备先把一条记录 + 图片放到云端。
     const cloudNote: MemoNote = {
       id: "cloud-note-1",
-      type: "idea",
       title: "来自云端",
       contentMd: "c",
       status: "open",
@@ -315,6 +314,7 @@ describe("MemoSync 同步", () => {
           notes: [
             {
               id: "legacy-note-1",
+              // v0.3.0 之前的云端数据带 type 类别字段：读盘时应被忽略并剔除。
               type: "memo",
               title: "旧格式记录",
               contentMd: "c",
@@ -340,7 +340,7 @@ describe("MemoSync 同步", () => {
 
   it("local deletion propagates to cloud and is not resurrected", async () => {
     const { store, sync } = await tempLayout();
-    const note = store.create({ type: "memo", title: "要删的", contentMd: "x" });
+    const note = store.create({ title: "要删的", contentMd: "x" });
     const { fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     setEnvConfig();
@@ -357,7 +357,7 @@ describe("MemoSync 同步", () => {
 
   it("an edit newer than a tombstone resurrects the note", async () => {
     const { store, sync } = await tempLayout();
-    const note = store.create({ type: "memo", title: "v1", contentMd: "x" });
+    const note = store.create({ title: "v1", contentMd: "x" });
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     setEnvConfig();

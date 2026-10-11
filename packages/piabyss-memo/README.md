@@ -1,14 +1,16 @@
 # piabyss-memo
 
 把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件：让 agent 直接操作用户的
-PiAyssey 备忘录看板（list / complete / reopen / update），与 PiAbyss 桌面端
-备忘录页面共用同一份磁盘数据。v2 起把备忘录的 **Cloudflare R2 云同步** 也
-收进插件自持（`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss
-Host 内置的同步引擎。
+方寸间（原「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
+（list / complete / reopen / update），与 PiAbyss 桌面端方寸间页面共用同一份
+磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
+（`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss Host 内置的
+同步引擎。v0.3.0 起取消记录类别（备忘 / 想法 / 任务），旧数据的 type 字段
+读盘时自动剔除。
 
 ## 功能
 
-- `list`：列出全部备忘录记录（id / 类型 / 状态 / 标题 / 标签 / 更新时间）。
+- `list`：列出全部记录（id / 状态 / 标题 / 标签 / 更新时间）。
 - `complete`：把某条记录标记为已完成，并**必须**提交 `result`（一段简洁的
   Markdown 总结），覆盖式写入记录的结果字段；同时捕获提交时的会话信息
   （sessionId / 会话文件路径 / 会话标题 / cwd），供桌面端「继续讨论」跳转。
@@ -30,7 +32,7 @@ Host 内置的同步引擎。
 
 ### 配置（密钥不进对话）
 
-R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 备忘录」的配置
+R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 方寸间」的配置
 表单**里填写，经 `pluginLibrary.setEnv` 注入环境变量（扩展与 Host 同进程，
 保存即生效）：
 
@@ -48,7 +50,7 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 备忘
 
 ### 本地控制面（127.0.0.1）
 
-桌面备忘录页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
+桌面方寸间页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
 `memo.syncNow` 协议代理到插件的环回 HTTP 控制面（与 pi-schedule 同一模式）：
 
 - 端口：`PIABYSS_MEMO_SYNC_PORT`（缺省 **18768**）；
@@ -77,7 +79,6 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 备忘
   "notes": [
     {
       "id": "…",
-      "type": "memo | idea | task",
       "title": "…",
       "contentMd": "…",
       "status": "open | in_progress | done | archived",
@@ -103,7 +104,8 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 备忘
 - 每次操作都从磁盘读后写回，无内存缓存（多实例安全）；
 - 删除是软删除（`deletedAt` 墓碑），记录体保留供同步引擎传播删除；
   超过 30 天的墓碑由同步引擎在合并时物理清除（本地 + 云端）；
-- 旧数据缺 `result` / `deletedAt` / `sessionId` 字段时读入自动补齐为 null。
+- 旧数据缺 `result` / `deletedAt` / `sessionId` 字段时读入自动补齐为 null；
+  v0.3.0 之前写入的 `type` 类别字段读盘时自动剔除（不再落盘）。
 
 图片目录 `<agentDir>/piabyss/memo/images/<noteId>/<fileName>` 同样与
 Host 共用；本插件 v2 补齐了 `hardRemove` / `readImageFile` /

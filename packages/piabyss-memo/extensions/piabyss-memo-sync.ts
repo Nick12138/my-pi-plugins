@@ -2,7 +2,7 @@
  * piabyss-memo —— 云同步工具 `piabyss_memo_sync` + 进程级同步运行时。
  *
  * 与 pi-reimburse 的 reimburse_sync 同一模式，但配置不进工具：
- * R2 密钥由 PiAbyss「设置 → 插件 → PiAbyss 备忘录」的配置表单管理
+ * R2 密钥由 PiAbyss「设置 → 插件 → PiAbyss 方寸间」的配置表单管理
  * （pluginLibrary.setEnv 注入环境变量，扩展与其同进程因此实时生效），
  * 本工具只提供 test / sync_now / status 三个动作做诊断与手动同步。
  *
@@ -70,7 +70,7 @@ function ensureRuntime(): SyncRuntime {
       runtime.httpError = error instanceof Error ? error.message : String(error);
       console.error(
         `[piabyss-memo-sync] HTTP 控制面启动失败（端口 ${configuredPort}）：${runtime.httpError}。` +
-          `PiAbyss 备忘录页的云同步按钮将不可用；同步工具仍可直接调用。`,
+          `PiAbyss 方寸间页的云同步按钮将不可用；同步工具仍可直接调用。`,
       );
     });
 
@@ -116,7 +116,7 @@ function formatStatus(settings: ReturnType<ReturnType<typeof getMemoSync>["getSe
   ];
   if (!settings.configured) {
     lines.push(
-      "提示：R2 密钥在 PiAbyss「设置 → 插件 → PiAbyss 备忘录」的配置表单里填写，不要在对话里传密钥。",
+      "提示：R2 密钥在 PiAbyss「设置 → 插件 → PiAbyss 方寸间」的配置表单里填写，不要在对话里传密钥。",
     );
   }
   return lines.join("\n");
@@ -127,7 +127,7 @@ export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: SYNC_TOOL_NAME,
-    label: "PiAbyss memo sync",
+    label: "方寸间同步",
     description:
       "piabyss-memo 的 R2 云同步控制：test 用当前配置测连通性；sync_now 立即双向同步（LWW 合并+删除墓碑传播+图片补齐/上传）；status 查看配置与最近同步状态。R2 密钥（accountId/accessKeyId/secretAccessKey/bucket）与 autoSync 在 PiAbyss 设置的插件配置里管理，不在对话中传递。",
     promptSnippet: "Test and run piabyss-memo cloud sync (Cloudflare R2)",
@@ -151,7 +151,7 @@ export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
                 content: [
                   {
                     type: "text" as const,
-                    text: "尚未配置 R2 连接信息：请在 PiAbyss「设置 → 插件 → PiAbyss 备忘录」的配置表单里填写 Account ID / Access Key ID / Secret Access Key / 桶名。",
+                    text: "尚未配置 R2 连接信息：请在 PiAbyss「设置 → 插件 → PiAbyss 方寸间」的配置表单里填写 Account ID / Access Key ID / Secret Access Key / 桶名。",
                   },
                 ],
                 details: { action: "test", ok: false, error: "not configured" },

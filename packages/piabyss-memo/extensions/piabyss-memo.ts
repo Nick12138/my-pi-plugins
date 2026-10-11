@@ -66,7 +66,7 @@ type MemoSessionInfo = {
 };
 
 const TOOL_DESCRIPTION = [
-  "Access the user's PiAbyss memo board (备忘录).",
+  "Access the user's PiAbyss 方寸间 board (待办 · 速记 · 备忘 · 收集).",
   "Use it to list pending notes, to mark a note as complete (complete) once the task described in it has been handled, or to reopen/update notes.",
   "Before calling complete, self-check: has the task produced a final result? Are you still waiting for user input or a user decision? If anything is still awaited (e.g. you asked the user to pick an option), do NOT call complete — reply and wait instead.",
   "Instructions the user sends manually in the session always override memo prompts: if the user says not to mark a note done yet, do not call complete.",
@@ -78,7 +78,6 @@ const TOOL_DESCRIPTION = [
 function formatNote(note: MemoNote): string {
   const parts = [
     `id: ${note.id}`,
-    `type: ${note.type}`,
     `status: ${note.status}`,
     `title: ${note.title}`,
   ];
@@ -106,7 +105,7 @@ function memoSessionInfo(ctx: ExtensionContext): MemoSessionInfo {
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: MEMO_TOOL_NAME,
-    label: "PiAbyss memo",
+    label: "方寸间",
     description: TOOL_DESCRIPTION,
     promptSnippet: "List and update the user's memo notes (mark done after handling)",
     parameters: ParamsSchema,
