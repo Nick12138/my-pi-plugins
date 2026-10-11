@@ -371,10 +371,6 @@ export default function (pi: ExtensionAPI) {
 			"返回每个目标 run 的最终状态与输出预览。",
 		].join("\n"),
 		promptSnippet: "阻塞等待子代理 run 结束；超时返回进度，后台继续不受影响",
-		promptGuidelines: [
-			"subagent_wait({all:true}) 阻塞等本会话所有 pending/running run 完成；传 runId 只等指定 run。",
-			"超时或被中断后 run 仍在后台继续：稍后再 subagent_wait，或用 subagent(action:\"list\") 查看状态。",
-		],
 		parameters: Type.Object({
 			runId: Type.Optional(Type.String({ description: "目标 run id（缺省且 all=false 时等全部）" })),
 			all: Type.Optional(Type.Boolean({ description: "等所有运行中的 run 完成" })),
@@ -466,11 +462,8 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "委托独立子代理（scout/worker/reviewer）：后台运行、队列排队、worktree 隔离、完成自动通知",
 		promptGuidelines: [
 			"会撑爆主上下文的自包含工作交给子代理：scout = 只读探索代码库/问题范围，worker = 实现并跑验证，reviewer = 只读审查改动。",
-			"多个相互独立的任务用一次 tasks:[...] 批量提交——自动排队并按并发上限同时运行；仅当后续任务依赖前面结果时才逐个 spawn。",
 			"并行 worker 会写同一仓库的文件时设 worktree:true，完成后用 subagent(action:\"merge\", runId) 合并回主分支。",
-			"spawn 立即返回（后台运行）：用 subagent_wait({all:true}) 阻塞等完成，或依赖完成后的自动通知。",
 			"任务描述必须自包含（目标 + 约束 + 预期输出）：子代理看不到你的会话内容。",
-			"需要改正在运行的子代理方向时用 subagent(action:\"steer\", runId, message) 引导，不要直接 stop；stop/pause/continue/resume 留给手动控制。",
 		],
 		parameters: SubagentParams,
 

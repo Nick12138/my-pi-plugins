@@ -132,7 +132,6 @@ export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
       "piabyss-memo 的 R2 云同步控制：test 用当前配置测连通性；sync_now 立即双向同步（LWW 合并+删除墓碑传播+图片补齐/上传）；status 查看配置与最近同步状态。R2 密钥（accountId/accessKeyId/secretAccessKey/bucket）与 autoSync 在 PiAbyss 设置的插件配置里管理，不在对话中传递。",
     promptSnippet: "Test and run piabyss-memo cloud sync (Cloudflare R2)",
     promptGuidelines: [
-      "密钥与 autoSync 属于 PiAbyss 插件配置（设置 → 插件 → PiAbyss 备忘录），不要向用户索要或复述密钥；status 未配置时引导用户去设置里填。",
       "sync_now 失败时把错误原样告诉用户（通常是密钥错误或网络问题），不要重试超过一次。",
     ],
     parameters: ParamsSchema,
