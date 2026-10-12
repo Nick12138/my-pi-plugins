@@ -1,18 +1,47 @@
 /**
- * pixie_report 的激活门控扩展。
+ * pi-pixie 会话角色判定 + report/ask 激活门控扩展。
  *
- * 语义（照搬原 pixie-tool.ts 的激活扩展）：工具注册在每个会话上，但在
- * before_agent_start 里按门控结果把它加入/移出 active tools——普通工作区
- * 会话永远看不到该工具。
+ * 角色判定（v4）：每个 before_agent_start 按 ctx.cwd 与解析后的小精灵工作区
+ * 路径比较（Windows 大小写归一），命中 → 小精灵会话（dispatch/rest 常驻
+ * active）；否则 → 普通会话。PIABYSS_PIXIE_RESIDENT=1 保留为旧 Host 的兼容
+ * 判定（v3 环境变量窗口）。工作区路径来自 PIABYSS_PIXIE_WORKSPACE（支持
+ * {agentDir} 占位符），留空 = <agentDir>/workspace/pixie。
  *
- * 门控来源：Host 侧环回控制面 GET /api/pixie/dispatch-state?sessionId=<当前
- * 会话id>，响应 { armed: boolean }。端口环境变量缺失或请求失败一律视为未
- * armed（不激活），且不得让 agent 启动失败。
+ * 激活门控（普通会话）：report/ask 工具注册在每个会话上，但在
+ * before_agent_start 里按门控结果统一加入/移出 active tools——普通工作区
+ * 会话永远看不到这两个工具。门控来源：Host 侧环回控制面 GET
+ * /api/pixie/dispatch-state?sessionId=<当前会话id>，响应 { armed, kind }。
+ * 端口环境变量缺失或请求失败一律视为未 armed（不激活），且不得让 agent
+ * 启动失败。401（token 不匹配/旧插件）同样落入保守降级。
  */
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PIXIE_REPORT_NAME } from "./pixie-tools.js";
+import { PIXIE_ASK_NAME, PIXIE_DISPATCH_NAME, PIXIE_REPORT_NAME, PIXIE_REST_NAME } from "./pixie-tools.js";
 import { readPixiePort, pixieRequest } from "./http-client.js";
 import { PIXIE_DISPATCH_STATE_PATH, mapDispatchStateResponse } from "./protocol.js";
+
+/** 小精灵工作区路径环境变量（与 plugins.json config[].env 对应）。 */
+export const PIXIE_WORKSPACE_ENV = "PIABYSS_PIXIE_WORKSPACE";
+
+/** 解析小精灵工作区路径（与 Host 侧 resolvePixieWorkspacePath 同构）。 */
+export function resolvePixieWorkspacePath(
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	const agentDir = env.PI_CODING_AGENT_DIR?.trim() || join(env.HOME ?? env.USERPROFILE ?? ".", ".pi", "agent");
+	const configured = env[PIXIE_WORKSPACE_ENV]?.trim();
+	if (!configured) return join(agentDir, "workspace", "pixie");
+	return join(configured.replaceAll("{agentDir}", agentDir));
+}
+
+function normalizePathForCompare(path: string): string {
+	return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/** cwd 是否为小精灵工作区（Windows 忽略大小写）。 */
+export function isPixieWorkspaceCwd(cwd: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+	if (!cwd) return false;
+	return normalizePathForCompare(cwd) === normalizePathForCompare(resolvePixieWorkspacePath(env));
+}
 
 /** 从事件 ctx 安全取当前会话 id（拿不到返回 null，绝不抛出）。 */
 export function sessionIdFromCtx(ctx?: ExtensionContext): string | null {
@@ -35,7 +64,7 @@ export type DispatchStateResult = { armed: boolean; ok: boolean };
 
 /**
  * 查询 armed 状态并区分「确认未 armed」与「查询失败」：ok=false 表示传输
- * 失败（超时/连接拒绝/非 200/非法 JSON），调用方可据此做退避。
+ * 失败（超时/连接拒绝/非 200/非法 JSON/401），调用方可据此做退避。
  */
 export async function queryPixieDispatchState(input: {
 	port: number | null;
@@ -58,38 +87,59 @@ export async function queryPixieDispatchState(input: {
 export type SessionIdReader = (ctx?: ExtensionContext) => string | null;
 
 /**
- * 创建激活扩展工厂：每个会话实例在 before_agent_start 重新评估门控，
- * armed → report 工具进入 active tools；否则从 active tools 剪除。
- * 门控查询失败/超时绝不抛出（不能让 agent 启动失败）。
+ * 创建激活扩展工厂：每个会话实例在 before_agent_start 重新评估角色与门控。
+ *
+ * - 小精灵工作区会话（cwd 匹配或旧 env 标记）：dispatch/rest 钉回 active
+ *   tools，report/ask 移出——委派工具从第一轮就可用。
+ * - 普通会话：dispatch/rest 移出；armed → report/ask 进入 active tools，
+ *   否则剪除。门控查询失败/超时绝不抛出（不能让 agent 启动失败）。
  */
 export function createPixieReportActivationExtension(options: {
 	getPort?: () => number | null;
 	getSessionId?: SessionIdReader;
+	isResident?: (ctx?: ExtensionContext) => boolean;
 	/** 查询失败后的退避间隔；Host 挂死时避免每轮都阻塞 3 秒。 */
 	failureBackoffMs?: number;
 } = {}): (pi: ExtensionAPI) => void {
 	const getPort = options.getPort ?? readPixiePort;
 	const getSessionId: SessionIdReader = options.getSessionId ?? sessionIdFromCtx;
+	const isResident =
+		options.isResident ?? ((ctx?: ExtensionContext) => {
+			try {
+				return isPixieWorkspaceCwd(ctx?.cwd) || process.env.PIABYSS_PIXIE_RESIDENT === "1";
+			} catch {
+				return false;
+			}
+		});
 	const failureBackoffMs = options.failureBackoffMs ?? 30_000;
 	let lastFailureAt = Number.NEGATIVE_INFINITY;
 	return (pi: ExtensionAPI): void => {
 		pi.on("before_agent_start", async (_event, ctx) => {
-			let armed = false;
-			try {
-				const port = getPort();
-				const sessionId = getSessionId(ctx);
-				// 退避窗口内的失败不再重复查询（视为未 armed）；Host 健康时仍每轮实时评估。
-				const skipBackoff = Date.now() - lastFailureAt < failureBackoffMs;
-				if (port !== null && sessionId !== null && !skipBackoff) {
-					const state = await queryPixieDispatchState({ port, sessionId });
-					if (state.ok) {
-						armed = state.armed;
-					} else {
-						lastFailureAt = Date.now();
-					}
+			const resident = (() => {
+				try {
+					return isResident(ctx);
+				} catch {
+					return false;
 				}
-			} catch {
-				armed = false;
+			})();
+			let armed = false;
+			if (!resident) {
+				try {
+					const port = getPort();
+					const sessionId = getSessionId(ctx);
+					// 退避窗口内的失败不再重复查询（视为未 armed）；Host 健康时仍每轮实时评估。
+					const skipBackoff = Date.now() - lastFailureAt < failureBackoffMs;
+					if (port !== null && sessionId !== null && !skipBackoff) {
+						const state = await queryPixieDispatchState({ port, sessionId });
+						if (state.ok) {
+							armed = state.armed;
+						} else {
+							lastFailureAt = Date.now();
+						}
+					}
+				} catch {
+					armed = false;
+				}
 			}
 			// 门控查询之后再读 active tools：await 期间集合可能变化，以最新为准。
 			let active: string[];
@@ -98,11 +148,29 @@ export function createPixieReportActivationExtension(options: {
 			} catch {
 				return;
 			}
-			const hasReport = active.includes(PIXIE_REPORT_NAME);
-			if (armed && !hasReport) {
-				pi.setActiveTools([...active, PIXIE_REPORT_NAME]);
-			} else if (!armed && hasReport) {
-				pi.setActiveTools(active.filter((name) => name !== PIXIE_REPORT_NAME));
+			const residentTools = [PIXIE_DISPATCH_NAME, PIXIE_REST_NAME];
+			const delegatedTools = [PIXIE_REPORT_NAME, PIXIE_ASK_NAME];
+			let next = active;
+			if (resident) {
+				for (const name of delegatedTools) {
+					next = next.filter((tool) => tool !== name);
+				}
+				for (const name of residentTools) {
+					if (!next.includes(name)) next = [...next, name];
+				}
+			} else {
+				for (const name of residentTools) {
+					next = next.filter((tool) => tool !== name);
+				}
+				for (const name of delegatedTools) {
+					const has = next.includes(name);
+					const wanted = armed;
+					if (wanted && !has) next = [...next, name];
+					else if (!wanted && has) next = next.filter((tool) => tool !== name);
+				}
+			}
+			if (next.length !== active.length || next.some((tool, index) => tool !== active[index])) {
+				pi.setActiveTools(next);
 			}
 		});
 	};

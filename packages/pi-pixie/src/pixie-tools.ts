@@ -15,28 +15,39 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { readPixiePort, pixieRequest } from "./http-client.js";
 import {
+	PIXIE_ASK_PATH,
 	PIXIE_DISPATCH_PATH,
 	PIXIE_DISPATCH_STATE_PATH,
 	PIXIE_REPORT_PATH,
+	PIXIE_REST_PATH,
+	PIXIE_ASK_SUCCESS_TEXT,
 	PIXIE_REPORT_SUCCESS_TEXT,
+	PIXIE_REST_SUCCESS_TEXT,
+	formatAskFailureText,
 	formatDispatchFailureText,
 	formatDispatchSuccessText,
 	formatReportFailureText,
+	formatRestFailureText,
+	mapAskResponse,
 	mapDispatchResponse,
 	mapDispatchStateResponse,
 	mapReportResponse,
+	mapRestResponse,
 } from "./protocol.js";
 
 export const PIXIE_DISPATCH_NAME = "pixie_dispatch";
 export const PIXIE_REPORT_NAME = "pixie_report";
+export const PIXIE_ASK_NAME = "pixie_ask";
+export const PIXIE_REST_NAME = "pixie_rest";
 
 const DispatchParams = Type.Object({
 	cwd: Type.String({
-		description: "目标工作区的绝对路径（用户提到哪个项目就填哪个项目的 cwd）。",
+		description:
+			"目标工作区的绝对路径（用户提到哪个项目就填哪个项目的 cwd；必须是 <pixie-context> 已知工作区列表中的路径或用户当前打开的工作区）。",
 	}),
 	task: Type.String({
 		description:
-			"委派提示词：包含任务目标、必要的上下文、完成后的回调要求（调用 pixie_report 报告「已完成 + 结果摘要」）。若任务源自某条备忘录，还应要求被委派 Agent 完成后用 piabyss_memo complete 回填。",
+			"委派提示词：包含任务目标、必要的上下文、完成后的回调要求（调用 pixie_report 报告「已完成 + 结果摘要」；需要用户决策时调用 pixie_ask）。若任务源自某条备忘录，还应要求被委派 Agent 完成后用 piabyss_memo complete 回填。",
 	}),
 	newSession: Type.Optional(
 		Type.Boolean({
@@ -132,7 +143,7 @@ export function buildPixieReportTool(options: {
 		name: PIXIE_REPORT_NAME,
 		label: "Pixie report",
 		description:
-			"向「小精灵」回调委派任务的结果（仅在被委派的任务会话中使用）。完成任务后调用：报告已完成状态与结果摘要，小精灵会把结果转述给用户。",
+			"向「小精灵」回调委派任务的结果（仅在被委派的任务会话中使用）。完成任务后调用：报告已完成状态与结果摘要，小精灵会把结果转述给用户。需要用户决策时不要用本工具干等，改用 pixie_ask。",
 		promptSnippet: "Report a delegated task's result back to the pixie helper",
 		parameters: ReportParams,
 		async execute(_toolCallId, params: ReportParamsType, _signal, _onUpdate, ctx) {
@@ -194,4 +205,148 @@ function defaultReportSessionId(ctx?: unknown): string | null {
 	} catch {
 		return null;
 	}
+}
+
+/** 按 armed 门控解析当前会话的 dispatchId（report/ask 共用的查找步骤）。 */
+async function resolveArmedDispatchId(getPort: PixiePortReader, ctx?: unknown): Promise<string | null> {
+	const port = getPort();
+	if (port === null) return null;
+	const sessionId = defaultReportSessionId(ctx);
+	if (!sessionId) return null;
+	try {
+		const state = mapDispatchStateResponse(
+			await pixieRequest({
+				port,
+				method: "GET",
+				path: `${PIXIE_DISPATCH_STATE_PATH}?sessionId=${encodeURIComponent(sessionId)}`,
+			}),
+		);
+		return state.armed ? state.dispatchId : null;
+	} catch {
+		return null;
+	}
+}
+
+const AskParams = Type.Object({
+	question: Type.String({
+		description:
+			"要转述给用户的问题（一句话说清需要用户决策什么）。用户会在小精灵对话里看到并直接回复，答复以 <pixie-reply> 信封回到本会话。",
+	}),
+	options: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "可选项（如方案 A/B/C）。没有自然选项时省略，让用户自由回答。",
+		}),
+	),
+});
+
+type AskParamsType = Static<typeof AskParams>;
+
+const RestParams = Type.Object({
+	phrase: Type.Optional(
+		Type.String({
+			description: "睡觉短语（分隔符文案），如「我先打个盹~」「出去转一圈」。省略则由 Host 从内置短语池随机挑选。",
+		}),
+	),
+	handoff: Type.Optional(
+		Type.String({
+			description: "写给下一段自己的一句话交接摘要（当前话题聊到哪了、有什么没说完）。建议填写，省略则为空。",
+		}),
+	),
+});
+
+type RestParamsType = Static<typeof RestParams>;
+
+/**
+ * pixie_ask 工具壳：需要用户决策时调用。执行流与 report 一致——先按 armed
+ * 门控解析 dispatchId，再 POST /api/pixie/ask；激活由扩展在
+ * before_agent_start 据 Host 的 dispatch-state 门控（activation.ts）。
+ */
+export function buildPixieAskTool(options: {
+	getPort?: PixiePortReader;
+} = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_ASK_NAME,
+		label: "Pixie ask",
+		description:
+			"向「小精灵」提问并等待用户决策（仅在被委派的任务会话中使用）。需要用户选择方案、补充信息或确认操作时调用；问题会由小精灵转述给用户，用户答复会回到本会话。",
+		promptSnippet: "Ask the user a question through the pixie helper and wait for the reply",
+		parameters: AskParams,
+		async execute(_toolCallId, params: AskParamsType, _signal, _onUpdate, ctx) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult(formatAskFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+			}
+			const dispatchId = await resolveArmedDispatchId(getPort, ctx);
+			if (!dispatchId) {
+				return errorResult(formatAskFailureText("当前会话没有进行中的小精灵委派。"));
+			}
+			const question = params.question.trim();
+			if (!question) {
+				return errorResult(formatAskFailureText("question 不能为空。"));
+			}
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_ASK_PATH,
+					body: {
+						dispatchId,
+						question,
+						...(params.options ? { options: params.options } : {}),
+					},
+				});
+				const resolution = mapAskResponse(result);
+				if (!resolution.ok) {
+					return errorResult(formatAskFailureText(resolution.error));
+				}
+				return okResult(PIXIE_ASK_SUCCESS_TEXT);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(formatAskFailureText(message));
+			}
+		},
+	});
+}
+
+/**
+ * pixie_rest 工具壳：仅在小精灵工作区会话激活（cwd 匹配，由扩展门控）。
+ * 执行 = POST /api/pixie/rest；Host 在本回合结束（agent_settled）时收尾当前
+ * 会话段，下一条用户消息自动开启新段。
+ */
+export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_REST_NAME,
+		label: "Pixie rest",
+		description:
+			"结束当前会话段并打个盹（仅小精灵自己使用）。当话题收束、上下文变得臃肿、或用户说「新开一个话题」时调用：phrase 填睡觉短语，handoff 写给下一段自己一句话交接。",
+		promptSnippet: "End the current conversation segment and take a nap",
+		parameters: RestParams,
+		async execute(_toolCallId, params: RestParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult(formatRestFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+			}
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_REST_PATH,
+					body: {
+						...(params.phrase !== undefined ? { phrase: params.phrase } : {}),
+						...(params.handoff !== undefined ? { handoff: params.handoff } : {}),
+					},
+				});
+				const resolution = mapRestResponse(result);
+				if (!resolution.ok) {
+					return errorResult(formatRestFailureText(resolution.error));
+				}
+				return okResult(PIXIE_REST_SUCCESS_TEXT);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(formatRestFailureText(message));
+			}
+		},
+	});
 }

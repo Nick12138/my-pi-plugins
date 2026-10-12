@@ -1,7 +1,7 @@
 {
   "name": "pi-pixie",
-  "version": "0.1.0",
-  "description": "Pixie delegation shell plugin (`pixie_dispatch` / `pixie_report`): talks to the PiAbyss Host loopback control plane; the delegation engine itself stays Host-side.",
+  "version": "0.2.0",
+  "description": "Pixie workspace shell plugin (pixie_dispatch / pixie_report / pixie_ask / pixie_rest): talks to the PiAbyss Host loopback control plane (token-authed); the delegation engine itself stays Host-side.",
   "keywords": ["pi-package", "piabyss", "pixie", "delegation"],
   "license": "MIT",
   "author": "Nick12138",

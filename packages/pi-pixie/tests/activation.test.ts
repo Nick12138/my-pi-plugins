@@ -1,22 +1,37 @@
 /**
- * pixie_report 激活门控与扩展入口的 vitest 用例。
+ * pixie_report/pixie_ask 激活门控、cwd 角色判定与扩展入口的 vitest 用例。
  *
  * 覆盖：
  * - GET /api/pixie/dispatch-state 的 armed true/false 映射（node:http mock 环回）；
  * - 请求携带 sessionId 查询参数；
  * - 端口缺失 / 请求失败 / 超时 → 安全返回未 armed，绝不抛错；
- * - before_agent_start 门控把 pixie_report 加入/移出 active tools；
- * - 扩展入口按 PIABYSS_PIXIE_RESIDENT 的注册门控。
+ * - before_agent_start 门控：小精灵会话（env/cwd）→ dispatch/rest 激活；
+ *   普通会话 → report/ask 仅在 armed 时激活；
+ * - 扩展入口注册全部四个工具（可见性交给 active-tools 门控）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createPixieReportActivationExtension,
+  isPixieWorkspaceCwd,
   queryPixieDispatchArmed,
+  resolvePixieWorkspacePath,
   sessionIdFromCtx,
 } from "../src/activation.js";
-import { PIXIE_DISPATCH_NAME, PIXIE_REPORT_NAME } from "../src/pixie-tools.js";
-import { PIXIE_PORT_ENV, PIXIE_RESIDENT_ENV, readPixiePort } from "../src/http-client.js";
+import {
+  PIXIE_ASK_NAME,
+  PIXIE_DISPATCH_NAME,
+  PIXIE_REPORT_NAME,
+  PIXIE_REST_NAME,
+} from "../src/pixie-tools.js";
+import {
+  PIXIE_PORT_ENV,
+  PIXIE_RESIDENT_ENV,
+  PIXIE_TOKEN_ENV,
+  readPixiePort,
+  readPixieToken,
+} from "../src/http-client.js";
 import buildPixieExtension from "../extensions/pi-pixie.js";
 
 // ── mock 环回服务 ──────────────────────────────────────────────
@@ -84,20 +99,24 @@ function createMockPi(initialActive: string[] = []): {
   };
 }
 
-const ctxWithSession = (sessionId: string): unknown => ({
+const ctxWithSession = (sessionId: string, cwd?: string): unknown => ({
   sessionManager: { getSessionId: () => sessionId },
+  ...(cwd !== undefined ? { cwd } : {}),
 });
 
-const envSnapshot = (): { port?: string; resident?: string } => ({
-  port: process.env[PIXIE_PORT_ENV],
-  resident: process.env[PIXIE_RESIDENT_ENV],
+const envSnapshot = (): Record<string, string | undefined> => ({
+  [PIXIE_PORT_ENV]: process.env[PIXIE_PORT_ENV],
+  [PIXIE_RESIDENT_ENV]: process.env[PIXIE_RESIDENT_ENV],
+  [PIXIE_TOKEN_ENV]: process.env[PIXIE_TOKEN_ENV],
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+  PIABYSS_PIXIE_WORKSPACE: process.env.PIABYSS_PIXIE_WORKSPACE,
 });
 
-const restoreEnv = (snapshot: { port?: string; resident?: string }): void => {
-  if (snapshot.port === undefined) delete process.env[PIXIE_PORT_ENV];
-  else process.env[PIXIE_PORT_ENV] = snapshot.port;
-  if (snapshot.resident === undefined) delete process.env[PIXIE_RESIDENT_ENV];
-  else process.env[PIXIE_RESIDENT_ENV] = snapshot.resident;
+const restoreEnv = (snapshot: Record<string, string | undefined>): void => {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 };
 
 const savedEnv = envSnapshot();
@@ -219,17 +238,17 @@ describe("before_agent_start activation gating", () => {
     }
   });
 
-  it("does not duplicate pixie_report when it is already active", async () => {
+  it("does not duplicate pixie_report/pixie_ask when they are already active", async () => {
     const { server, port } = await startMockServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ armed: true }));
     });
     try {
-      const mock = createMockPi(["read", PIXIE_REPORT_NAME]);
+      const mock = createMockPi(["read", PIXIE_REPORT_NAME, PIXIE_ASK_NAME]);
       createPixieReportActivationExtension({ getPort: () => port })(mock.pi);
       await mock.emitBeforeAgentStart(ctxWithSession("sess-1"));
       expect(mock.active.filter((name) => name === PIXIE_REPORT_NAME)).toHaveLength(1);
-      expect(mock.active).toEqual(["read", PIXIE_REPORT_NAME]);
+      expect(mock.active).toEqual(["read", PIXIE_REPORT_NAME, PIXIE_ASK_NAME]);
     } finally {
       await closeServer(server);
     }
@@ -296,52 +315,119 @@ describe("sessionIdFromCtx", () => {
 });
 
 describe("extension entry (extensions/pi-pixie.ts)", () => {
-  it("registers only pixie_dispatch on the resident pixie session", () => {
-    process.env[PIXIE_RESIDENT_ENV] = "1";
-    const mock = createMockPi();
-    buildPixieExtension(mock.pi);
-    expect(mock.registered.map((tool) => tool.name)).toEqual([PIXIE_DISPATCH_NAME]);
-    // 常驻会话装的是 dispatch 钉活钩子，不是 report 门控：armed 查询不应出现。
-    expect(mock.hasHandler("before_agent_start")).toBe(true);
-  });
-
-  it("pins pixie_dispatch into active tools on every resident turn", async () => {
-    process.env[PIXIE_RESIDENT_ENV] = "1";
-    const mock = createMockPi([]);
-    buildPixieExtension(mock.pi);
-    await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
-    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME]);
-    await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
-    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME]);
-  });
-
-  it("registers pixie_report plus the activation gate on non-resident sessions", () => {
+  it("registers all four tools; visibility is gated per turn, not per registration", () => {
     delete process.env[PIXIE_RESIDENT_ENV];
     const mock = createMockPi();
     buildPixieExtension(mock.pi);
-    expect(mock.registered.map((tool) => tool.name)).toEqual([PIXIE_REPORT_NAME]);
+    expect(mock.registered.map((tool) => tool.name)).toEqual([
+      PIXIE_DISPATCH_NAME,
+      PIXIE_REPORT_NAME,
+      PIXIE_ASK_NAME,
+      PIXIE_REST_NAME,
+    ]);
     expect(mock.hasHandler("before_agent_start")).toBe(true);
   });
 
-  it("treats any resident value other than 1 as non-resident", () => {
-    process.env[PIXIE_RESIDENT_ENV] = "0";
-    const mock = createMockPi();
+  it("activates dispatch/rest on the resident session (legacy env marker)", async () => {
+    process.env[PIXIE_RESIDENT_ENV] = "1";
+    const mock = createMockPi([PIXIE_REPORT_NAME]);
     buildPixieExtension(mock.pi);
-    expect(mock.registered.map((tool) => tool.name)).toEqual([PIXIE_REPORT_NAME]);
+    await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
+    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+    await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
+    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+  });
+
+  it("activates dispatch/rest when ctx.cwd matches the pixie workspace", async () => {
+    delete process.env[PIXIE_RESIDENT_ENV];
+    process.env.PI_CODING_AGENT_DIR = "C:/agent-test";
+    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    const mock = createMockPi([]);
+    buildPixieExtension(mock.pi);
+    await mock.emitBeforeAgentStart(ctxWithSession("sess-x", "C:\\agent-test\\workspace\\pixie"));
+    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+  });
+
+  it("gates report/ask by armed on non-resident sessions", async () => {
+    delete process.env[PIXIE_RESIDENT_ENV];
+    process.env.PI_CODING_AGENT_DIR = "C:/agent-test";
+    let armed = false;
+    const { server, port } = await startMockServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ armed }));
+    });
+    // 扩展入口用默认端口读取器：把 mock 服务端口写进环境变量。
+    process.env[PIXIE_PORT_ENV] = String(port);
+    try {
+      const mock = createMockPi([]);
+      buildPixieExtension(mock.pi);
+      // armed=false：普通会话看不到任何 pixie 工具。
+      await mock.emitBeforeAgentStart(ctxWithSession("sess-1", "C:/somewhere-else"));
+      expect(mock.active).toEqual([]);
+      // armed=true：report+ask 进入 active tools。
+      armed = true;
+      await mock.emitBeforeAgentStart(ctxWithSession("sess-1", "C:/somewhere-else"));
+      expect(mock.active).toEqual([PIXIE_REPORT_NAME, PIXIE_ASK_NAME]);
+    } finally {
+      delete process.env[PIXIE_PORT_ENV];
+      await closeServer(server);
+    }
+  });
+
+  it("treats any resident value other than 1 as non-resident (env fallback only)", async () => {
+    process.env[PIXIE_RESIDENT_ENV] = "0";
+    const mock = createMockPi([]);
+    buildPixieExtension(mock.pi);
+    await mock.emitBeforeAgentStart(ctxWithSession("sess-1", "C:/somewhere-else"));
+    expect(mock.active).toEqual([]);
   });
 });
 
-describe("readPixiePort", () => {
+describe("pixie workspace cwd resolution", () => {
+  it("defaults to <agentDir>/workspace/pixie", () => {
+    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
+    expect(resolvePixieWorkspacePath()).toBe(join("C:/agent-x", "workspace", "pixie"));
+  });
+
+  it("honours PIABYSS_PIXIE_WORKSPACE with the {agentDir} placeholder", () => {
+    process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
+    process.env.PIABYSS_PIXIE_WORKSPACE = "{agentDir}/custom";
+    expect(resolvePixieWorkspacePath()).toBe(join("C:/agent-x", "custom"));
+  });
+
+  it("compares case-insensitively on Windows, sensitively elsewhere", () => {
+    process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
+    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    const workspace = join("C:/agent-x", "workspace", "pixie");
+    if (process.platform === "win32") {
+      expect(isPixieWorkspaceCwd(workspace.toUpperCase())).toBe(true);
+    } else {
+      expect(isPixieWorkspaceCwd(workspace.toUpperCase())).toBe(false);
+    }
+    expect(isPixieWorkspaceCwd(workspace)).toBe(true);
+    expect(isPixieWorkspaceCwd("C:/other")).toBe(false);
+    expect(isPixieWorkspaceCwd(null)).toBe(false);
+  });
+});
+
+describe("readPixiePort / readPixieToken", () => {
   it("parses a valid port from PIABYSS_PIXIE_HTTP_PORT", () => {
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "18790" })).toBe(18790);
   });
 
-  it("returns null for missing or invalid values", () => {
+  it("returns null for missing or invalid ports", () => {
     expect(readPixiePort({})).toBeNull();
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "" })).toBeNull();
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "not-a-port" })).toBeNull();
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "0" })).toBeNull();
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "70000" })).toBeNull();
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "8080.5" })).toBeNull();
+  });
+
+  it("reads the control-plane token (trimmed; null when unset)", () => {
+    expect(readPixieToken({})).toBeNull();
+    expect(readPixieToken({ [PIXIE_TOKEN_ENV]: "" })).toBeNull();
+    expect(readPixieToken({ [PIXIE_TOKEN_ENV]: "  tok  " })).toBe("tok");
   });
 });

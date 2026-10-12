@@ -256,14 +256,56 @@
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "pixie_dispatch / pixie_report 工具壳：把任务派发给常驻小精灵会话并在完成后回调结果；委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT）转发请求。dispatch 仅在常驻小精灵会话激活，report 仅在已派发（armed）会话可见，普通工作区会话不可见。",
+      "description": "小精灵工作区化工具壳：pixie_dispatch（委派）/ pixie_report（完成回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。dispatch/rest 仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见，普通工作区会话不可见。",
       "icon": "🧚",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": [
         "pixie",
         "委派",
         "PiAbyss"
+      ],
+      "config": [
+        {
+          "key": "workspacePath",
+          "type": "text",
+          "label": "小精灵工作区路径",
+          "env": "PIABYSS_PIXIE_WORKSPACE",
+          "required": false,
+          "placeholder": "留空 = {agentDir}\\workspace\\pixie",
+          "default": "",
+          "description": "小精灵的专属工作区目录（真实文件夹 + 标准会话存储）。支持 {agentDir} 占位符；留空使用默认位置。"
+        },
+        {
+          "key": "model",
+          "type": "select",
+          "label": "小精灵专用模型",
+          "env": "PIABYSS_PIXIE_MODEL",
+          "required": false,
+          "default": "",
+          "optionsSource": "pi:models",
+          "description": "小精灵会话使用的模型（provider/id）。留空 = 跟随全局默认模型。"
+        },
+        {
+          "key": "callbackTimeoutMs",
+          "type": "text",
+          "label": "委派回调超时（毫秒）",
+          "env": "PIABYSS_PIXIE_STALE_MS",
+          "required": false,
+          "placeholder": "1800000",
+          "default": "1800000",
+          "description": "委派超过该时长未回调时标记失联（前端显示进行中·未按时回调）。"
+        },
+        {
+          "key": "segmentMaxTurns",
+          "type": "text",
+          "label": "单段轮数上限",
+          "env": "PIABYSS_PIXIE_MAX_TURNS",
+          "required": false,
+          "placeholder": "200",
+          "default": "200",
+          "description": "单个会话段的用户消息轮数上限，超过后自动打盹换段（reason=rollover）。"
+        }
       ],
       "install": {
         "type": "repo",

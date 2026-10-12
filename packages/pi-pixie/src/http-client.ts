@@ -10,7 +10,9 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 
 /** Host 侧环回控制面端口经此环境变量下发。 */
 export const PIXIE_PORT_ENV = "PIABYSS_PIXIE_HTTP_PORT";
-/** 常驻小精灵会话标记（Host 在该会话注入）。 */
+/** 控制面鉴权 token（v4：Host 启动生成，经此环境变量下发）。 */
+export const PIXIE_TOKEN_ENV = "PIABYSS_PIXIE_HTTP_TOKEN";
+/** 常驻小精灵会话标记（v3 兼容：Host 在该会话注入；v4 由 cwd 比较接管）。 */
 export const PIXIE_RESIDENT_ENV = "PIABYSS_PIXIE_RESIDENT";
 
 /** 单请求超时：3 秒。 */
@@ -26,6 +28,13 @@ export function readPixiePort(env: NodeJS.ProcessEnv = process.env): number | nu
 	return port;
 }
 
+/** 读取并校验环回控制面 token；未设置返回 null（请求不带鉴权头）。 */
+export function readPixieToken(env: NodeJS.ProcessEnv = process.env): string | null {
+	const raw = env[PIXIE_TOKEN_ENV];
+	const trimmed = raw?.trim();
+	return trimmed ? trimmed : null;
+}
+
 export type PixieHttpResult = { status: number; body: string };
 
 export type PixieRequestMethod = "GET" | "POST";
@@ -37,11 +46,18 @@ export type PixieRequestOptions = {
 	/** POST JSON body（会被序列化）；GET 不传。 */
 	body?: unknown;
 	timeoutMs?: number;
+	/** 鉴权 token；缺省读 PIABYSS_PIXIE_HTTP_TOKEN。 */
+	token?: string | null;
 };
 
 /** 组装请求 headers（独立出来便于测试请求构造）。 */
-export function buildRequestHeaders(method: PixieRequestMethod, body: unknown): Record<string, string> {
+export function buildRequestHeaders(
+	method: PixieRequestMethod,
+	body: unknown,
+	token: string | null = readPixieToken(),
+): Record<string, string> {
 	const headers: Record<string, string> = { host: `${PIXIE_LOOPBACK_HOST}` };
+	if (token) headers["x-piabyss-pixie-token"] = token;
 	if (method === "POST") {
 		headers["content-type"] = "application/json";
 		headers["content-length"] = String(Buffer.byteLength(JSON.stringify(body ?? {}), "utf8"));
@@ -69,7 +85,7 @@ export function pixieRequest(options: PixieRequestOptions): Promise<PixieHttpRes
 			port: options.port,
 			method: options.method,
 			path: options.path,
-			headers: buildRequestHeaders(options.method, options.body),
+			headers: buildRequestHeaders(options.method, options.body, options.token ?? readPixieToken()),
 		});
 		let settled = false;
 		// 墙钟总时长兑底：req.setTimeout 只是 socket 空闲超时，Host 缓慢
