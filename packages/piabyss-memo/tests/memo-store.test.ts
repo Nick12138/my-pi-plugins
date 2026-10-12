@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MemoStore } from "../src/memo-store.js";
+import { MemoStore, type MemoNote } from "../src/memo-store.js";
 
 const tempDirs: string[] = [];
 
@@ -93,6 +93,10 @@ describe("MemoStore（磁盘格式与原子写）", () => {
         "completedAt",
         "result",
         "deletedAt",
+        "dueAt",
+        "recurrence",
+        "nextDueAt",
+        "lastDoneAt",
       ].sort(),
     );
 
@@ -135,6 +139,96 @@ describe("MemoStore（磁盘格式与原子写）", () => {
     const retitled = store.update(note.id, { title: "新标题", tags: ["x"] });
     expect(retitled.title).toBe("新标题");
     expect(retitled.updatedAt).toBeGreaterThanOrEqual(note.updatedAt);
+  });
+
+  it("rejects the removed 'archived' status", async () => {
+    const { store } = await tempLayout();
+    const note = store.create({ title: "t", contentMd: "c" });
+    expect(() => store.update(note.id, { status: "archived" as never })).toThrow(
+      /无效的记录状态/,
+    );
+  });
+
+  it("creates notes with a one-shot dueAt and computes nextDueAt for recurrence", async () => {
+    const { store } = await tempLayout();
+    const dueAt = Date.now() + 86_400_000;
+    const oneShot = store.create({ title: "一次性", contentMd: "c", dueAt });
+    expect(oneShot.dueAt).toBe(dueAt);
+    expect(oneShot.recurrence).toBeNull();
+    expect(oneShot.nextDueAt).toBeNull();
+    expect(oneShot.lastDoneAt).toBeNull();
+
+    const recurring = store.create({
+      title: "每周一处理",
+      contentMd: "c",
+      recurrence: { frequency: "weekly", weekdays: [1], time: "13:00" },
+    });
+    expect(recurring.recurrence).toEqual({
+      frequency: "weekly",
+      interval: 1,
+      weekdays: [1],
+      monthDay: null,
+      time: "13:00",
+      tz: "Asia/Shanghai",
+      until: null,
+      startDate: null,
+    });
+    expect(recurring.nextDueAt).not.toBeNull();
+    expect(recurring.nextDueAt).toBeGreaterThan(Date.now());
+
+    // 非法输入直接拒绝，不产生半截记录。
+    expect(() => store.create({ title: "坏截止", contentMd: "c", dueAt: -1 }))
+      .toThrow(/dueAt/);
+    expect(() =>
+      store.create({
+        title: "坏规则",
+        contentMd: "c",
+        recurrence: { frequency: "weekly", time: "13:00" },
+      }),
+    ).toThrow(/weekdays/);
+  });
+
+  it("update sets and clears plan fields; invalid recurrence rejected", async () => {
+    const { store } = await tempLayout();
+    const note = store.create({ title: "t", contentMd: "c" });
+
+    const dueAt = Date.now() + 3_600_000;
+    store.update(note.id, { dueAt });
+    expect(store.get(note.id)?.dueAt).toBe(dueAt);
+    store.update(note.id, { dueAt: null });
+    expect(store.get(note.id)?.dueAt).toBeNull();
+
+    const updated = store.update(note.id, {
+      recurrence: { frequency: "daily", time: "09:00" },
+    });
+    expect(updated.recurrence?.frequency).toBe("daily");
+    expect(updated.nextDueAt).not.toBeNull();
+
+    const cleared = store.update(note.id, { recurrence: null });
+    expect(cleared.recurrence).toBeNull();
+    expect(cleared.nextDueAt).toBeNull();
+
+    expect(() =>
+      store.update(note.id, { recurrence: { frequency: "nope", time: "09:00" } }),
+    ).toThrow(/frequency/);
+  });
+
+  it("rejects marking a recurring note done via update; allowed after clearing recurrence", async () => {
+    const { store } = await tempLayout();
+    const note = store.create({
+      title: "t",
+      contentMd: "c",
+      recurrence: { frequency: "daily", time: "09:00" },
+    });
+    expect(() => store.update(note.id, { status: "done" })).toThrow(
+      /周期记录不能直接标记完成/,
+    );
+    // 失败不落盘。
+    expect(store.get(note.id)?.status).toBe("open");
+    // 同一次 patch 里先清周期再置 done：允许（明确表达「停用并完结」）。
+    const done = store.update(note.id, { recurrence: null, status: "done" });
+    expect(done.status).toBe("done");
+    expect(done.recurrence).toBeNull();
   });
 
   it("throws on unknown note ids", async () => {
@@ -264,6 +358,111 @@ describe("MemoStore（磁盘格式与原子写）", () => {
       expect(after?.result).toBeNull();
       expect(leftoverTempFiles(store)).toEqual([]);
     });
+
+    it("finishes only the current cycle for a recurring note and rolls nextDueAt", async () => {
+      const { store } = await tempLayout();
+      const note = store.create({ title: "周报", contentMd: "c" });
+      // 构造逾期中的周期记录（模拟云端同步下来的 nextDueAt 已过）：
+      const overdue: MemoNote = {
+        ...note,
+        recurrence: {
+          frequency: "weekly",
+          interval: 1,
+          weekdays: [1],
+          monthDay: null,
+          time: "13:00",
+          tz: "Asia/Shanghai",
+          until: null,
+          startDate: null,
+        },
+        nextDueAt: Date.now() - 7 * 86_400_000,
+      };
+      store.replaceAll([overdue]);
+
+      const cycle1 = store.completeWithResult(note.id, {
+        resultMd: "本轮完成",
+        sessionId: "s1",
+        sessionPath: null,
+        sessionTitle: null,
+        sessionCwd: null,
+      });
+      // 周期记录不置 done：状态回到 open，总结与 lastDoneAt 已记，
+      // 逾期轮次跳过，直接滚到未来的下一轮。
+      expect(cycle1.status).toBe("open");
+      expect(cycle1.completedAt).toBeNull();
+      expect(cycle1.lastDoneAt).not.toBeNull();
+      expect(cycle1.result?.resultMd).toBe("本轮完成");
+      expect(cycle1.recurrence).not.toBeNull();
+      expect(cycle1.nextDueAt).not.toBeNull();
+      expect(cycle1.nextDueAt).toBeGreaterThan(Date.now());
+
+      // 再完成一轮：仍 open，nextDueAt 保持未来（未到时间不会重复滚动），
+      // 总结覆盖式更新。
+      const cycle2 = store.completeWithResult(note.id, {
+        resultMd: "第二轮完成",
+        sessionId: "s2",
+        sessionPath: null,
+        sessionTitle: null,
+        sessionCwd: null,
+      });
+      expect(cycle2.status).toBe("open");
+      expect(cycle2.nextDueAt).toBe(cycle1.nextDueAt);
+      expect(cycle2.result?.resultMd).toBe("第二轮完成");
+      expect(cycle2.lastDoneAt).toBeGreaterThanOrEqual(cycle1.lastDoneAt!);
+    });
+
+    it("ends a recurring note naturally when until has passed (→ done)", async () => {
+      const { store } = await tempLayout();
+      const note = store.create({
+        title: "过期周期",
+        contentMd: "c",
+        // until 已过：创建时就没有未来发生时刻。
+        recurrence: { frequency: "daily", time: "09:00", until: Date.now() - 1_000 },
+      });
+      expect(note.nextDueAt).toBeNull();
+
+      const done = store.completeWithResult(note.id, {
+        resultMd: "最后一轮",
+        sessionId: "s1",
+        sessionPath: null,
+        sessionTitle: null,
+        sessionCwd: null,
+      });
+      expect(done.status).toBe("done");
+      expect(done.completedAt).not.toBeNull();
+      expect(done.nextDueAt).toBeNull();
+      // 规则保留供追溯（桌面端仍能看到「曾是周期任务」）。
+      expect(done.recurrence).not.toBeNull();
+    });
+
+    it("reopen recomputes nextDueAt for a recurring note adopted from cloud", async () => {
+      const { store } = await tempLayout();
+      const note = store.create({ title: "t", contentMd: "c" });
+      // 模拟云端同步下来的状态：周期记录、已完结、nextDueAt 缺失。
+      const cloudLike: MemoNote = {
+        ...note,
+        status: "done",
+        completedAt: Date.now(),
+        recurrence: {
+          frequency: "weekly",
+          interval: 1,
+          weekdays: [1],
+          monthDay: null,
+          time: "13:00",
+          tz: "Asia/Shanghai",
+          until: null,
+          startDate: null,
+        },
+        nextDueAt: null,
+        lastDoneAt: Date.now(),
+      };
+      store.replaceAll([cloudLike]);
+
+      const reopened = store.update(note.id, { status: "open", sessionId: null });
+      expect(reopened.status).toBe("open");
+      expect(reopened.nextDueAt).not.toBeNull();
+      expect(reopened.nextDueAt).toBeGreaterThan(Date.now());
+    });
   });
 
   it("reads legacy notes without a result field as result: null", async () => {
@@ -281,6 +480,47 @@ describe("MemoStore（磁盘格式与原子写）", () => {
     const reopened = new MemoStore(agentDir);
     const loaded = reopened.list().find((entry) => entry.id === note.id);
     expect(loaded?.result).toBeNull();
+  });
+
+  it("migrates legacy 'archived' status to done and backfills plan fields on read", async () => {
+    const { agentDir, store } = await tempLayout();
+    const note = store.create({ title: "老归档", contentMd: "c" });
+
+    // 模拟 v2 旧数据：status=archived 且没有计划字段。
+    const filePath = notesPath(store);
+    const raw = JSON.parse(readFileSync(filePath, "utf8")) as {
+      notes: Record<string, unknown>[];
+    };
+    raw.notes[0]!.status = "archived";
+    for (const field of ["dueAt", "recurrence", "nextDueAt", "lastDoneAt"]) {
+      delete raw.notes[0]![field];
+    }
+    writeFileSync(filePath, JSON.stringify(raw), "utf8");
+
+    const reopened = new MemoStore(agentDir);
+    const loaded = reopened.list().find((entry) => entry.id === note.id);
+    expect(loaded?.status).toBe("done");
+    expect(loaded?.dueAt).toBeNull();
+    expect(loaded?.recurrence).toBeNull();
+    expect(loaded?.nextDueAt).toBeNull();
+    expect(loaded?.lastDoneAt).toBeNull();
+  });
+
+  it("sanitizes a corrupted recurrence rule to null on read (board stays healthy)", async () => {
+    const { agentDir, store } = await tempLayout();
+    const note = store.create({ title: "脏数据", contentMd: "c" });
+
+    const filePath = notesPath(store);
+    const raw = JSON.parse(readFileSync(filePath, "utf8")) as {
+      notes: Record<string, unknown>[];
+    };
+    raw.notes[0]!.recurrence = { frequency: "bogus" };
+    writeFileSync(filePath, JSON.stringify(raw), "utf8");
+
+    const reopened = new MemoStore(agentDir);
+    const loaded = reopened.list().find((entry) => entry.id === note.id);
+    expect(loaded?.recurrence).toBeNull();
+    expect(loaded?.nextDueAt).toBeNull();
   });
 
   it("treats corrupt JSON as an empty board and backs up the broken file", async () => {

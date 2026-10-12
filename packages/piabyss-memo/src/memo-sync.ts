@@ -30,7 +30,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { getMemoStore, type MemoNote } from "./memo-store.js";
+import { getMemoStore, normalizeNoteDefaults, type MemoNote } from "./memo-store.js";
 import {
   deleteObject,
   getObject,
@@ -187,8 +187,10 @@ export function mergeNotes(
 /**
  * 从 notes.json 文本解析记录列表。
  * 容忍空/损坏文件；对每条记录做最小形状过滤（无有效 id 的条目丢弃），
- * 并为旧版本写入的记录补齐 result / deletedAt 缺省值 —— 否则缺字段的
- * 记录会被 list() 的墓碑过滤误判为已删除而“隐身”。
+ * 并经 normalizeNoteDefaults 补齐缺省字段（result / deletedAt / sessionId /
+ * dueAt / recurrence / nextDueAt / lastDoneAt）与旧版状态迁移
+ * （archived → done）—— 否则缺字段的记录会被 list() 的墓碑过滤误判为
+ * 已删除而“隐身”。云端可能仍是旧版本写的数据，必须就地兼容。
  */
 function parseCloudNotes(body: Buffer | null): MemoNote[] {
   if (!body) return [];
@@ -200,9 +202,7 @@ function parseCloudNotes(body: Buffer | null): MemoNote[] {
       const note = raw as MemoNote;
       if (typeof note?.id !== "string" || note.id === "") continue;
       if (typeof note?.createdAt !== "number" || typeof note?.updatedAt !== "number") continue;
-      if (note.result === undefined) note.result = null;
-      if (note.sessionId === undefined) note.sessionId = null;
-      if (note.deletedAt === undefined) note.deletedAt = null;
+      normalizeNoteDefaults(note);
       notes.push(note);
     }
     return notes;

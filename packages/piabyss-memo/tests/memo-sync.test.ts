@@ -96,6 +96,17 @@ function mockR2() {
 describe("MemoSync 配置解析", () => {
   it("env 优先，缺失回退旧配置文件，并报告来源", async () => {
     const { agentDir, sync } = await tempLayout();
+    // 本套测试可能跑在已注入 PIABYSS_MEMO_* 环境变量的进程里（例如直接在
+    // PiAbyss Host 会话里执行）：先清空，验证「无 env → 回退旧配置文件」。
+    for (const name of [
+      ENV_ACCOUNT_ID,
+      ENV_ACCESS_KEY_ID,
+      ENV_SECRET_ACCESS_KEY,
+      ENV_BUCKET,
+      ENV_AUTO_SYNC,
+    ]) {
+      delete process.env[name];
+    }
     expect(sync.getSettings().configured).toBe(false);
 
     // 旧版 Host 内置同步留下的配置文件：env 未设置时整体回退。
@@ -283,6 +294,10 @@ describe("MemoSync 同步", () => {
       completedAt: null,
       result: null,
       deletedAt: null,
+      dueAt: null,
+      recurrence: null,
+      nextDueAt: null,
+      lastDoneAt: null,
     };
     objects.set(
       "piabyss/memo/notes.json",
@@ -305,7 +320,8 @@ describe("MemoSync 同步", () => {
     const { objects, fetchImpl } = mockR2();
     vi.stubGlobal("fetch", fetchImpl);
     setEnvConfig();
-    // 模拟旧版本写入的云端 notes.json：记录没有 deletedAt / result 字段。
+    // 模拟旧版本写入的云端 notes.json：记录没有 deletedAt / result / 计划字段；
+    // 第二条还是 v2 的 archived 状态（v3 起只有三种状态，拉取时迁移为 done）。
     objects.set(
       "piabyss/memo/notes.json",
       Buffer.from(
@@ -326,6 +342,19 @@ describe("MemoSync 同步", () => {
               updatedAt: 1,
               completedAt: null,
             },
+            {
+              id: "legacy-note-2",
+              type: "memo",
+              title: "旧归档记录",
+              contentMd: "c",
+              status: "archived",
+              tags: [],
+              workspaceHint: null,
+              images: [],
+              createdAt: 1,
+              updatedAt: 2,
+              completedAt: null,
+            },
           ],
         }),
         "utf8",
@@ -336,6 +365,12 @@ describe("MemoSync 同步", () => {
     expect(adopted?.title).toBe("旧格式记录");
     expect(adopted?.deletedAt).toBeNull();
     expect(adopted?.result).toBeNull();
+    expect(adopted?.dueAt).toBeNull();
+    expect(adopted?.recurrence).toBeNull();
+
+    const archived = store.list().find((entry) => entry.id === "legacy-note-2");
+    expect(archived?.status).toBe("done");
+    expect(archived?.recurrence).toBeNull();
   });
 
   it("local deletion propagates to cloud and is not resurrected", async () => {
