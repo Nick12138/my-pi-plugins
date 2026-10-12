@@ -11,7 +11,7 @@ import {
 	buildRequestHeaders,
 	serializeRequestBody,
 } from "../src/http-client.js";
-import { buildPixieDispatchTool, buildPixieReportTool } from "../src/pixie-tools.js";
+import { buildPixieDispatchTool, buildPixieReportTool, buildPixieSessionsTool } from "../src/pixie-tools.js";
 import { queryPixieDispatchArmed } from "../src/activation.js";
 import {
 	PIXIE_REPORT_SUCCESS_TEXT,
@@ -58,7 +58,7 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 }
 
 function execute(
-	tool: ReturnType<typeof buildPixieDispatchTool | typeof buildPixieReportTool>,
+	tool: { execute: unknown },
 	params: unknown,
 	ctx?: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: true; details: unknown }> {
@@ -424,5 +424,124 @@ describe("dispatch-state gating query", () => {
 	it("非法 JSON / 非 200 / 请求异常 → 未 armed，绝不抛出", async () => {
 		expect(await queryPixieDispatchArmed({ port: server.port, sessionId: "bad-json" })).toBe(false);
 		expect(await queryPixieDispatchArmed({ port: 1, sessionId: "armed-session" })).toBe(false);
+	});
+});
+
+describe("pixie v4.3 会话归属契约", () => {
+	let server: Awaited<ReturnType<typeof startMockServer>>;
+
+	beforeAll(async () => {
+		server = await startMockServer((req, res, body) => {
+			if ((req.url ?? "").startsWith("/api/pixie/sessions")) {
+				if ((req.url ?? "").includes("cwd=C%3A%2Fempty")) {
+					json(res, 200, { ok: true, sessions: [] });
+					return;
+				}
+				json(res, 200, {
+					ok: true,
+					sessions: [
+						{
+							sessionId: "own-1",
+							sessionPath: "D:/ws/sessions/own-1.jsonl",
+							cwd: "D:/ws",
+							owner: "pixie",
+							role: "delegated",
+							summary: "查询门店数量",
+							result: "结果：12 家",
+							createdAt: 1,
+							lastActiveAt: 1_760_000_000_000,
+							dispatchIds: ["pix_1"],
+							reuseCount: 1,
+						},
+						{
+							sessionId: "user-1",
+							sessionPath: "D:/ws/sessions/user-1.jsonl",
+							cwd: "D:/ws",
+							owner: "user",
+							role: "delegated",
+							summary: "用户自己的会话",
+							result: null,
+							createdAt: 1,
+							lastActiveAt: 1_760_000_000_000,
+							dispatchIds: [],
+							reuseCount: 0,
+						},
+					],
+				});
+				return;
+			}
+			const parsed = JSON.parse(body) as { task: string };
+			const reused = parsed.task === "reuse" ? true : parsed.task === "fresh" ? false : undefined;
+			json(res, 200, {
+				ok: true,
+				dispatchId: "pix_1",
+				sessionId: "sess-1",
+				sessionPath: "D:/s1.jsonl",
+				queued: false,
+				...(reused === undefined ? {} : { reused }),
+			});
+		});
+	});
+
+	afterAll(async () => {
+		await server.close();
+	});
+
+	const dispatchTool = () => buildPixieDispatchTool({ getPort: () => server.port });
+	const sessionsTool = () => buildPixieSessionsTool({ getPort: () => server.port });
+
+	it("reused=true → 回执写明复用了小精灵自己创建的会话", async () => {
+		const out = await execute(dispatchTool(), { cwd: "D:/ws", task: "reuse" });
+		expect(out.content[0]?.text).toBe(
+			"已派发到工作区会话（sessionId: sess-1（复用了该工作区里小精灵自己创建的会话））。等待其回调 pixie_report 后再向用户转述。",
+		);
+	});
+
+	it("reused=false → 回执写明新开了干净会话", async () => {
+		const out = await execute(dispatchTool(), { cwd: "D:/ws", task: "fresh" });
+		expect(out.content[0]?.text).toContain("（新开了一个干净会话）");
+	});
+
+	it("旧 Host 不给 reused → 回执不标落点（向后兼容）", async () => {
+		const out = await execute(dispatchTool(), { cwd: "D:/ws", task: "legacy" });
+		expect(out.content[0]?.text).toBe(
+			"已派发到工作区会话（sessionId: sess-1）。等待其回调 pixie_report 后再向用户转述。",
+		);
+	});
+
+	it("sessionId 仅在用户显式给出时进入请求体", async () => {
+		await execute(dispatchTool(), { cwd: "D:/ws", task: "reuse", sessionId: "user-1" });
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({
+			cwd: "D:/ws",
+			task: "reuse",
+			sessionId: "user-1",
+		});
+		await execute(dispatchTool(), { cwd: "D:/ws", task: "reuse" });
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ cwd: "D:/ws", task: "reuse" });
+	});
+
+	it("pixie_sessions 读会话缓存：按归属分组展示简介与结果", async () => {
+		const out = await execute(sessionsTool(), {});
+		expect(out.isError).toBeUndefined();
+		const text = out.content[0]!.text;
+		expect(text).toContain("【可自动复用：小精灵自己创建的会话】");
+		expect(text).toContain("sessionId: own-1");
+		expect(text).toContain("简介: 查询门店数量");
+		expect(text).toContain("结果: 结果：12 家");
+		expect(text).toContain("【用户自己的会话：只有用户在此对话里明确给出其 sessionId 时才能委托】");
+		expect(text).toContain("sessionId: user-1");
+		const last = server.requests.at(-1)!;
+		expect(last.method).toBe("GET");
+		expect(last.path).toBe("/api/pixie/sessions");
+	});
+
+	it("pixie_sessions 带 cwd 过滤（查询参数编码）", async () => {
+		await execute(sessionsTool(), { cwd: "D:/ws" });
+		expect(server.requests.at(-1)!.path).toBe("/api/pixie/sessions?cwd=D%3A%2Fws");
+	});
+
+	it("pixie_sessions 空缓存 → 可读提示（委派时会自动新开并登记）", async () => {
+		const out = await execute(sessionsTool(), { cwd: "C:/empty" });
+		expect(out.content[0]?.text).toContain("尚无小精灵创建的会话");
 	});
 });

@@ -23,6 +23,7 @@ import {
 	PIXIE_REPORT_NAME,
 	PIXIE_REST_NAME,
 	PIXIE_RETRY_NAME,
+	PIXIE_SESSIONS_NAME,
 	PIXIE_STATUS_NAME,
 	PIXIE_STOP_NAME,
 } from "./pixie-tools.js";
@@ -161,6 +162,7 @@ export function createPixieReportActivationExtension(options: {
 				PIXIE_DISPATCH_NAME,
 				PIXIE_REST_NAME,
 				PIXIE_STATUS_NAME,
+				PIXIE_SESSIONS_NAME,
 				PIXIE_INTERJECT_NAME,
 				PIXIE_STOP_NAME,
 				PIXIE_RETRY_NAME,

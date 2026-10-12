@@ -262,9 +262,9 @@
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "小精灵工作区化工具壳 v0.3：pixie_dispatch（委派，支持批次/排队）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）/ pixie_dispatch_status（查岗）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
+      "description": "小精灵工作区化工具壳 v0.4：pixie_dispatch（委派，支持批次/排队/会话归属）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。配置项含每日自动打盹（跨日 + 长静默自动换段，阈值可调）、失联超时与轮数上限。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
       "icon": "🧚",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": "Nick12138",
       "tags": [
         "pixie",
@@ -330,6 +330,55 @@
             }
           ],
           "description": "委派超过回调超时时长仍未回调时，主动推送一次失联提醒（每条委派仅提醒一次）。"
+        },
+        {
+          "key": "dailyNap",
+          "type": "select",
+          "label": "每日自动打盹",
+          "env": "PIABYSS_PIXIE_DAILY_NAP",
+          "required": false,
+          "default": "on",
+          "options": [
+            {
+              "value": "on",
+              "label": "开启（跨日且长时间静默后自动换段）"
+            },
+            {
+              "value": "off",
+              "label": "关闭"
+            }
+          ],
+          "description": "新的一天自动开一个干净会话段。不按钟点判定：以上次活动跨过本地日界、且静默时长达到阈值（见下）为准，避免把跨午夜连着做的一件事劈成两天。"
+        },
+        {
+          "key": "napIdleMs",
+          "type": "text",
+          "label": "打盹静默阈值（毫秒）",
+          "env": "PIABYSS_PIXIE_NAP_IDLE_MS",
+          "required": false,
+          "placeholder": "10800000",
+          "default": "10800000",
+          "description": "静默多久算“睡了一觉”（默认 3 小时，同时是自适应阈值下限）。实际阈值 = max(本值, 历史静默间隔 P75×2)，并被“打盹阈值上限”夹住。"
+        },
+        {
+          "key": "napMaxGapMs",
+          "type": "text",
+          "label": "打盹阈值上限（毫秒）",
+          "env": "PIABYSS_PIXIE_NAP_MAX_GAP_MS",
+          "required": false,
+          "placeholder": "43200000",
+          "default": "43200000",
+          "description": "自适应阈值的天花板（默认 12 小时）。防止“每天只聊一两次”的用户被自己的历史间隔抬到当天永远睡不到。"
+        },
+        {
+          "key": "napMinHours",
+          "type": "text",
+          "label": "两次打盹最小间隔（小时）",
+          "env": "PIABYSS_PIXIE_NAP_MIN_HOURS",
+          "required": false,
+          "placeholder": "18",
+          "default": "18",
+          "description": "距上次打盹不足该时长就不再打盹，防止一天睡两次。"
         }
       ],
       "install": {

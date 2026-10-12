@@ -23,6 +23,7 @@ import {
 	PIXIE_REPORT_PATH,
 	PIXIE_REST_PATH,
 	PIXIE_RETRY_PATH,
+	PIXIE_SESSIONS_PATH,
 	PIXIE_STOP_PATH,
 	PIXIE_ASK_SUCCESS_TEXT,
 	PIXIE_REPORT_SUCCESS_TEXT,
@@ -32,6 +33,7 @@ import {
 	formatDispatchSuccessText,
 	formatReportFailureText,
 	formatRestFailureText,
+	formatSessionListText,
 	mapAskResponse,
 	mapDispatchListResponse,
 	mapDispatchResponse,
@@ -39,6 +41,7 @@ import {
 	mapReportResponse,
 	mapRestResponse,
 	mapRetryResponse,
+	mapSessionListResponse,
 	mapStopResponse,
 } from "./protocol.js";
 
@@ -47,6 +50,7 @@ export const PIXIE_REPORT_NAME = "pixie_report";
 export const PIXIE_ASK_NAME = "pixie_ask";
 export const PIXIE_REST_NAME = "pixie_rest";
 export const PIXIE_STATUS_NAME = "pixie_dispatch_status";
+export const PIXIE_SESSIONS_NAME = "pixie_sessions";
 export const PIXIE_INTERJECT_NAME = "pixie_interject";
 export const PIXIE_STOP_NAME = "pixie_stop";
 export const PIXIE_RETRY_NAME = "pixie_retry";
@@ -60,10 +64,16 @@ const DispatchParams = Type.Object({
 		description:
 			"委派提示词：包含任务目标、必要的上下文、完成后的回调要求（调用 pixie_report 报告「已完成 + 结果摘要」；需要用户决策时调用 pixie_ask）。若任务源自某条备忘录，还应要求被委派 Agent 完成后用 piabyss_memo complete 回填。",
 	}),
+	sessionId: Type.Optional(
+		Type.String({
+			description:
+				"⚠️ 仅在用户在对话中明确给出了会话 id 时才传（用户自己的会话不能被自动复用）。填了就以该会话为落点——哪怕它是用户在 UI 里创建的会话；找不到会直接报错，绝不会改落到别的会话上。",
+		}),
+	),
 	newSession: Type.Optional(
 		Type.Boolean({
 			description:
-				"true = 不复用目标工作区的既有会话，强制新开一个会话执行。目标会话有委派在跑且你想并行时用它；默认 false（撞上在跑的委派会自动排队）。",
+				"true = 强制新开一个干净会话。默认 false：复用目标工作区里【小精灵自己创建的】既有会话（用户自己创建的会话永远不会被自动复用），没有可复用的就自动新开一个。查询/一次性任务建议传 true。",
 		}),
 	),
 	batchId: Type.Optional(
@@ -142,7 +152,7 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
 		name: PIXIE_DISPATCH_NAME,
 		label: "Pixie dispatch",
 		description:
-			"委派任务到某个工作区的正式会话执行（重活专用）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。",
+			"委派任务到某个工作区的正式会话执行（重活专用）。落点规则：默认复用该工作区里【小精灵自己创建的】会话，没有就新开一个；用户自己在 UI 里创建的会话不会被自动复用，除非用户在对话中明确给出该会话 id（那时用 sessionId 参数）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。",
 		promptSnippet: "Delegate a task to a workspace session and wait for its callback",
 		parameters: DispatchParams,
 		async execute(_toolCallId, params: DispatchParamsType) {
@@ -154,6 +164,7 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
 				cwd: string;
 				task: string;
 				newSession?: boolean;
+				sessionId?: string | null;
 				batchId?: string | null;
 				model?: string | null;
 				thinkingLevel?: string | null;
@@ -161,6 +172,7 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
 				cwd: params.cwd,
 				task: params.task,
 				...(params.newSession !== undefined ? { newSession: params.newSession } : {}),
+				...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
 				...(params.batchId !== undefined ? { batchId: params.batchId } : {}),
 				...(params.model !== undefined ? { model: params.model } : {}),
 				...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
@@ -185,7 +197,7 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
  * （{ result, success? }，dispatchId 对模型透明）。执行流：
  *  1. GET /api/pixie/dispatch-state?sessionId=<当前会话id> 解析 dispatchId
  *     （对应原实现的 findDispatch；未 armed / 无记录 → 「Error: 当前会话没有进行中的小精灵委派。」）
- *  2. POST /api/pixie/report，body { dispatchId, summary, success }。
+ *  2. POST /api/pixie/report，body { dispatchId, summary, success, kind?, files?, pause? }。
  * 激活由扩展在 before_agent_start 据 Host 的 dispatch-state 门控（activation.ts）。
  */
 export function buildPixieReportTool(options: {
@@ -529,6 +541,57 @@ export function buildPixieStatusTool(options: { getPort?: PixiePortReader } = {}
 				return okResult(
 					["委派任务状态：", ...items.map((item) => formatDispatchSummaryLine(item))].join("\n"),
 				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(`Error: ${message}`);
+			}
+		},
+	});
+}
+
+const SessionsParams = Type.Object({
+	cwd: Type.Optional(
+		Type.String({
+			description: "只看某个工作区的会话（绝对路径）；省略 = 全部工作区。",
+		}),
+	),
+});
+
+type SessionsParamsType = Static<typeof SessionsParams>;
+
+/**
+ * pixie_sessions 工具壳（会话缓存）：GET /api/pixie/sessions[?cwd=]。
+ *
+ * 数据源是 Host 侧的 sessions-cache.json：小精灵自己创建的会话（可自动复用）+
+ * 被委托会话（含用户显式指定的会话）的简介与最近结果。用途是挑会话继续派活，
+ * 以及向用户交代"之前那个任务落在哪个会话里"。
+ */
+export function buildPixieSessionsTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_SESSIONS_NAME,
+		label: "Pixie sessions",
+		description:
+			"查看小精灵的会话缓存（仅小精灵自己使用）：列出小精灵自己创建的会话（可自动复用）与用户自己创建的会话（只有用户在对话中明确给出 sessionId 时才能委托），含所属工作区、会话简介与最近结果。用户问「那个任务是在哪个会话里跑的」「有哪些会话可以接着用」，或你要挑一个会话继续派活时调用。",
+		promptSnippet: "List cached pixie sessions (own + delegated) with summaries",
+		parameters: SessionsParams,
+		async execute(_toolCallId, params: SessionsParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+			}
+			const cwd = params.cwd?.trim();
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "GET",
+					path: cwd
+						? `${PIXIE_SESSIONS_PATH}?cwd=${encodeURIComponent(cwd)}`
+						: PIXIE_SESSIONS_PATH,
+				});
+				const resolution = mapSessionListResponse(result);
+				if (!resolution.ok) return errorResult(`Error: ${resolution.error}`);
+				return okResult(formatSessionListText(resolution.sessions, cwd));
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResult(`Error: ${message}`);

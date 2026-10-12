@@ -20,6 +20,8 @@ export const PIXIE_INTERJECT_PATH = "/api/pixie/interject";
 export const PIXIE_STOP_PATH = "/api/pixie/stop";
 export const PIXIE_RETRY_PATH = "/api/pixie/retry";
 export const PIXIE_DISPATCHES_PATH = "/api/pixie/dispatches";
+/** v4.3：小精灵会话缓存（自己创建的会话 + 被委托会话的简介/结果）。 */
+export const PIXIE_SESSIONS_PATH = "/api/pixie/sessions";
 
 export type PixieDispatchSuccess = {
 	ok: true;
@@ -27,6 +29,11 @@ export type PixieDispatchSuccess = {
 	sessionId: string;
 	sessionPath: string;
 	queued: boolean;
+	/**
+	 * v4.3：true = 复用了既有会话（是小精灵自己创建的会话）；false = 新开会话。
+	 * 旧 Host 不给该字段时省略（回执文案退化为不标落点）。
+	 */
+	reused?: boolean;
 	/** queued=true 时 Host 给出的排队说明（等待/取消/新会话并行提示）。 */
 	queuedNote?: string;
 };
@@ -74,6 +81,30 @@ export type PixieDispatchSummary = {
 
 export type PixieDispatchListResolution =
 	| { ok: true; dispatches: PixieDispatchSummary[] }
+	| { ok: false; error: string };
+
+/** 会话缓存条目（Host PixieSessionCacheEntry 的宽松投影）。 */
+export type PixieSessionSummary = {
+	sessionId: string;
+	sessionPath: string;
+	/** 所属工作区（规范化 cwd）。 */
+	cwd: string;
+	/** pixie = 小精灵创建（自动落点可复用）；user = 用户创建（仅显式给出 id 时可委托）。 */
+	owner: "pixie" | "user";
+	/** pixie = 小精灵自己的工作区会话；delegated = 被委托干活的工作区会话。 */
+	role: "pixie" | "delegated";
+	/** 会话简介（≤120 字）。 */
+	summary: string;
+	/** 最近结果摘要（来自委派回调）。 */
+	result: string | null;
+	createdAt: number;
+	lastActiveAt: number;
+	dispatchIds: string[];
+	reuseCount: number;
+};
+
+export type PixieSessionListResolution =
+	| { ok: true; sessions: PixieSessionSummary[] }
 	| { ok: false; error: string };
 
 /**
@@ -161,6 +192,7 @@ export function mapDispatchResponse(result: PixieHttpResult): PixieDispatchResol
 		sessionId: value.sessionId,
 		sessionPath: value.sessionPath,
 		queued: value.queued,
+		...(typeof value.reused === "boolean" ? { reused: value.reused } : {}),
 		...(typeof value.queuedNote === "string" && value.queuedNote ? { queuedNote: value.queuedNote } : {}),
 	};
 }
@@ -273,6 +305,79 @@ export function mapDispatchListResponse(result: PixieHttpResult): PixieDispatchL
 	return { ok: true, dispatches };
 }
 
+/** GET /api/pixie/sessions 响应 → 会话缓存列表（会话缓存工具的数据源）。 */
+export function mapSessionListResponse(result: PixieHttpResult): PixieSessionListResolution {
+	if (result.status !== 200) {
+		return { ok: false, error: `环回控制面返回非 200（${result.status}）：${snippet(result.body)}` };
+	}
+	const parsed = parseJsonBody(result.body);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	const value = parsed.value;
+	if (!isRecord(value) || value.ok !== true || !Array.isArray(value.sessions)) {
+		return { ok: false, error: `环回控制面响应结构不符合预期：${snippet(result.body)}` };
+	}
+	const sessions: PixieSessionSummary[] = [];
+	for (const item of value.sessions) {
+		if (!isRecord(item) || typeof item.sessionId !== "string") continue;
+		sessions.push({
+			sessionId: item.sessionId,
+			sessionPath: typeof item.sessionPath === "string" ? item.sessionPath : "",
+			cwd: typeof item.cwd === "string" ? item.cwd : "",
+			owner: item.owner === "user" ? "user" : "pixie",
+			role: item.role === "pixie" ? "pixie" : "delegated",
+			summary: typeof item.summary === "string" ? item.summary : "",
+			result: typeof item.result === "string" ? item.result : null,
+			createdAt: typeof item.createdAt === "number" ? item.createdAt : 0,
+			lastActiveAt: typeof item.lastActiveAt === "number" ? item.lastActiveAt : 0,
+			dispatchIds: Array.isArray(item.dispatchIds)
+				? item.dispatchIds.filter((id): id is string => typeof id === "string")
+				: [],
+			reuseCount: typeof item.reuseCount === "number" ? item.reuseCount : 0,
+		});
+	}
+	return { ok: true, sessions };
+}
+
+function formatClock(ms: number): string {
+	if (!Number.isFinite(ms) || ms <= 0) return "未知";
+	const date = new Date(ms);
+	const pad = (value: number): string => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * 会话缓存列表 → 工具文本。按归属分两组：可自动复用的（小精灵自己建的）与
+ * 用户会话（仅在用户明确给出 id 时才可委托）。
+ */
+export function formatSessionListText(sessions: PixieSessionSummary[], cwd?: string): string {
+	const scope = cwd ? `（工作区：${cwd}）` : "";
+	if (sessions.length === 0) {
+		return `小精灵的会话缓存里还没有记录${scope}：该工作区尚无小精灵创建的会话（下次委派会自动新开一个并登记）。`;
+	}
+	const owned = sessions.filter((item) => item.owner === "pixie");
+	const users = sessions.filter((item) => item.owner === "user");
+	const lines: string[] = [`小精灵会话缓存${scope}（共 ${sessions.length} 条）：`];
+	const describe = (item: PixieSessionSummary): string[] => {
+		const head = [
+			`- [${item.role === "pixie" ? "小精灵会话" : "委派会话"}] ${item.cwd}`,
+			`  sessionId: ${item.sessionId}${item.reuseCount > 0 ? `  复用 ${item.reuseCount} 次` : ""}  最近活跃: ${formatClock(item.lastActiveAt)}`,
+		];
+		if (item.summary) head.push(`  简介: ${item.summary}`);
+		if (item.result) head.push(`  结果: ${item.result}`);
+		return head;
+	};
+	if (owned.length > 0) {
+		lines.push("【可自动复用：小精灵自己创建的会话】", ...owned.flatMap(describe));
+	}
+	if (users.length > 0) {
+		lines.push(
+			"【用户自己的会话：只有用户在此对话里明确给出其 sessionId 时才能委托】",
+			...users.flatMap(describe),
+		);
+	}
+	return lines.join("\n");
+}
+
 /**
  * GET /api/pixie/dispatch-state 响应 → { armed }。
  * 非 200 / 解析失败 / 缺字段一律视为未 armed（激活门控的保守语义）。
@@ -283,17 +388,26 @@ export function mapDispatchListResponse(result: PixieHttpResult): PixieDispatchL
 
 /** pixie_dispatch 成功文本（直接执行 / 引擎排队两种语义）。 */
 export function formatDispatchSuccessText(resolution: {
+	dispatchId?: string;
 	sessionId: string;
 	queued: boolean;
+	reused?: boolean;
 	queuedNote?: string;
 }): string {
+	// 落点必须让用户看得见：复用既有会话 / 新开会话（旧 Host 无 reused 时不标）。
+	const landing =
+		resolution.reused === undefined
+			? ""
+			: resolution.reused
+				? "（复用了该工作区里小精灵自己创建的会话）"
+				: "（新开了一个干净会话）";
 	if (resolution.queued && resolution.queuedNote) {
 		return `已受理（dispatchId: ${resolution.dispatchId ?? ""}）。${resolution.queuedNote}`;
 	}
 	if (resolution.queued) {
-		return `已派发到工作区会话（sessionId: ${resolution.sessionId}，该会话当前忙，任务已排队）。等待其回调 pixie_report 后再向用户转述。`;
+		return `已派发到工作区会话（sessionId: ${resolution.sessionId}${landing}，该会话当前忙，任务已排队）。等待其回调 pixie_report 后再向用户转述。`;
 	}
-	return `已派发到工作区会话（sessionId: ${resolution.sessionId}）。等待其回调 pixie_report 后再向用户转述。`;
+	return `已派发到工作区会话（sessionId: ${resolution.sessionId}${landing}）。等待其回调 pixie_report 后再向用户转述。`;
 }
 
 /** pixie_dispatch 失败文本。 */

@@ -6,7 +6,11 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
 
 ## 功能
 
-- **pixie_dispatch**（仅在常驻小精灵会话注册/激活）：委派任务到某个工作区的正式会话执行。填入目标工作区 `cwd` 与任务提示词 `task`，可选 `newSession` 强制新开会话；Host 解析目标会话（活跃 → 后台 → 空闲缓存 → 新建）并注入任务，目标会话忙时任务排队。成功后立即返回受理结果（`dispatchId` + 目标 `sessionId`），目标会话完成后再通过 `pixie_report` 回调。
+- **pixie_dispatch**（仅在小精灵工作区会话注册/激活）：委派任务到某个工作区的正式会话执行。填入目标工作区 `cwd` 与任务提示词 `task`。
+  **落点规则（v4.3 会话归属）**：默认只复用**小精灵自己创建的**会话（没有就自动新开一个）；用户自己在 UI 里创建的会话**不会被自动复用**——除非用户在对话中明确给出该会话 id，此时用 `sessionId` 参数指定（找不到会直接报错，不会改落到别的会话）。`newSession: true` 强制新开。受理回执会写明落点是「复用了小精灵自己的会话」还是「新开了干净会话」。
+- **pixie_sessions**（小精灵会话专用）：读会话缓存（`GET /api/pixie/sessions`），列出小精灵自己创建的会话（可自动复用）与用户会话（仅显式给出 id 时可委托），含所属工作区、会话简介与最近结果。
+- 其余指挥台工具：`pixie_report`（被委派会话回调）/ `pixie_ask`（询问用户）/ `pixie_rest`（打盹换段）/ `pixie_dispatch_status`（查岗）/ `pixie_interject`（插话）/ `pixie_stop`（叫停）/ `pixie_retry`（续跑或重派）。
+- **每日自动打盹**（Host 侧行为，配置见插件设置）：新的一天自动换一个干净会话段，但**不按钟点**判定——以上次活动跨过本地日界、且静默时长达到自适应阈值（默认 3h，随历史静默间隔上抬但不超过 12h）为准；封段会带一份规则拼出的交接摘要（上段尾巴 + 未回音委派 + 备忘录未完成）。Host 重启后由"今天第一条消息之前"的懒兜底判定补偿。
 - **pixie_report**（注册在每个非小精灵会话上，但默认保持休眠）：被委派的任务会话在完成任务后回调。参数与原实现一致 `{ result, success? }`——dispatchId 对模型透明，插件先查 dispatch-state 端点按当前会话解析出 dispatchId，再 POST `{ dispatchId, summary, success }`。
 - 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：PiAbyss Host 注入的代理设置会拦截环回请求），单请求超时 3 秒。
 
@@ -25,14 +29,18 @@ Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，共 3 个端点�
 请求体：
 
 ```json
-{ "cwd": "D:/我的项目/demo", "task": "…", "newSession": false }
+{ "cwd": "D:/我的项目/demo", "task": "…", "newSession": true }
 ```
+
+（`sessionId` 仅在用户明确给出会话 id 时传；两个参数都省略 = 自动落点：复用小精灵自己创建的会话，没有就新建。）
 
 成功（200）：
 
 ```json
-{ "ok": true, "dispatchId": "…", "sessionId": "…", "sessionPath": "…", "queued": false }
+{ "ok": true, "dispatchId": "…", "sessionId": "…", "sessionPath": "…", "queued": false, "reused": true }
 ```
+
+（`reused: true` = 复用了小精灵自己创建的既有会话；`false` = 新开会话。旧 Host 不给该字段时回执不标落点。）
 
 工具文本（与原实现逐字节一致）：
 
@@ -61,6 +69,18 @@ Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，共 3 个端点�
 ### 3. `GET /api/pixie/dispatch-state?sessionId=…`（激活门控 + report 的 dispatchId 解析）
 
 成功（200）：`{ "armed": true | false, "dispatchId": "…" }`。`armed: true` 时应携带该会话进行中委派的 `dispatchId`（report 回填用）；缺失时 report 按无委派处理。非 200 / 解析失败 / 缺字段一律按未 armed 处理。
+
+### 4. `GET /api/pixie/sessions[?cwd=…]`（pixie_sessions 执行，v4.3）
+
+成功（200）：
+
+```json
+{ "ok": true, "sessions": [ { "sessionId": "…", "sessionPath": "…", "cwd": "D:/ws",
+  "owner": "pixie", "role": "delegated", "summary": "…", "result": "…",
+  "createdAt": 0, "lastActiveAt": 0, "dispatchIds": ["…"], "reuseCount": 1 } ] }
+```
+
+数据源是 Host 的 `sessions-cache.json`（只存简洁摘要，不存消息正文与工具调用）。`owner: "pixie"` 才可被自动复用；`owner: "user"` 仅当用户明确给出 sessionId 时才能委托。
 
 ## 环境变量
 

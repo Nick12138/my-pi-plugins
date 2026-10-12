@@ -24,6 +24,7 @@ import {
 	buildPixieReportTool,
 	buildPixieRestTool,
 	buildPixieRetryTool,
+	buildPixieSessionsTool,
 	buildPixieStatusTool,
 	buildPixieStopTool,
 } from "../src/pixie-tools.js";
@@ -36,6 +37,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(buildPixieAskTool());
 	pi.registerTool(buildPixieRestTool());
 	pi.registerTool(buildPixieStatusTool());
+	pi.registerTool(buildPixieSessionsTool());
 	pi.registerTool(buildPixieInterjectTool());
 	pi.registerTool(buildPixieStopTool());
 	pi.registerTool(buildPixieRetryTool());

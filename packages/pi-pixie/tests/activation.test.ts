@@ -7,7 +7,7 @@
  * - 端口缺失 / 请求失败 / 超时 → 安全返回未 armed，绝不抛错；
  * - before_agent_start 门控：小精灵会话（env/cwd）→ dispatch/rest 激活；
  *   普通会话 → report/ask 仅在 armed 时激活；
- * - 扩展入口注册全部四个工具（可见性交给 active-tools 门控）。
+ * - 扩展入口注册全部工具（可见性交给 active-tools 门控）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ import {
   PIXIE_REPORT_NAME,
   PIXIE_REST_NAME,
   PIXIE_RETRY_NAME,
+  PIXIE_SESSIONS_NAME,
   PIXIE_STATUS_NAME,
   PIXIE_STOP_NAME,
 } from "../src/pixie-tools.js";
@@ -329,6 +330,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_ASK_NAME,
       PIXIE_REST_NAME,
       PIXIE_STATUS_NAME,
+      PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
       PIXIE_STOP_NAME,
       PIXIE_RETRY_NAME,
@@ -345,6 +347,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
       PIXIE_STATUS_NAME,
+      PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
       PIXIE_STOP_NAME,
       PIXIE_RETRY_NAME,
@@ -354,6 +357,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
       PIXIE_STATUS_NAME,
+      PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
       PIXIE_STOP_NAME,
       PIXIE_RETRY_NAME,
@@ -371,6 +375,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
       PIXIE_STATUS_NAME,
+      PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
       PIXIE_STOP_NAME,
       PIXIE_RETRY_NAME,
