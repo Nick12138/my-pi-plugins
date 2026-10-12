@@ -16,10 +16,14 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { readPixiePort, pixieRequest } from "./http-client.js";
 import {
 	PIXIE_ASK_PATH,
+	PIXIE_DISPATCHES_PATH,
 	PIXIE_DISPATCH_PATH,
 	PIXIE_DISPATCH_STATE_PATH,
+	PIXIE_INTERJECT_PATH,
 	PIXIE_REPORT_PATH,
 	PIXIE_REST_PATH,
+	PIXIE_RETRY_PATH,
+	PIXIE_STOP_PATH,
 	PIXIE_ASK_SUCCESS_TEXT,
 	PIXIE_REPORT_SUCCESS_TEXT,
 	PIXIE_REST_SUCCESS_TEXT,
@@ -29,16 +33,23 @@ import {
 	formatReportFailureText,
 	formatRestFailureText,
 	mapAskResponse,
+	mapDispatchListResponse,
 	mapDispatchResponse,
 	mapDispatchStateResponse,
 	mapReportResponse,
 	mapRestResponse,
+	mapRetryResponse,
+	mapStopResponse,
 } from "./protocol.js";
 
 export const PIXIE_DISPATCH_NAME = "pixie_dispatch";
 export const PIXIE_REPORT_NAME = "pixie_report";
 export const PIXIE_ASK_NAME = "pixie_ask";
 export const PIXIE_REST_NAME = "pixie_rest";
+export const PIXIE_STATUS_NAME = "pixie_dispatch_status";
+export const PIXIE_INTERJECT_NAME = "pixie_interject";
+export const PIXIE_STOP_NAME = "pixie_stop";
+export const PIXIE_RETRY_NAME = "pixie_retry";
 
 const DispatchParams = Type.Object({
 	cwd: Type.String({
@@ -51,7 +62,26 @@ const DispatchParams = Type.Object({
 	}),
 	newSession: Type.Optional(
 		Type.Boolean({
-			description: "true = 不复用目标工作区的既有会话，强制新开一个会话执行。默认 false。",
+			description:
+				"true = 不复用目标工作区的既有会话，强制新开一个会话执行。目标会话有委派在跑且你想并行时用它；默认 false（撞上在跑的委派会自动排队）。",
+		}),
+	),
+	batchId: Type.Optional(
+		Type.String({
+			description:
+				"批次标记：一次向多个工作区并行派发一组相关任务时，给同批任务填同一个自定义批次号（如 batch-20260101-a），回调与查岗会带出该标记便于聚合转述。单个任务省略。",
+		}),
+	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"指定执行模型（provider/id，如 anthropic/claude-sonnet-4-5）。⚠️ 仅当用户在对话中明确指定了模型时才传此参数；用户没说就用默认（省略本参数，跟随目标会话当前模型）——未经用户明确授权不得主动更换模型。",
+		}),
+	),
+	thinkingLevel: Type.Optional(
+		Type.String({
+			description:
+				"指定推理深度（off|minimal|low|medium|high|xhigh|max）。⚠️ 仅当用户在对话中明确指定了推理深度时才传；用户没说就省略（跟随会话默认）——未经用户明确授权不得主动更换。",
 		}),
 	),
 });
@@ -65,6 +95,22 @@ const ReportParams = Type.Object({
 	}),
 	success: Type.Optional(
 		Type.Boolean({ description: "任务是否成功完成。默认 true；失败或部分完成时设为 false。" }),
+	),
+	kind: Type.Optional(
+		Type.String({
+			description:
+				"回调种类：final（默认，任务终态完成/失败）或 progress（进度检查点汇报——非终态，任务继续运行或按指示暂停，仅收到 <pixie-interject> checkpoint 信封时使用）。",
+		}),
+	),
+	files: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "本任务产出/修改的文件绝对路径列表（有产物时填写，便于用户直接打开）。",
+		}),
+	),
+	pause: Type.Optional(
+		Type.Boolean({
+			description: "仅 kind=progress 时有效：true = 汇报后暂停本轮等待用户指令（checkpoint wait）。",
+		}),
 	),
 });
 
@@ -104,10 +150,20 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
 			if (port === null) {
 				return errorResult(formatDispatchFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
-			const body: { cwd: string; task: string; newSession?: boolean } = {
+			const body: {
+				cwd: string;
+				task: string;
+				newSession?: boolean;
+				batchId?: string | null;
+				model?: string | null;
+				thinkingLevel?: string | null;
+			} = {
 				cwd: params.cwd,
 				task: params.task,
 				...(params.newSession !== undefined ? { newSession: params.newSession } : {}),
+				...(params.batchId !== undefined ? { batchId: params.batchId } : {}),
+				...(params.model !== undefined ? { model: params.model } : {}),
+				...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
 			};
 			try {
 				const result = await pixieRequest({ port, method: "POST", path: PIXIE_DISPATCH_PATH, body });
@@ -176,18 +232,38 @@ export function buildPixieReportTool(options: {
 				return errorResult(formatReportFailureText("result 摘要不能为空。"));
 			}
 			const success = params.success ?? true;
+			const kind =
+				params.kind === "progress"
+					? "progress"
+					: params.kind === "final" || params.kind === undefined
+						? undefined
+						: null;
+			if (kind === null) {
+				return errorResult(formatReportFailureText("kind 必须是 final 或 progress。"));
+			}
+			const files =
+				params.files && params.files.length > 0
+					? params.files.filter((file) => typeof file === "string" && file.trim())
+					: undefined;
 			try {
 				const result = await pixieRequest({
 					port,
 					method: "POST",
 					path: PIXIE_REPORT_PATH,
-					body: { dispatchId, summary, success },
+					body: {
+						dispatchId,
+						summary,
+						success,
+						...(kind ? { kind } : {}),
+						...(files ? { files } : {}),
+						...(kind === "progress" && params.pause !== undefined ? { pause: params.pause } : {}),
+					},
 				});
 				const resolution = mapReportResponse(result);
 				if (!resolution.ok) {
 					return errorResult(formatReportFailureText(resolution.error));
 				}
-				return okResult(PIXIE_REPORT_SUCCESS_TEXT);
+				return okResult(kind === "progress" ? "进度汇报已转交小精灵。" : PIXIE_REPORT_SUCCESS_TEXT);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResult(formatReportFailureText(message));
@@ -346,6 +422,319 @@ export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}):
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResult(formatRestFailureText(message));
+			}
+		},
+	});
+}
+
+const StatusParams = Type.Object({
+	dispatchId: Type.Optional(
+		Type.String({
+			description: "要查询的委派记录 id。省略则返回全部委派（最近 20 条，含进行中与最近结束的）。",
+		}),
+	),
+});
+
+type StatusParamsType = Static<typeof StatusParams>;
+
+function formatTimestamp(ms: number | null): string {
+	if (!ms) return "—";
+	const date = new Date(ms);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatDispatchSummaryLine(item: {
+	id: string;
+	status: string;
+	kind: string | null;
+	cwd: string;
+	task: string;
+	createdAt: number;
+	lastActiveAt: number | null;
+	stale: boolean;
+	batchId: string | null;
+	failCount: number;
+	progressSummary: string | null;
+	report: string | null;
+}): string {
+	const statusText =
+		item.status === "dispatched"
+			? "运行中"
+			: item.status === "queued"
+				? "排队中"
+				: item.status === "paused"
+					? "已暂停（等指令）"
+					: item.status === "awaiting_user"
+						? "等用户答复"
+						: item.status === "reported"
+							? "已完成"
+							: item.status === "failed"
+								? "出错"
+								: item.status === "stopped"
+									? "被叫停"
+									: item.status === "cancelled"
+										? "已取消"
+										: item.status;
+	const lines = [
+		`- [${statusText}] ${item.task.slice(0, 80)}${item.task.length > 80 ? "…" : ""}`,
+		`  dispatchId: ${item.id}  cwd: ${item.cwd}`,
+		`  派发: ${formatTimestamp(item.createdAt)}  最后活跃: ${formatTimestamp(item.lastActiveAt)}${item.stale ? "  ⚠️ 失联超时" : ""}`,
+	];
+	if (item.batchId) lines.push(`  批次: ${item.batchId}`);
+	if (item.failCount > 0) lines.push(`  累计失败: ${item.failCount} 次`);
+	if (item.progressSummary) lines.push(`  最新进度: ${item.progressSummary.slice(0, 160)}`);
+	if (item.status === "reported" && item.report) lines.push(`  结果: ${item.report.slice(0, 200)}`);
+	return lines.join("\n");
+}
+
+/**
+ * pixie_dispatch_status 工具壳（查岗）：GET /api/pixie/dispatches。
+ * 返回委派记录的状态/进度摘要/时间信息，解决「沉默 = 不知道」的盲目问题。
+ */
+export function buildPixieStatusTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_STATUS_NAME,
+		label: "Pixie dispatch status",
+		description:
+			"查询委派任务的当前状态（仅小精灵自己使用）。用户问「那个任务跑得怎么样了」或你需要检查委派进度时调用：返回排队中/运行中/已完成/被叫停/出错等状态，附一句话进度摘要、派发时间与最后活跃时间；失败次数 ≥3 时应升级报告用户。",
+		promptSnippet: "Check the status of delegated tasks",
+		parameters: StatusParams,
+		async execute(_toolCallId, params: StatusParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+			}
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "GET",
+					path: `${PIXIE_DISPATCHES_PATH}?limit=20`,
+				});
+				const resolution = mapDispatchListResponse(result);
+				if (!resolution.ok) {
+					return errorResult(`Error: ${resolution.error}`);
+				}
+				if (resolution.dispatches.length === 0) {
+					return okResult("当前没有任何委派记录。");
+				}
+				const wanted = params.dispatchId?.trim();
+				const items = wanted
+					? resolution.dispatches.filter((item) => item.id === wanted)
+					: resolution.dispatches;
+				if (items.length === 0) {
+					return okResult(`没有找到 dispatchId 为 ${wanted} 的委派记录。`);
+				}
+				return okResult(
+					["委派任务状态：", ...items.map((item) => formatDispatchSummaryLine(item))].join("\n"),
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(`Error: ${message}`);
+			}
+		},
+	});
+}
+
+const InterjectParams = Type.Object({
+	dispatchId: Type.String({
+		description: "要插话的委派记录 id（先用 pixie_dispatch_status 查到它）。",
+	}),
+	text: Type.String({
+		description:
+			"插入的消息：补充约束、修正方向，或要求汇报进度。这不是新任务——原任务继续执行。",
+	}),
+	mode: Type.Optional(
+		Type.String({
+			description:
+				"append（默认，补充/修正，任务继续）或 checkpoint（进度检查点：要求被委派方先汇报进度，之后继续或暂停）。",
+		}),
+	),
+	after: Type.Optional(
+		Type.String({
+			description: "仅 checkpoint 有效：continue（汇报后自动继续，默认）或 wait（汇报后暂停等用户指令）。",
+		}),
+	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"替换执行模型（provider/id）：下一轮起生效（同界面手动切换时机）。⚠️ 仅当用户明确授权更换模型时才传；缺省保持当前模型。",
+		}),
+	),
+	thinkingLevel: Type.Optional(
+		Type.String({
+			description:
+				"替换推理深度（off|minimal|low|medium|high|xhigh|max）：下一轮起生效。⚠️ 仅当用户明确授权时才传；缺省保持当前。",
+		}),
+	),
+});
+
+type InterjectParamsType = Static<typeof InterjectParams>;
+
+/**
+ * pixie_interject 工具壳（插话）：POST /api/pixie/interject。
+ * 附属于进行中委派，非新任务；排队中/已结束的委派会收到可读错误。
+ */
+export function buildPixieInterjectTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_INTERJECT_NAME,
+		label: "Pixie interject",
+		description:
+			"向正在执行的委派任务插话（仅小精灵自己使用）。用户说「让它先汇报下进度」「补充一个要求」「先别动 X」时调用：append 模式补充约束不打断任务；checkpoint 模式要求对方汇报进度（after=wait 可让其汇报后暂停）。排队中或已结束的任务不能插话。",
+		promptSnippet: "Interject a message into a running delegation",
+		parameters: InterjectParams,
+		async execute(_toolCallId, params: InterjectParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+			}
+			const mode = params.mode === "checkpoint" ? "checkpoint" : "append";
+			const after = params.after === "wait" ? "wait" : params.after === "continue" ? "continue" : undefined;
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_INTERJECT_PATH,
+					body: {
+						dispatchId: params.dispatchId,
+						text: params.text,
+						mode,
+						...(mode === "checkpoint" && after ? { after } : {}),
+						...(params.model !== undefined ? { model: params.model } : {}),
+						...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+					},
+				});
+				const resolution = mapReportResponse(result);
+				if (!resolution.ok) {
+					return errorResult(`Error: ${resolution.error}`);
+				}
+				const modelNote =
+					params.model || params.thinkingLevel
+						? `模型/推理深度替换已应用（下一轮起生效）。`
+						: "";
+				return okResult(
+					(mode === "checkpoint"
+						? "检查点请求已送达：对方会先汇报进度，然后按你的指示继续或暂停。"
+						: "插话已送达：对方在当前轮次结束后会收到你的补充。") + modelNote,
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(`Error: ${message}`);
+			}
+		},
+	});
+}
+
+const StopParams = Type.Object({
+	dispatchId: Type.String({
+		description: "要叫停的委派记录 id（先用 pixie_dispatch_status 查到它）。",
+	}),
+	reason: Type.Optional(
+		Type.String({ description: "叫停原因（会转述给用户，如「方向跑偏了」「派错了工作区」）。" }),
+	),
+});
+
+type StopParamsType = Static<typeof StopParams>;
+
+/**
+ * pixie_stop 工具壳（叫停）：POST /api/pixie/stop。回执明确：
+ * aborted（运行中已中断）/ already-stopped（本已停止）/ cancelled（排队中被取消）。
+ */
+export function buildPixieStopTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_STOP_NAME,
+		label: "Pixie stop",
+		description:
+			"叫停一个委派任务（仅小精灵自己使用）。用户说「把那个任务停了」「这个派错了」时调用：运行中的任务会被中断，排队中的会被取消。返回明确回执（停止成功/本已停止/排队已取消），停掉的不要自动重发。",
+		promptSnippet: "Stop a delegated task with an explicit receipt",
+		parameters: StopParams,
+		async execute(_toolCallId, params: StopParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+			}
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_STOP_PATH,
+					body: { dispatchId: params.dispatchId },
+				});
+				const resolution = mapStopResponse(result);
+				if (!resolution.ok) {
+					return errorResult(`Error: ${resolution.error}`);
+				}
+				const actionText =
+					resolution.action === "aborted"
+						? "已停止（执行中的任务被中断）"
+						: resolution.action === "cancelled"
+							? "已取消（排队中的任务被摘除，尚未开始执行）"
+							: "该任务本已停止，无需重复操作";
+				return okResult(`回执：${actionText}。${params.reason ? `原因已记录：${params.reason}` : ""}请向用户确认，不要自动重发该任务。`);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(`Error: ${message}`);
+			}
+		},
+	});
+}
+
+const RetryParams = Type.Object({
+	dispatchId: Type.String({
+		description: "要重试的失败/被叫停委派记录 id。",
+	}),
+	mode: Type.Optional(
+		Type.String({
+			description:
+				"resume（原地续跑：会话还活着时首选，从断点继续、上下文零丢失）或 redispatch（重派：会话已死时重新发起一条新委派）。省略则 Host 自动判定。",
+		}),
+	),
+});
+
+type RetryParamsType = Static<typeof RetryParams>;
+
+/**
+ * pixie_retry 工具壳（重试）：POST /api/pixie/retry。失败决策流的执行入口。
+ */
+export function buildPixieRetryTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	return defineTool({
+		name: PIXIE_RETRY_NAME,
+		label: "Pixie retry",
+		description:
+			"重试一个失败或被叫停的委派任务（仅小精灵自己使用）。会话活着用 resume 原地续跑（上下文零丢失）；会话死了用 redispatch 重派。方向性错误时先调整任务描述重新 pixie_dispatch，而不是盲目重试；同一任务失败 ≥3 次不要再重试，升级报告用户。",
+		promptSnippet: "Retry a failed or stopped delegation",
+		parameters: RetryParams,
+		async execute(_toolCallId, params: RetryParamsType) {
+			const port = getPort();
+			if (port === null) {
+				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+			}
+			const mode =
+				params.mode === "resume" || params.mode === "redispatch" ? params.mode : undefined;
+			try {
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_RETRY_PATH,
+					body: {
+						dispatchId: params.dispatchId,
+						...(mode ? { mode } : {}),
+					},
+				});
+				const resolution = mapRetryResponse(result);
+				if (!resolution.ok) {
+					return errorResult(`Error: ${resolution.error}`);
+				}
+				return okResult(
+					`已重试（${mode === "redispatch" ? "重派新记录" : "原地续跑"}，dispatchId: ${resolution.dispatchId}）。等待其回调后转述结果。`,
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResult(`Error: ${message}`);
 			}
 		},
 	});

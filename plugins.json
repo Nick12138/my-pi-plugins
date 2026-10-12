@@ -229,8 +229,14 @@
           "required": false,
           "default": "false",
           "options": [
-            { "value": "true", "label": "开启（备忘录变更后防抖同步 + 启动时拉齐一次）" },
-            { "value": "false", "label": "关闭（仅手动「立即同步」）" }
+            {
+              "value": "true",
+              "label": "开启（备忘录变更后防抖同步 + 启动时拉齐一次）"
+            },
+            {
+              "value": "false",
+              "label": "关闭（仅手动「立即同步」）"
+            }
           ],
           "description": "开启后每次备忘录变更（桌面端或 Agent 工具）延迟 5 秒自动双向同步；进程启动后也会拉齐一次。"
         }
@@ -256,9 +262,9 @@
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "小精灵工作区化工具壳：pixie_dispatch（委派）/ pixie_report（完成回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。dispatch/rest 仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见，普通工作区会话不可见。",
+      "description": "小精灵工作区化工具壳 v0.3：pixie_dispatch（委派，支持批次/排队）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）/ pixie_dispatch_status（查岗）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
       "icon": "🧚",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": "Nick12138",
       "tags": [
         "pixie",
@@ -305,6 +311,25 @@
           "placeholder": "200",
           "default": "200",
           "description": "单个会话段的用户消息轮数上限，超过后自动打盹换段（reason=rollover）。"
+        },
+        {
+          "key": "staleNotify",
+          "type": "select",
+          "label": "失联超时提醒",
+          "env": "PIABYSS_PIXIE_STALE_NOTIFY",
+          "required": false,
+          "default": "on",
+          "options": [
+            {
+              "value": "on",
+              "label": "开启（超时后推送一次提醒）"
+            },
+            {
+              "value": "off",
+              "label": "关闭"
+            }
+          ],
+          "description": "委派超过回调超时时长仍未回调时，主动推送一次失联提醒（每条委派仅提醒一次）。"
         }
       ],
       "install": {
@@ -666,8 +691,14 @@
           "required": false,
           "default": "false",
           "options": [
-            { "value": "true", "label": "开启（报销数据变更后防抖同步 + 启动时拉齐一次）" },
-            { "value": "false", "label": "关闭（仅手动「立即同步」）" }
+            {
+              "value": "true",
+              "label": "开启（报销数据变更后防抖同步 + 启动时拉齐一次）"
+            },
+            {
+              "value": "false",
+              "label": "关闭（仅手动「立即同步」）"
+            }
           ],
           "description": "开启后每次报销数据变更延迟 5 秒自动双向同步；进程启动后也会拉齐一次。"
         }

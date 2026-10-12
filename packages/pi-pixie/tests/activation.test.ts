@@ -22,8 +22,12 @@ import {
 import {
   PIXIE_ASK_NAME,
   PIXIE_DISPATCH_NAME,
+  PIXIE_INTERJECT_NAME,
   PIXIE_REPORT_NAME,
   PIXIE_REST_NAME,
+  PIXIE_RETRY_NAME,
+  PIXIE_STATUS_NAME,
+  PIXIE_STOP_NAME,
 } from "../src/pixie-tools.js";
 import {
   PIXIE_PORT_ENV,
@@ -315,7 +319,7 @@ describe("sessionIdFromCtx", () => {
 });
 
 describe("extension entry (extensions/pi-pixie.ts)", () => {
-  it("registers all four tools; visibility is gated per turn, not per registration", () => {
+  it("registers all eight tools; visibility is gated per turn, not per registration", () => {
     delete process.env[PIXIE_RESIDENT_ENV];
     const mock = createMockPi();
     buildPixieExtension(mock.pi);
@@ -324,28 +328,53 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_REPORT_NAME,
       PIXIE_ASK_NAME,
       PIXIE_REST_NAME,
+      PIXIE_STATUS_NAME,
+      PIXIE_INTERJECT_NAME,
+      PIXIE_STOP_NAME,
+      PIXIE_RETRY_NAME,
     ]);
     expect(mock.hasHandler("before_agent_start")).toBe(true);
   });
 
-  it("activates dispatch/rest on the resident session (legacy env marker)", async () => {
+  it("activates the resident console on the resident session (legacy env marker)", async () => {
     process.env[PIXIE_RESIDENT_ENV] = "1";
     const mock = createMockPi([PIXIE_REPORT_NAME]);
     buildPixieExtension(mock.pi);
     await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
-    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+    expect(mock.active).toEqual([
+      PIXIE_DISPATCH_NAME,
+      PIXIE_REST_NAME,
+      PIXIE_STATUS_NAME,
+      PIXIE_INTERJECT_NAME,
+      PIXIE_STOP_NAME,
+      PIXIE_RETRY_NAME,
+    ]);
     await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
-    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+    expect(mock.active).toEqual([
+      PIXIE_DISPATCH_NAME,
+      PIXIE_REST_NAME,
+      PIXIE_STATUS_NAME,
+      PIXIE_INTERJECT_NAME,
+      PIXIE_STOP_NAME,
+      PIXIE_RETRY_NAME,
+    ]);
   });
 
-  it("activates dispatch/rest when ctx.cwd matches the pixie workspace", async () => {
+  it("activates the resident console when ctx.cwd matches the pixie workspace", async () => {
     delete process.env[PIXIE_RESIDENT_ENV];
     process.env.PI_CODING_AGENT_DIR = "C:/agent-test";
     delete process.env.PIABYSS_PIXIE_WORKSPACE;
     const mock = createMockPi([]);
     buildPixieExtension(mock.pi);
     await mock.emitBeforeAgentStart(ctxWithSession("sess-x", "C:\\agent-test\\workspace\\pixie"));
-    expect(mock.active).toEqual([PIXIE_DISPATCH_NAME, PIXIE_REST_NAME]);
+    expect(mock.active).toEqual([
+      PIXIE_DISPATCH_NAME,
+      PIXIE_REST_NAME,
+      PIXIE_STATUS_NAME,
+      PIXIE_INTERJECT_NAME,
+      PIXIE_STOP_NAME,
+      PIXIE_RETRY_NAME,
+    ]);
   });
 
   it("gates report/ask by armed on non-resident sessions", async () => {

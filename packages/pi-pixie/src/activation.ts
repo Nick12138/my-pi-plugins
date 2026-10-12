@@ -16,7 +16,16 @@
  */
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PIXIE_ASK_NAME, PIXIE_DISPATCH_NAME, PIXIE_REPORT_NAME, PIXIE_REST_NAME } from "./pixie-tools.js";
+import {
+	PIXIE_ASK_NAME,
+	PIXIE_DISPATCH_NAME,
+	PIXIE_INTERJECT_NAME,
+	PIXIE_REPORT_NAME,
+	PIXIE_REST_NAME,
+	PIXIE_RETRY_NAME,
+	PIXIE_STATUS_NAME,
+	PIXIE_STOP_NAME,
+} from "./pixie-tools.js";
 import { readPixiePort, pixieRequest } from "./http-client.js";
 import { PIXIE_DISPATCH_STATE_PATH, mapDispatchStateResponse } from "./protocol.js";
 
@@ -148,7 +157,14 @@ export function createPixieReportActivationExtension(options: {
 			} catch {
 				return;
 			}
-			const residentTools = [PIXIE_DISPATCH_NAME, PIXIE_REST_NAME];
+			const residentTools = [
+				PIXIE_DISPATCH_NAME,
+				PIXIE_REST_NAME,
+				PIXIE_STATUS_NAME,
+				PIXIE_INTERJECT_NAME,
+				PIXIE_STOP_NAME,
+				PIXIE_RETRY_NAME,
+			];
 			const delegatedTools = [PIXIE_REPORT_NAME, PIXIE_ASK_NAME];
 			let next = active;
 			if (resident) {

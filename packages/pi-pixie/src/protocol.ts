@@ -16,6 +16,10 @@ export const PIXIE_ASK_PATH = "/api/pixie/ask";
 export const PIXIE_REST_PATH = "/api/pixie/rest";
 export const PIXIE_INJECT_PATH = "/api/pixie/inject";
 export const PIXIE_DISPATCH_STATE_PATH = "/api/pixie/dispatch-state";
+export const PIXIE_INTERJECT_PATH = "/api/pixie/interject";
+export const PIXIE_STOP_PATH = "/api/pixie/stop";
+export const PIXIE_RETRY_PATH = "/api/pixie/retry";
+export const PIXIE_DISPATCHES_PATH = "/api/pixie/dispatches";
 
 export type PixieDispatchSuccess = {
 	ok: true;
@@ -23,6 +27,8 @@ export type PixieDispatchSuccess = {
 	sessionId: string;
 	sessionPath: string;
 	queued: boolean;
+	/** queued=true 时 Host 给出的排队说明（等待/取消/新会话并行提示）。 */
+	queuedNote?: string;
 };
 export type PixieDispatchFailure = { ok: false; error: string };
 export type PixieDispatchResolution = PixieDispatchSuccess | PixieDispatchFailure;
@@ -32,17 +38,55 @@ export type PixieReportResolution = { ok: true } | { ok: false; error: string };
 export type PixieAskResolution = { ok: true } | { ok: false, error: string };
 export type PixieRestResolution = { ok: true } | { ok: false, error: string };
 
+/** pixie_stop 的回执动作。 */
+export type PixieStopAction = "aborted" | "already-stopped" | "cancelled";
+export type PixieStopResolution =
+	| { ok: true; action: PixieStopAction }
+	| { ok: false; error: string };
+
+/** pixie_retry 的回执（resume → 原 dispatchId；redispatch → 新 dispatchId）。 */
+export type PixieRetryResolution =
+	| { ok: true; dispatchId: string }
+	| { ok: false; error: string };
+
+/** 查岗返回的单条委派记录（Host PixieDispatchRecord 的宽松投影）。 */
+export type PixieDispatchSummary = {
+	id: string;
+	status: string;
+	kind: string | null;
+	cwd: string;
+	sessionId: string | null;
+	task: string;
+	report: string | null;
+	question: string | null;
+	options: string[];
+	createdAt: number;
+	startedAt: number | null;
+	reportedAt: number | null;
+	lastActiveAt: number | null;
+	stale: boolean;
+	batchId: string | null;
+	failCount: number;
+	progressSummary: string | null;
+	files: string[] | null;
+	retryOf: string | null;
+};
+
+export type PixieDispatchListResolution =
+	| { ok: true; dispatches: PixieDispatchSummary[] }
+	| { ok: false; error: string };
+
 /**
  * GET /api/pixie/dispatch-state 响应 → { armed, dispatchId, kind? }。
  * 非 200（含 401 鉴权失败）/ 解析失败 / 缺字段一律视为未 armed（激活门控与
  * report/ask 执行的保守语义）。armed 时应携带 dispatchId（Host 侧登记的进行
  * 中委派记录 id），供 report/ask 回填；kind 为该记录当前的回调种类（可缺省，
- * 旧 Host 兼容）。
+ * 旧 Host 兼容；v4.1 扩展 progress/stopped）。
  */
 export type PixieDispatchState = {
 	armed: boolean;
 	dispatchId: string | null;
-	kind: "done" | "error" | "ask" | null;
+	kind: "done" | "error" | "ask" | "progress" | "stopped" | null;
 };
 
 export function mapDispatchStateResponse(result: PixieHttpResult): PixieDispatchState {
@@ -55,7 +99,13 @@ export function mapDispatchStateResponse(result: PixieHttpResult): PixieDispatch
 	}
 	const dispatchId = typeof value.dispatchId === "string" && value.dispatchId.trim() ? value.dispatchId : null;
 	const kind =
-		value.kind === "done" || value.kind === "error" || value.kind === "ask" ? value.kind : null;
+		value.kind === "done" ||
+		value.kind === "error" ||
+		value.kind === "ask" ||
+		value.kind === "progress" ||
+		value.kind === "stopped"
+			? value.kind
+			: null;
 	return { armed: value.armed, dispatchId, kind };
 }
 
@@ -111,6 +161,7 @@ export function mapDispatchResponse(result: PixieHttpResult): PixieDispatchResol
 		sessionId: value.sessionId,
 		sessionPath: value.sessionPath,
 		queued: value.queued,
+		...(typeof value.queuedNote === "string" && value.queuedNote ? { queuedNote: value.queuedNote } : {}),
 	};
 }
 
@@ -141,6 +192,87 @@ export function mapRestResponse(result: PixieHttpResult): PixieRestResolution {
 	return mapReportResponse(result);
 }
 
+/** POST /api/pixie/stop 响应 → 回执（aborted / already-stopped / cancelled）。 */
+export function mapStopResponse(result: PixieHttpResult): PixieStopResolution {
+	if (result.status !== 200) {
+		return { ok: false, error: `环回控制面返回非 200（${result.status}）：${snippet(result.body)}` };
+	}
+	const parsed = parseJsonBody(result.body);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	const value = parsed.value;
+	if (!isRecord(value) || value.ok !== true) {
+		return { ok: false, error: isRecord(value) ? readErrorField(value.error) : snippet(result.body) };
+	}
+	const action =
+		value.action === "aborted" || value.action === "already-stopped" || value.action === "cancelled"
+			? value.action
+			: null;
+	if (!action) {
+		return { ok: false, error: `停止回执缺少 action 字段：${snippet(result.body)}` };
+	}
+	return { ok: true, action };
+}
+
+/** POST /api/pixie/retry 响应 → 回执（resume 原记录 / redispatch 新记录）。 */
+export function mapRetryResponse(result: PixieHttpResult): PixieRetryResolution {
+	if (result.status !== 200) {
+		return { ok: false, error: `环回控制面返回非 200（${result.status}）：${snippet(result.body)}` };
+	}
+	const parsed = parseJsonBody(result.body);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	const value = parsed.value;
+	if (!isRecord(value) || value.ok !== true) {
+		return { ok: false, error: isRecord(value) ? readErrorField(value.error) : snippet(result.body) };
+	}
+	if (typeof value.dispatchId !== "string" || !value.dispatchId) {
+		return { ok: false, error: `重试回执缺少 dispatchId：${snippet(result.body)}` };
+	}
+	return { ok: true, dispatchId: value.dispatchId };
+}
+
+/** GET /api/pixie/dispatches 响应 → 委派记录列表（查岗数据源）。 */
+export function mapDispatchListResponse(result: PixieHttpResult): PixieDispatchListResolution {
+	if (result.status !== 200) {
+		return { ok: false, error: `环回控制面返回非 200（${result.status}）：${snippet(result.body)}` };
+	}
+	const parsed = parseJsonBody(result.body);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	const value = parsed.value;
+	if (!isRecord(value) || value.ok !== true || !Array.isArray(value.dispatches)) {
+		return { ok: false, error: `环回控制面响应结构不符合预期：${snippet(result.body)}` };
+	}
+	const dispatches: PixieDispatchSummary[] = [];
+	for (const item of value.dispatches) {
+		if (!isRecord(item) || typeof item.id !== "string" || typeof item.task !== "string") continue;
+		dispatches.push({
+			id: item.id,
+			status: typeof item.status === "string" ? item.status : "unknown",
+			kind: typeof item.kind === "string" ? item.kind : null,
+			cwd: typeof item.cwd === "string" ? item.cwd : "",
+			sessionId: typeof item.sessionId === "string" ? item.sessionId : null,
+			task: item.task,
+			report: typeof item.report === "string" ? item.report : null,
+			question: typeof item.question === "string" ? item.question : null,
+			options: Array.isArray(item.options)
+				? item.options.filter((option): option is string => typeof option === "string")
+				: [],
+			createdAt: typeof item.createdAt === "number" ? item.createdAt : 0,
+			startedAt: typeof item.startedAt === "number" ? item.startedAt : null,
+			reportedAt: typeof item.reportedAt === "number" ? item.reportedAt : null,
+			lastActiveAt: typeof item.lastActiveAt === "number" ? item.lastActiveAt : null,
+			stale: item.stale === true,
+			batchId: typeof item.batchId === "string" ? item.batchId : null,
+			failCount: typeof item.failCount === "number" ? item.failCount : 0,
+			progressSummary: typeof item.progressSummary === "string" ? item.progressSummary : null,
+			files: Array.isArray(item.files)
+				? item.files.filter((file): file is string => typeof file === "string")
+				: null,
+			retryOf: typeof item.retryOf === "string" ? item.retryOf : null,
+		});
+	}
+	return { ok: true, dispatches };
+}
+
 /**
  * GET /api/pixie/dispatch-state 响应 → { armed }。
  * 非 200 / 解析失败 / 缺字段一律视为未 armed（激活门控的保守语义）。
@@ -149,9 +281,19 @@ export function mapRestResponse(result: PixieHttpResult): PixieRestResolution {
 
 // ── 工具文本格式（与原 pixie-tool.ts 逐字节一致）──────────────
 
-/** pixie_dispatch 成功文本（含 queued 与否的区分文案）。 */
-export function formatDispatchSuccessText(resolution: { sessionId: string; queued: boolean }): string {
-	return `已派发到工作区会话（sessionId: ${resolution.sessionId}${resolution.queued ? "，该会话当前忙，任务已排队" : ""}）。等待其回调 pixie_report 后再向用户转述。`;
+/** pixie_dispatch 成功文本（直接执行 / 引擎排队两种语义）。 */
+export function formatDispatchSuccessText(resolution: {
+	sessionId: string;
+	queued: boolean;
+	queuedNote?: string;
+}): string {
+	if (resolution.queued && resolution.queuedNote) {
+		return `已受理（dispatchId: ${resolution.dispatchId ?? ""}）。${resolution.queuedNote}`;
+	}
+	if (resolution.queued) {
+		return `已派发到工作区会话（sessionId: ${resolution.sessionId}，该会话当前忙，任务已排队）。等待其回调 pixie_report 后再向用户转述。`;
+	}
+	return `已派发到工作区会话（sessionId: ${resolution.sessionId}）。等待其回调 pixie_report 后再向用户转述。`;
 }
 
 /** pixie_dispatch 失败文本。 */
