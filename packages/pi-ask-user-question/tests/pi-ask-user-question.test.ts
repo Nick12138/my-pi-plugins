@@ -391,6 +391,50 @@ describe("ask_user_question tool", () => {
     });
   });
 
+  it("hands multi-select options to the host as structured metadata", async () => {
+    const multi: AskUserQuestion = { ...QUESTION, multiSelect: true };
+    const inputs: Array<{
+      title: string;
+      placeholder?: string;
+      piabyss: Record<string, unknown>;
+    }> = [];
+    const ctx = {
+      ui: {
+        select: async () => undefined,
+        input: async (title: string, placeholder?: string, options?: { piabyss?: unknown }) => {
+          inputs.push({
+            title,
+            placeholder,
+            piabyss: (options?.piabyss ?? {}) as Record<string, unknown>,
+          });
+          return "1,3";
+        },
+      },
+    };
+    await runQuestionnaire(ctx as never, { questions: [multi] });
+
+    expect(inputs).toHaveLength(1);
+    // The question stays in the title; the numbered list travels as the dialog
+    // message so a host that renders checkboxes can hide it.
+    expect(inputs[0]!.title).toBe(`[Layout] ${QUESTION.question}`);
+    expect(inputs[0]!.placeholder).toContain("1. Right drawer — Slide the tree in from the right.");
+    expect(inputs[0]!.piabyss).toMatchObject({
+      multiSelect: true,
+      questionIndex: 1,
+      questionCount: 1,
+      questionHeader: "Layout",
+    });
+    expect(inputs[0]!.piabyss.optionDetails).toEqual([
+      {
+        id: "Right drawer",
+        description: "Slide the tree in from the right.",
+        preview: QUESTION.options[0]!.preview,
+      },
+      { id: "Centered modal", description: "Keep the modal, polish it." },
+      { id: "Top strip", description: "Collapse into a strip above the chat." },
+    ]);
+  });
+
   it("preserves a typed non-numeric multi-select answer verbatim", async () => {
     const multi: AskUserQuestion = { ...QUESTION, multiSelect: true };
     const { ctx } = fakeContext(undefined, "none of the above");

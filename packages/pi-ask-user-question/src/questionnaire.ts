@@ -13,7 +13,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { QuestionAnswer, QuestionnaireResult } from "./answers.js";
 import { parseMultiSelection, resolveSelection } from "./answers.js";
-import { BACK_ROW_LABEL } from "./constants.js";
+import { BACK_ROW_LABEL, BACK_ROW_PREFIX } from "./constants.js";
 import { buildSelectPlan } from "./select-plan.js";
 import type { AskUserParams, AskUserQuestion } from "./schema.js";
 
@@ -60,23 +60,40 @@ function piabyssMeta(step: StepContext, extra: Record<string, unknown>): Record<
   };
 }
 
-/** 多选：原生 select 无多选能力，用数字输入承载，语义与 rpiv 一致。 */
+/**
+ * 多选：原生 `ui.select` 只能单选，所以仍走 `ui.input`，但把选项以
+ * `piabyss.optionDetails` + `multiSelect: true` 结构化下发。
+ *
+ * PiAbyss 桌面据此渲染成**复选框列表**，确认时把勾选的 1-based 下标拼成
+ * `"1,3"` 回传 —— 与下面的 `parseMultiSelection` 完全对齐，解析逻辑不用改。
+ * 不认这套元数据的宿主则退化成「选项列表 + 一个文本框」，因此选项列表放在
+ * dialog 的 message 里（不是拼进标题），桌面渲染复选框时会把 message 隐去。
+ */
 export async function askMultiSelect(
   ctx: ExtensionContext,
   step: StepContext,
 ): Promise<AskOutcome> {
   const { question, header } = step;
+  const plan = buildSelectPlan(question, { includeCustomRow: false, includeBackRow: false });
   const list = question.options
     .map((option, index) => `${index + 1}. ${option.label} — ${option.description}`)
     .join("\n");
-  const backHint = step.allowBack ? `\n\n${BACK_ROW_LABEL} = go back and change the previous answer` : "";
+  const backHint = step.allowBack
+    ? `\n\n${BACK_ROW_LABEL} = go back and change the previous answer`
+    : "";
   const value = await ctx.ui.input(
-    `${header}${question.question}\n\n${list}\n\n${MULTI_SELECT_INSTRUCTIONS}${backHint}`,
-    "1,3",
-    piabyssMeta(step, { allowFreeform: true, allowBack: step.allowBack }),
+    `${header}${question.question}`,
+    `${list}\n\n${MULTI_SELECT_INSTRUCTIONS}${backHint}`,
+    piabyssMeta(step, {
+      optionDetails: plan.optionDetails,
+      multiSelect: true,
+      allowFreeform: true,
+      allowBack: step.allowBack,
+    }),
   );
   if (value === undefined) return { kind: "cancelled" };
-  if (step.allowBack && value.trim() === BACK_ROW_LABEL) return { kind: "back" };
+  // 桌面的「修改上一题」按钮回传的是同一个 `↩` 前缀值；按前缀匹配，后缀可本地化。
+  if (step.allowBack && value.trim().startsWith(BACK_ROW_PREFIX)) return { kind: "back" };
   const parsed = parseMultiSelection(value, step.questionIndex, question.question, question.options);
   if (parsed.kind === "multi") {
     return {

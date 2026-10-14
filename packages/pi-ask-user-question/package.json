@@ -1,7 +1,7 @@
 {
   "name": "pi-ask-user-question",
-  "version": "0.2.0",
-  "description": "Structured user-questionnaire tool for Pi: ask the user 1-4 typed questions with options, multiSelect and freeform fallback, with rewind-to-previous-question support. Extracted from the PiAbyss built-in ask_user_question tool.",
+  "version": "0.3.0",
+  "description": "Structured user-questionnaire tool for Pi: ask the user 1-4 typed questions with options, multiSelect and freeform fallback, with rewind-to-previous-question support and host-rendered checkbox lists for multi-select. Extracted from the PiAbyss built-in ask_user_question tool.",
   "keywords": ["pi-package", "ask-user", "question", "questionnaire"],
   "license": "MIT",
   "author": "Nick12138",

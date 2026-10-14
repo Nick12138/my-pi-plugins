@@ -19,8 +19,12 @@
 - 重复标签自动去重追加 `(2)`，保证「选项串 → 下标」映射唯一。
 - 选中哨兵行 `Type something.` 会追问一次自由文本 `ctx.ui.input`；
   桌面端 `allowFreeform` 直接提交的自定义文本也按自定义答案处理。
-- 多选题（`multiSelect: true`）：走编号 `ctx.ui.input`（`"1,3"` 格式），
-  空输入 = 空多选，任何非编号 token 视为用户输入的自定义答案。
+- 多选题（`multiSelect: true`）：原生 `ui.select` 只能单选，所以仍走 `ctx.ui.input`，
+  但把选项以 `piabyss.optionDetails` + `multiSelect: true` **结构化**下发 ——
+  PiAbyss 桌面据此渲染成复选框列表，确认时把勾选的 1-based 下标拼成 `"1,3"` 回传；
+  不认这套元数据的宿主则退化成「编号列表 + 文本框」（编号列表放在 dialog 的
+  message 里，桌面渲染复选框时会把 message 隐去）。空输入 = 空多选，
+  任何非编号 token 视为用户输入的自定义答案。
 - **回退重答**：第 2 题起，每题末尾追加一行 `↩ 修改上一题` 哨兵；选中它（多选题则在
   输入框里原样输入该标签）即退回上一题重新作答，上次的选择经 `piabyss.defaultValue`
   回传、由桌面端预选。循环在插件内完成 —— 宿主与插件之间只有 `ui.select` /

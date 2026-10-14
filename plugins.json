@@ -149,9 +149,9 @@
     {
       "id": "pi-ask-user-question",
       "name": "提问问卷",
-      "description": "ask_user_question 工具：向用户发起结构化问卷（最多 4 题、每题 2-4 选项），支持单选/多选/自由文本补充；选项元数据（optionDetails、allowFreeform、questionIndex/Count/Header、defaultValue）供桌面端渲染下拉、输入框、题号进度与回退预选。v0.2.0 起第 2 题起追加「↩ 修改上一题」哨兵行，可退回上一题重答（桌面端把它摘出来渲染成卡片底部按钮）。源自 PiAbyss 内置工具外移，details 信封 { answers, cancelled } 与桌面端兼容。可在 PiAbyss 设置页用“提问工具”开关整体启停。",
+      "description": "ask_user_question 工具：向用户发起结构化问卷（最多 4 题、每题 2-4 选项），支持单选/多选/自由文本补充；选项元数据（optionDetails、allowFreeform、multiSelect、questionIndex/Count/Header、defaultValue）供桌面端渲染选项列表、复选框、输入框、题号进度与回退预选。v0.2.0 起第 2 题起追加「↩ 修改上一题」哨兵行，可退回上一题重答（桌面端把它摘出来渲染成卡片底部按钮）。v0.3.0 起多选题不再把编号列表塞进标题，而是结构化下发，桌面渲染成复选框列表，确认时回传「1,3」。源自 PiAbyss 内置工具外移，details 信封 { answers, cancelled } 与桌面端兼容。可在 PiAbyss 设置页用“提问工具”开关整体启停。",
       "icon": "❓",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": "Nick12138",
       "tags": [
         "提问",
