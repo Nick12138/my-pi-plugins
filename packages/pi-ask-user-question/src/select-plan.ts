@@ -1,7 +1,7 @@
 /**
  * 标签去重与 `ui.select` 载荷构造 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
  */
-import { CUSTOM_ROW_LABEL, MAX_PREVIEW_LENGTH } from "./constants.js";
+import { BACK_ROW_LABEL, CUSTOM_ROW_LABEL, MAX_PREVIEW_LENGTH } from "./constants.js";
 import type { AskUserQuestion } from "./schema.js";
 
 export type PiAbyssOptionDetail = {
@@ -21,7 +21,16 @@ export type SelectPlan = {
   values: string[];
   byValue: Map<string, number>;
   customValue: string;
+  /** 回退哨兵串；未追加时为空串（选中值永远不可能是空串）。 */
+  backValue: string;
   optionDetails: PiAbyssOptionDetail[];
+};
+
+export type SelectPlanOptions = {
+  /** 是否追加自由输入哨兵行。宿主已声明 `allowFreeform` 时由调用方关掉。 */
+  includeCustomRow?: boolean;
+  /** 是否追加回退哨兵行（第 2 题起）。 */
+  includeBackRow?: boolean;
 };
 
 /**
@@ -45,7 +54,12 @@ export function disambiguate(label: string, used: Set<string>): string {
   return candidate;
 }
 
-export function buildSelectPlan(question: AskUserQuestion): SelectPlan {
+export function buildSelectPlan(
+  question: AskUserQuestion,
+  options: SelectPlanOptions = {},
+): SelectPlan {
+  const includeCustomRow = options.includeCustomRow ?? true;
+  const includeBackRow = options.includeBackRow ?? false;
   const used = new Set<string>();
   const byValue = new Map<string, number>();
   const optionDetails: PiAbyssOptionDetail[] = [];
@@ -59,7 +73,15 @@ export function buildSelectPlan(question: AskUserQuestion): SelectPlan {
     });
     return value;
   });
-  const customValue = disambiguate(CUSTOM_ROW_LABEL, used);
-  values.push(customValue);
-  return { values, byValue, customValue, optionDetails };
+  let customValue = "";
+  if (includeCustomRow) {
+    customValue = disambiguate(CUSTOM_ROW_LABEL, used);
+    values.push(customValue);
+  }
+  let backValue = "";
+  if (includeBackRow) {
+    backValue = disambiguate(BACK_ROW_LABEL, used);
+    values.push(backValue);
+  }
+  return { values, byValue, customValue, backValue, optionDetails };
 }

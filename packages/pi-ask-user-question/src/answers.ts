@@ -27,7 +27,7 @@ export function resolveSelection(
   question: AskUserQuestion,
   questionIndex: number,
   selected: string,
-): { answer: QuestionAnswer } | { freeform: true } {
+): { answer: QuestionAnswer } | { freeform: true } | { back: true } {
   const index = plan.byValue.get(selected);
   if (index !== undefined) {
     return {
@@ -39,7 +39,8 @@ export function resolveSelection(
       },
     };
   }
-  if (selected === plan.customValue) return { freeform: true };
+  if (plan.customValue !== "" && selected === plan.customValue) return { freeform: true };
+  if (plan.backValue !== "" && selected === plan.backValue) return { back: true };
   return {
     answer: { questionIndex, question: question.question, kind: "custom", answer: selected },
   };
@@ -49,6 +50,7 @@ export function resolveSelection(
 type SelectPlanLike = {
   byValue: Map<string, number>;
   customValue: string;
+  backValue?: string;
 };
 
 /** 多选编号输入的解析结果。 */

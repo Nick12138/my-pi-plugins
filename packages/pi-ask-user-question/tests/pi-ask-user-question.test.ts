@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CUSTOM_ROW_LABEL, MAX_PREVIEW_LENGTH } from "../src/constants.js";
+import { BACK_ROW_LABEL, CUSTOM_ROW_LABEL, MAX_PREVIEW_LENGTH } from "../src/constants.js";
 import {
   buildSelectPlan,
   disambiguate,
@@ -279,6 +279,9 @@ describe("ask_user_question tool", () => {
       "Type something.",
     ]);
     expect(selects[0]!.piabyss).toEqual({
+      questionIndex: 1,
+      questionCount: 1,
+      questionHeader: "Layout",
       optionDetails: [
         {
           id: "Right drawer",
@@ -401,6 +404,109 @@ describe("ask_user_question tool", () => {
     );
     expect(result.details).toMatchObject({
       answers: [expect.objectContaining({ kind: "custom", answer: "none of the above" })],
+    });
+  });
+});
+
+describe("questionnaire rollback", () => {
+  type SeenSelect = { title: string; values: string[]; piabyss: Record<string, unknown> };
+
+  /** 按脚本依次返回 select / input 结果，并记录每次下发的载荷。 */
+  function scriptedContext(
+    selects: Array<string | undefined>,
+    inputs: Array<string | undefined> = [],
+  ) {
+    const seen: SeenSelect[] = [];
+    const inputCalls: string[] = [];
+    return {
+      seen,
+      inputCalls,
+      ctx: {
+        ui: {
+          select: async (title: string, values: string[], options?: { piabyss?: unknown }) => {
+            seen.push({ title, values, piabyss: (options?.piabyss ?? {}) as Record<string, unknown> });
+            return selects.shift();
+          },
+          input: async (title: string) => {
+            inputCalls.push(title);
+            return inputs.shift();
+          },
+        },
+      },
+    };
+  }
+
+  const TWO = { questions: [QUESTION, QUESTION] } satisfies AskUserParams;
+
+  it("offers the back row only from the second question on", async () => {
+    const { ctx, seen } = scriptedContext(["Top strip", "Centered modal"]);
+    await runQuestionnaire(ctx as never, TWO);
+
+    expect(seen[0]!.values).not.toContain(BACK_ROW_LABEL);
+    expect(seen[1]!.values).toContain(BACK_ROW_LABEL);
+    expect(seen[1]!.piabyss.questionIndex).toBe(2);
+    expect(seen[1]!.piabyss.questionCount).toBe(2);
+  });
+
+  it("rewinds to the previous question and re-asks it", async () => {
+    const { ctx, seen } = scriptedContext([
+      "Top strip",
+      BACK_ROW_LABEL,
+      "Centered modal",
+      "Top strip",
+    ]);
+    const result = await runQuestionnaire(ctx as never, TWO);
+
+    // Q1 → Q2 → 回退 → Q1 重问 → Q2 重答。
+    expect(seen.map((entry) => entry.piabyss.questionIndex)).toEqual([1, 2, 1, 2]);
+    expect(result).toEqual({
+      cancelled: false,
+      answers: [
+        { questionIndex: 0, question: QUESTION.question, kind: "option", answer: "Centered modal" },
+        { questionIndex: 1, question: QUESTION.question, kind: "option", answer: "Top strip" },
+      ],
+    });
+  });
+
+  it("pre-selects the previous answer through piabyss.defaultValue on re-ask", async () => {
+    const { ctx, seen } = scriptedContext([
+      "Top strip",
+      BACK_ROW_LABEL,
+      "Centered modal",
+      "Top strip",
+    ]);
+    await runQuestionnaire(ctx as never, TWO);
+
+    // 首次问 Q1 没有可预填的值；回退后重问 Q1 时带上上次的选择。
+    expect(seen[0]!.piabyss.defaultValue).toBeUndefined();
+    expect(seen[2]!.piabyss.defaultValue).toBe("Top strip");
+  });
+
+  it("drops answers the user had not reached when cancelling after a rewind", async () => {
+    const { ctx } = scriptedContext(["Top strip", BACK_ROW_LABEL, undefined]);
+    const result = await runQuestionnaire(ctx as never, TWO);
+
+    // 回退到 Q1 后取消：Q2 虽然答过，但用户已经退回去了，不应出现在结果里。
+    expect(result).toEqual({ answers: [], cancelled: true });
+  });
+
+  it("rewinds from a multi-select question when the back label is typed", async () => {
+    const multi: AskUserQuestion = { ...QUESTION, multiSelect: true };
+    const { ctx } = scriptedContext(["Top strip", "Centered modal"], [BACK_ROW_LABEL, "1,3"]);
+    const result = await runQuestionnaire(ctx as never, { questions: [QUESTION, multi] });
+
+    expect(result).toEqual({
+      cancelled: false,
+      answers: [
+        { questionIndex: 0, question: QUESTION.question, kind: "option", answer: "Centered modal" },
+        {
+          questionIndex: 1,
+          question: QUESTION.question,
+          kind: "multi",
+          answer: null,
+          selected: ["Right drawer", "Top strip"],
+        },
+      ],
     });
   });
 });

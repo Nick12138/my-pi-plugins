@@ -2,7 +2,8 @@
 
 给 pi 的结构化提问工具 `ask_user_question`：模型在你需要拍板（方案取舍、布局、确认偏好）时，
 用一次调用抛出 1–4 道题，每题 2–4 个带描述/预览的选项，并自动附加一行
-"Type something." 哨兵支持自由文本回答。
+"Type something." 哨兵支持自由文本回答；第 2 题起还会附加一行 `↩ 修改上一题`
+哨兵，可以退回上一题重答。
 
 **来源**：逐字节外移自 PiAbyss 内置工具
 （`PiAbyss/packages/pi-host/src/ask-user-question-tool.ts`），返回信封保持
@@ -20,7 +21,16 @@
   桌面端 `allowFreeform` 直接提交的自定义文本也按自定义答案处理。
 - 多选题（`multiSelect: true`）：走编号 `ctx.ui.input`（`"1,3"` 格式），
   空输入 = 空多选，任何非编号 token 视为用户输入的自定义答案。
-- 取消语义：任何一题取消即整体 `cancelled: true`，已作答的题目保留在结果里。
+- **回退重答**：第 2 题起，每题末尾追加一行 `↩ 修改上一题` 哨兵；选中它（多选题则在
+  输入框里原样输入该标签）即退回上一题重新作答，上次的选择经 `piabyss.defaultValue`
+  回传、由桌面端预选。循环在插件内完成 —— 宿主与插件之间只有 `ui.select` /
+  `ui.input` 的单向返回值，协议没有「撤销上一次作答」的方法，答案一旦 return
+  就已经交给模型，所以回滚只能发生在答案尚未交出的这一层。
+- `piabyss` 元数据：`optionDetails` / `allowFreeform` / `questionIndex` /
+  `questionCount` / `questionHeader` / `defaultValue`。前两者供桌面渲染下拉与输入框，
+  后四个供桌面画题号进度、渲染 header chip，并在回退重问时预选上次答案。
+- 取消语义：任何一题取消即整体 `cancelled: true`，已作答的题目保留在结果里
+  （回退后再取消，不会带上用户已经退回去的那几题）。
 
 ## 开关
 
