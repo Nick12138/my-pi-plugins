@@ -461,7 +461,8 @@ describe("questionnaire rollback", () => {
     inputs: Array<string | undefined> = [],
   ) {
     const seen: SeenSelect[] = [];
-    const inputCalls: string[] = [];
+    /** 每次 `ui.input` 的标题与 piabyss 元数据（多选题走这条路径）。 */
+    const inputCalls: SeenSelect[] = [];
     return {
       seen,
       inputCalls,
@@ -471,8 +472,12 @@ describe("questionnaire rollback", () => {
             seen.push({ title, values, piabyss: (options?.piabyss ?? {}) as Record<string, unknown> });
             return selects.shift();
           },
-          input: async (title: string) => {
-            inputCalls.push(title);
+          input: async (title: string, _placeholder?: string, options?: { piabyss?: unknown }) => {
+            inputCalls.push({
+              title,
+              values: [],
+              piabyss: (options?.piabyss ?? {}) as Record<string, unknown>,
+            });
             return inputs.shift();
           },
         },
@@ -524,6 +529,42 @@ describe("questionnaire rollback", () => {
     // 首次问 Q1 没有可预填的值；回退后重问 Q1 时带上上次的选择。
     expect(seen[0]!.piabyss.defaultValue).toBeUndefined();
     expect(seen[2]!.piabyss.defaultValue).toBe("Top strip");
+  });
+
+  it("re-asks each question with its own answer when rewinding twice", async () => {
+    const multi: AskUserQuestion = { ...QUESTION, multiSelect: true };
+    const { ctx, seen, inputCalls } = scriptedContext(
+      // Q1 → Q3 → 回退 Q2 → Q3 → 回退 Q2 → 回退 Q1 → 重答 Q1 → Q2 → Q3。
+      ["Top strip", BACK_ROW_LABEL, BACK_ROW_LABEL, "Centered modal", "Top strip"],
+      // Q2 首次作答 → 重答 → 再回退（把回退值打到多选的 input 上）→ 最后重答。
+      ["1,3", "1", BACK_ROW_LABEL, "1,3"],
+    );
+    const result = await runQuestionnaire(ctx as never, { questions: [QUESTION, multi, QUESTION] });
+
+    // 首次问 Q2 没有可预填的值；从 Q3 回退重问时带的是 **Q2 自己的**答案串。
+    expect(inputCalls[0]!.piabyss.defaultValue).toBeUndefined();
+    expect(inputCalls[1]!.piabyss.defaultValue).toBe("1,3");
+    // 再退一层仍取该题最新一次作答，不会错位成邻居题的值。
+    expect(inputCalls[2]!.piabyss.defaultValue).toBe("1");
+    // 从 Q2 回退重问 Q1：带的是 Q1 自己的答案。
+    expect(seen[3]!.piabyss.defaultValue).toBe("Top strip");
+    // Q1 重答前提到的那层重问的题号也要对得上。
+    expect(inputCalls.map((call) => call.piabyss.questionIndex)).toEqual([2, 2, 2, 2]);
+    expect(seen.map((entry) => entry.piabyss.questionIndex)).toEqual([1, 3, 3, 1, 3]);
+    expect(result).toEqual({
+      cancelled: false,
+      answers: [
+        { questionIndex: 0, question: QUESTION.question, kind: "option", answer: "Centered modal" },
+        {
+          questionIndex: 1,
+          question: QUESTION.question,
+          kind: "multi",
+          answer: null,
+          selected: ["Right drawer", "Top strip"],
+        },
+        { questionIndex: 2, question: QUESTION.question, kind: "option", answer: "Top strip" },
+      ],
+    });
   });
 
   it("drops answers the user had not reached when cancelling after a rewind", async () => {
