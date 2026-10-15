@@ -1,12 +1,13 @@
 /**
  * pixie 环回 HTTP 契约测试：用 node:http 起本地 mock 环回服务，
- * 覆盖 dispatch 成功（queued 两种文案）/失败/3 秒超时/非 200、
+ * 覆盖 dispatch 成功（queued 两种文案）/失败/超时/非 200、
  * report 成功/失败、dispatch-state 门控，以及请求构造。
  * 工具文本格式与原 pixie-tool.ts 逐字节对照。
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
+	PIXIE_DISPATCH_TIMEOUT_MS,
 	PIXIE_HTTP_TIMEOUT_MS,
 	buildRequestHeaders,
 	serializeRequestBody,
@@ -200,24 +201,28 @@ describe("pixie_dispatch contract", () => {
 		expect(out.content[0]?.text).toContain("PIABYSS_PIXIE_HTTP_PORT");
 	});
 
-	it("mock 服务挂起 → 3 秒超时，isError 文案可读", async () => {
+	it("mock 服务挂起 → 超时报错，isError 文案可读", async () => {
 		const hung = await startMockServer(() => {
 			/* 挂起：永不响应 */
 		});
 		try {
-			const tool = buildPixieDispatchTool({ getPort: () => hung.port });
+			const tool = buildPixieDispatchTool({ getPort: () => hung.port, timeoutMs: 800 });
 			const started = Date.now();
 			const out = await execute(tool, { cwd: "D:/ws", task: "idle" });
 			const elapsed = Date.now() - started;
 			expect(out.isError).toBe(true);
 			expect(out.content[0]?.text).toBe(
-				`委派失败：环回请求超时（${PIXIE_HTTP_TIMEOUT_MS}ms）：POST /api/pixie/dispatch`,
+				"委派失败：环回请求超时（800ms）：POST /api/pixie/dispatch",
 			);
-			expect(elapsed).toBeGreaterThanOrEqual(PIXIE_HTTP_TIMEOUT_MS - 100);
-			expect(elapsed).toBeLessThan(PIXIE_HTTP_TIMEOUT_MS + 1500);
+			expect(elapsed).toBeGreaterThanOrEqual(700);
+			expect(elapsed).toBeLessThan(2400);
 		} finally {
 			await hung.close();
 		}
+	});
+
+	it("dispatch 预算比默认环回预算宽（Host 受理冷工作区可达数秒）", () => {
+		expect(PIXIE_DISPATCH_TIMEOUT_MS).toBeGreaterThan(PIXIE_HTTP_TIMEOUT_MS);
 	});
 
 	it("连接拒绝 → isError（可读错误文本）", async () => {

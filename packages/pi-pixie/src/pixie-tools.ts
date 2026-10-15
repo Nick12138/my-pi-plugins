@@ -13,7 +13,7 @@
 import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { readPixiePort, pixieRequest } from "./http-client.js";
+import { pixieRequest, PIXIE_DISPATCH_TIMEOUT_MS, readPixiePort } from "./http-client.js";
 import {
 	PIXIE_ASK_PATH,
 	PIXIE_DISPATCHES_PATH,
@@ -146,8 +146,11 @@ export type PixiePortReader = () => number | null;
  * 成功响应 { ok: true, dispatchId, sessionId, sessionPath, queued }；
  * 失败响应 { ok: false, error } → isError + 「委派失败：{error}」。
  */
-export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+export function buildPixieDispatchTool(
+	options: { getPort?: PixiePortReader; timeoutMs?: number } = {},
+): ToolDefinition {
 	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	const timeoutMs = options.timeoutMs ?? PIXIE_DISPATCH_TIMEOUT_MS;
 	return defineTool({
 		name: PIXIE_DISPATCH_NAME,
 		label: "Pixie dispatch",
@@ -178,7 +181,13 @@ export function buildPixieDispatchTool(options: { getPort?: PixiePortReader } = 
 				...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
 			};
 			try {
-				const result = await pixieRequest({ port, method: "POST", path: PIXIE_DISPATCH_PATH, body });
+				const result = await pixieRequest({
+					port,
+					method: "POST",
+					path: PIXIE_DISPATCH_PATH,
+					body,
+					timeoutMs,
+				});
 				const resolution = mapDispatchResponse(result);
 				if (!resolution.ok) {
 					return errorResult(formatDispatchFailureText(resolution.error));

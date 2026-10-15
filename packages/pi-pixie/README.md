@@ -12,7 +12,7 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
 - 其余指挥台工具：`pixie_report`（被委派会话回调）/ `pixie_ask`（询问用户）/ `pixie_rest`（打盹换段）/ `pixie_dispatch_status`（查岗）/ `pixie_interject`（插话）/ `pixie_stop`（叫停）/ `pixie_retry`（续跑或重派）。
 - **每日自动打盹**（Host 侧行为，插件设置里只有一个开关）：新的一天自动换一个干净会话段，但**不按钟点**判定——以上次活动跨过本地日界、且静默达到阈值（默认 3h，随历史静默间隔上抬但不超过 12h）为准；封段会带一份规则拼出的交接摘要（上段尾巴 + 未回音委派 + 备忘录未完成）。Host 重启后由"今天第一条消息之前"的懒兜底判定补偿。阈值内置不开放调整：自适应已经按用户作息在调它。
 - **pixie_report**（注册在每个非小精灵会话上，但默认保持休眠）：被委派的任务会话在完成任务后回调。参数与原实现一致 `{ result, success? }`——dispatchId 对模型透明，插件先查 dispatch-state 端点按当前会话解析出 dispatchId，再 POST `{ dispatchId, summary, success }`。
-- 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：PiAbyss Host 注入的代理设置会拦截环回请求），单请求超时 3 秒。
+- 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：PiAbyss Host 注入的代理设置会拦截环回请求），单请求超时默认 3 秒；`POST /api/pixie/dispatch` 单独放宽到 **15 秒**（受理要先打开目标工作区的后台图，实测 0.9–3.3 秒，3 秒预算会让已受理的委派被误报为失败并诱发重复派单）。
 
 ## 激活门控安全语义
 
@@ -49,6 +49,13 @@ Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，共 3 个端点�
 ```
 
 （`queued: false` 时无「，该会话当前忙，任务已排队」一段。）
+
+**同请求去重（Host v4.5）**：环回超时不代表 Host 没受理，小精灵按「失败」原样重试会造成同一任务跑两遍。Host 侧对重复提交两层拦截：
+
+- 上一条**已经受理**（同 `cwd` + 逐字相同的 `task`，30 秒内仍有活跃记录）→ 仍回 200 + `queued: true`，`dispatchId`/`sessionId` 是**原来那条**，`queuedNote` 写明「本次没有重复派发」；工具文本 `已受理（dispatchId: …）。同一个任务在 N 秒前已经受理…`。
+- 上一条**还在受理中**（请求还没返回，多半在后台打开目标工作区）→ `{ "ok": false, "error": "同一个任务正在受理中…" }`，文本明确提示不要重复派发、改用 `pixie_dispatch_status` 查岗。
+
+`pixie_retry` 的重派（Host 内部 `retryOf`）是有意重跑，不受这两条约束；插件侧无法通过请求体传入 `retryOf`。
 
 失败（`{ "ok": false, "error": "…" }`、非 200、或传输错误）→ `isError` 结果，文本 `委派失败：{error}`。
 

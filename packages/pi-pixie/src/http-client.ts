@@ -17,6 +17,12 @@ export const PIXIE_RESIDENT_ENV = "PIABYSS_PIXIE_RESIDENT";
 
 /** 单请求超时：3 秒。 */
 export const PIXIE_HTTP_TIMEOUT_MS = 3000;
+/**
+ * dispatch 单独放宽到 15 秒：委派是「受理」语义，Host 侧最重的一步是打开
+ * 目标工作区的后台图（实测 0.9–3.3s，冷启动更久），3 秒预算会让请求实际
+ * 已被受理却回「委派失败」，进而诱发重复派单。
+ */
+export const PIXIE_DISPATCH_TIMEOUT_MS = 15_000;
 export const PIXIE_LOOPBACK_HOST = "127.0.0.1";
 
 /** 读取并校验环回控制面端口；未设置或非法返回 null。 */
