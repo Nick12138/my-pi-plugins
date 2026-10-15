@@ -2,17 +2,22 @@
 
 把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件：让 agent 直接操作用户的
 方寸间（原「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
-（list / complete / reopen / update），与 PiAbyss 桌面端方寸间页面共用同一份
-磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
+（list / create / complete / reopen / update），与 PiAbyss 桌面端方寸间页面
+共用同一份磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
 （`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss Host 内置的
 同步引擎。v0.3.0 起取消记录类别（备忘 / 想法 / 任务），旧数据的 type 字段
 读盘时自动剔除。v0.4.0 新增**计划功能**（一次性截止 + 周期规则）并把状态
-收敛为三种（详见下文）。
+收敛为三种（详见下文）。v0.5.0 新增 **`create` 动作**（agent 侧直接新建记录）。
 
 ## 功能
 
 - `list`：列出全部记录（id / 状态 / 标题 / 标签 / 截止 / 周期 / 下一轮 /
   逾期标记 / 更新时间）。
+- `create`：往看板新写一条记录（v0.5.0）。`title` 必填，`contentMd` / `tags`
+  可选，计划字段同 update（`dueAt` 一次性截止、`recurrence` 周期规则，周期
+  记录创建即算好 `nextDueAt`）；状态固定 `open`，返回新记录（含 id），
+  后续可直接 complete / update。走 `store.create` 直接落盘，与桌面端「新建」
+  写同一份 `notes.json`；Host 侧的草稿（draft.json）流程与此无关，插件不碰。
 - `complete`：把某条记录标记为已完成，并**必须**提交 `result`（一段简洁的
   Markdown 总结），覆盖式写入记录的结果字段；同时捕获提交时的会话信息
   （sessionId / 会话文件路径 / 会话标题 / cwd），供桌面端「继续讨论」跳转。

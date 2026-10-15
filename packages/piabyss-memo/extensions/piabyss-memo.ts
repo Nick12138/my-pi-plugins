@@ -23,6 +23,11 @@
  *     status 保持 open（周期到达 until 自然终结为 done）；
  *   - list 展示 due / recurs / next / 逾期标记；
  *   - 状态只有 open / in_progress / done 三种（archived 已移除）。
+ *
+ * v5（agent 侧新建）：
+ *   - 新增 create 动作（title 必填，contentMd / tags / dueAt / recurrence 可选），
+ *     直接经 store.create 落盘并返回新记录 id；Host 端新建草稿（draft.json）
+ *     仍由桌面 UI/协议层负责，本动作不碰草稿。
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -68,23 +73,28 @@ const ParamsSchema = Type.Object({
   action: Type.Union(
     [
       Type.Literal("list"),
+      Type.Literal("create"),
       Type.Literal("complete"),
       Type.Literal("reopen"),
       Type.Literal("update"),
     ],
     {
       description:
-        "list = show all memo notes with ids and statuses; complete = mark a note as done, ONLY when the work it asked for is truly finished and nothing is awaited from the user; reopen = mark a done note as open again; update = change a note's title/content/tags/plan (dueAt, recurrence).",
+        "list = show all memo notes with ids and statuses; create = add a new note to the board (title required); complete = mark a note as done, ONLY when the work it asked for is truly finished and nothing is awaited from the user; reopen = mark a done note as open again; update = change a note's title/content/tags/plan (dueAt, recurrence).",
     },
   ),
   id: Type.Optional(
     Type.String({ description: "The memo note id. Required for complete/reopen/update." }),
   ),
-  title: Type.Optional(Type.String({ description: "New title (update action only)." })),
-  contentMd: Type.Optional(Type.String({ description: "New markdown body (update action only)." })),
+  title: Type.Optional(
+    Type.String({ description: "Note title. Required for create; changes the title for update." }),
+  ),
+  contentMd: Type.Optional(
+    Type.String({ description: "Markdown body (create / update actions)." }),
+  ),
   tags: Type.Optional(
     Type.Array(Type.String(), {
-      description: "New tag list replacing the old one (update action only).",
+      description: "Tag list (create: initial tags; update: replaces the old list).",
     }),
   ),
   result: Type.Optional(
@@ -96,13 +106,13 @@ const ParamsSchema = Type.Object({
   dueAt: Type.Optional(
     Type.Union([Type.String(), Type.Null()], {
       description:
-        "Update action only: one-shot due datetime. Accepts 'YYYY-MM-DD', 'YYYY-MM-DD HH:mm' (device-local time) or a full ISO string; null clears it.",
+        "Create / update actions: one-shot due datetime. Accepts 'YYYY-MM-DD', 'YYYY-MM-DD HH:mm' (device-local time) or a full ISO string; null clears it.",
     }),
   ),
   recurrence: Type.Optional(
     Type.Union([RecurrenceSchema, Type.Null()], {
       description:
-        "Update action only: recurring plan rule; null clears it (the note becomes a normal one).",
+        "Create / update actions: recurring plan rule; null clears it (the note becomes a normal one).",
     }),
   ),
 });
@@ -119,11 +129,12 @@ type MemoSessionInfo = {
 
 const TOOL_DESCRIPTION = [
   "Access the user's PiAbyss 方寸间 board (待办 · 速记 · 备忘 · 收集).",
-  "Use it to list pending notes, to mark a note as complete (complete) once the task described in it has been handled, or to reopen/update notes.",
+  "Use it to list pending notes, to add a new note (create) when the user asks to write something down or set a reminder/todo, or to mark a note as complete (complete) once the task described in it has been handled.",
+  "create takes a required title plus optional contentMd / tags, and optionally a plan: a one-shot dueAt or a recurring rule.",
   "Before calling complete, self-check: has the task produced a final result? Are you still waiting for user input or a user decision? If anything is still awaited (e.g. you asked the user to pick an option), do NOT call complete — reply and wait instead.",
   "Instructions the user sends manually in the session always override memo prompts: if the user says not to mark a note done yet, do not call complete.",
   "complete REQUIRES a `result` parameter: a concise markdown summary of what was done and the outcome; it overwrites any previous summary.",
-  "A note id is required for complete/reopen/update; call list first if you don't have one.",
+  "A note id is required for complete/reopen/update; call list first if you don't have one. create returns the new id.",
   "Notes may carry a plan: a one-shot dueAt, or a recurring rule (recurrence, e.g. weekly on Monday at 13:00 in a given timezone).",
   "Completing a RECURRING note finishes only the current cycle: the tool records the summary and rolls the next due time automatically, keeping the note open for the next cycle.",
   "Never set a recurring note to done via update — clear its recurrence (recurrence: null) first if the user wants to end it.",
@@ -234,7 +245,7 @@ export default function (pi: ExtensionAPI) {
     name: MEMO_TOOL_NAME,
     label: "方寸间",
     description: TOOL_DESCRIPTION,
-    promptSnippet: "List and update the user's memo notes (mark done after handling)",
+    promptSnippet: "Create, list and update the user's memo notes (mark done after handling)",
     parameters: ParamsSchema,
 
     async execute(_toolCallId, params: MemoParams, _signal, _onUpdate, ctx) {
@@ -252,6 +263,25 @@ export default function (pi: ExtensionAPI) {
           const body = notes.map(formatNote).join("\n");
           return {
             content: [{ type: "text" as const, text: `Memo notes (${notes.length}):\n${body}` }],
+            details: undefined,
+          };
+        }
+
+        if (params.action === "create") {
+          const note = store.create({
+            title: params.title ?? "",
+            contentMd: params.contentMd ?? "",
+            tags: params.tags,
+            dueAt: params.dueAt == null ? null : parseDueAt(params.dueAt),
+            recurrence:
+              params.recurrence == null ? undefined : toStoreRecurrence(params.recurrence),
+          });
+          // 变更后触发云同步防抖（autoSync 开启时生效；引擎未配置时静默跳过）。
+          scheduleMemoAutoSync(agentDir);
+          return {
+            content: [
+              { type: "text" as const, text: `Memo note created:\n${formatNote(note)}` },
+            ],
             details: undefined,
           };
         }
