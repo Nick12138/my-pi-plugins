@@ -2,3 +2,9 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Pi agent runtime config — per-machine, recreated locally, never shared
+/.pi/settings.json
+
+# WorkBuddy workspace memory
+.workbuddy/
