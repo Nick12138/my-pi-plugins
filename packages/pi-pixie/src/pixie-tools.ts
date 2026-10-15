@@ -370,12 +370,6 @@ const AskParams = Type.Object({
 type AskParamsType = Static<typeof AskParams>;
 
 const RestParams = Type.Object({
-	title: Type.Optional(
-		Type.String({
-			description:
-				"本段会话的内容标题（几个词概括这段聊了什么，≤20字）。打盹后它会成为本段的归档会话名，让会话列表能认出每一段。建议必填。",
-		}),
-	),
 	phrase: Type.Optional(
 		Type.String({
 			description: "睡觉短语（分隔符文案），如「我先打个盹~」「出去转一圈」。省略则由 Host 从内置短语池随机挑选。",
@@ -455,7 +449,7 @@ export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}):
 		name: PIXIE_REST_NAME,
 		label: "Pixie rest",
 		description:
-			"结束当前会话段并打个盹（仅小精灵自己使用）。当话题收束、上下文变得臃肿、或用户说「新开一个话题」时调用：title 用几个词概括本段聊了什么（打盹后成为本段的归档会话名），phrase 填睡觉短语，handoff 写给下一段自己一句话交接。",
+			"结束当前会话段并打个盹（仅小精灵自己使用）。当话题收束、上下文变得臃肿、或用户说「新开一个话题」时调用：phrase 填睡觉短语，handoff 写给下一段自己一句话提示。本段会话名由 Host 处理，不需要你提供。",
 		promptSnippet: "End the current conversation segment and take a nap",
 		parameters: RestParams,
 		async execute(_toolCallId, params: RestParamsType) {
@@ -469,7 +463,6 @@ export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}):
 					method: "POST",
 					path: PIXIE_REST_PATH,
 					body: {
-						...(params.title !== undefined ? { title: params.title } : {}),
 						...(params.phrase !== undefined ? { phrase: params.phrase } : {}),
 						...(params.handoff !== undefined ? { handoff: params.handoff } : {}),
 					},
