@@ -1,7 +1,7 @@
 /**
  * pixie 环回 HTTP 契约测试：用 node:http 起本地 mock 环回服务，
- * 覆盖 dispatch 成功（queued 两种文案）/失败/超时/非 200、
- * report 成功/失败、dispatch-state 门控，以及请求构造。
+ * 覆盖 dispatch 成功（queued 两种文案）/失败/超时/非 200、sourceSessionId
+ * 透传、name 成功/失败/空名、report 成功/失败、dispatch-state 门控，以及请求构造。
  * 工具文本格式与原 pixie-tool.ts 逐字节对照。
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -12,12 +12,13 @@ import {
 	buildRequestHeaders,
 	serializeRequestBody,
 } from "../src/http-client.js";
-import { buildPixieDispatchTool, buildPixieReportTool, buildPixieSessionsTool } from "../src/pixie-tools.js";
+import { buildPixieDispatchTool, buildPixieNameTool, buildPixieReportTool, buildPixieSessionsTool } from "../src/pixie-tools.js";
 import { queryPixieDispatchArmed } from "../src/activation.js";
 import {
 	PIXIE_REPORT_SUCCESS_TEXT,
 	formatDispatchFailureText,
 	formatDispatchSuccessText,
+	formatNameSuccessText,
 	formatReportFailureText,
 } from "../src/protocol.js";
 
@@ -198,6 +199,24 @@ describe("pixie_dispatch contract", () => {
 			newSession: true,
 		});
 		await execute(dispatchTool(), { cwd: "D:/ws", task: "idle", taskName: "   ", sessionName: "" });
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ cwd: "D:/ws", task: "idle" });
+	});
+
+	it("请求体带上派发方会话自己的 sourceSessionId（Host 用它把回报送回正确会话）", async () => {
+		await execute(
+			dispatchTool(),
+			{ cwd: "D:/ws", task: "idle" },
+			{ sessionManager: { getSessionId: () => "pixie-src-1" } },
+		);
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({
+			cwd: "D:/ws",
+			task: "idle",
+			sourceSessionId: "pixie-src-1",
+		});
+	});
+
+	it("取不到派发方会话 id 时省略 sourceSessionId（Host 退回默认落点）", async () => {
+		await execute(dispatchTool(), { cwd: "D:/ws", task: "idle" }, {});
 		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ cwd: "D:/ws", task: "idle" });
 	});
 
@@ -448,6 +467,85 @@ describe("dispatch-state gating query", () => {
 	it("非法 JSON / 非 200 / 请求异常 → 未 armed，绝不抛出", async () => {
 		expect(await queryPixieDispatchArmed({ port: server.port, sessionId: "bad-json" })).toBe(false);
 		expect(await queryPixieDispatchArmed({ port: 1, sessionId: "armed-session" })).toBe(false);
+	});
+});
+
+// ── name 契约 ────────────────────────────────────────────────
+
+describe("pixie_name contract", () => {
+	let server: Awaited<ReturnType<typeof startMockServer>>;
+
+	beforeAll(async () => {
+		server = await startMockServer((_req, res, body) => {
+			const parsed = JSON.parse(body) as { name: string };
+			if (parsed.name === "boom") {
+				json(res, 200, { ok: false, error: "找不到要改名的会话段。" });
+				return;
+			}
+			if (parsed.name === "http500") {
+				json(res, 500, { error: "internal" });
+				return;
+			}
+			json(res, 200, { ok: true });
+		});
+	});
+
+	afterAll(async () => {
+		await server.close();
+	});
+
+	const nameTool = () => buildPixieNameTool({ getPort: () => server.port });
+
+	it("成功 → POST /api/pixie/name { name }（去首尾空白）+ 改名成功文案", async () => {
+		const out = await execute(nameTool(), { name: "  门店数据对账  " });
+		expect(out.isError).toBeUndefined();
+		expect(out.content[0]?.text).toBe(formatNameSuccessText("门店数据对账"));
+		expect(out.content[0]?.text).toBe("已把本段会话名设为「门店数据对账」。");
+		const last = server.requests.at(-1)!;
+		expect(last.method).toBe("POST");
+		expect(last.path).toBe("/api/pixie/name");
+		expect(JSON.parse(last.body)).toEqual({ name: "门店数据对账" });
+	});
+
+	it("请求体带上本会话 sessionId（用户可能在旧段里改名，Host 据此找对段）", async () => {
+		await execute(
+			nameTool(),
+			{ name: "门店数据对账" },
+			{ sessionManager: { getSessionId: () => "pixie-seg-7" } },
+		);
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({
+			name: "门店数据对账",
+			sessionId: "pixie-seg-7",
+		});
+	});
+
+	it("name 全空白 → isError（不发起请求）", async () => {
+		const before = server.requests.length;
+		const out = await execute(nameTool(), { name: "   " });
+		expect(out.isError).toBe(true);
+		expect(out.content[0]?.text).toBe("Error: name 不能为空。");
+		expect(server.requests.length).toBe(before);
+	});
+
+	it("{ok:false} → isError + Error: 前缀文案（Host 的中文说明原样透传）", async () => {
+		const out = await execute(nameTool(), { name: "boom" });
+		expect(out.isError).toBe(true);
+		expect(out.content[0]?.text).toBe("Error: 找不到要改名的会话段。");
+	});
+
+	it("非 200 → isError + 明确错误文本", async () => {
+		const out = await execute(nameTool(), { name: "http500" });
+		expect(out.isError).toBe(true);
+		expect(out.content[0]?.text).toBe("Error: 环回控制面返回非 200（500）：{\"error\":\"internal\"}");
+	});
+
+	it("端口缺失 → isError（不发起请求）", async () => {
+		const tool = buildPixieNameTool({ getPort: () => null });
+		const out = await execute(tool, { name: "x" });
+		expect(out.isError).toBe(true);
+		expect(out.content[0]?.text).toBe(
+			"Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。",
+		);
 	});
 });
 

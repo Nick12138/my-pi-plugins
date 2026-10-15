@@ -14,32 +14,33 @@ import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { pixieRequest, PIXIE_DISPATCH_TIMEOUT_MS, readPixiePort } from "./http-client.js";
+import { sessionIdFromCtx } from "./activation.js";
 import {
 	PIXIE_ASK_PATH,
 	PIXIE_DISPATCHES_PATH,
 	PIXIE_DISPATCH_PATH,
 	PIXIE_DISPATCH_STATE_PATH,
 	PIXIE_INTERJECT_PATH,
+	PIXIE_NAME_PATH,
 	PIXIE_REPORT_PATH,
-	PIXIE_REST_PATH,
 	PIXIE_RETRY_PATH,
 	PIXIE_SESSIONS_PATH,
 	PIXIE_STOP_PATH,
 	PIXIE_ASK_SUCCESS_TEXT,
 	PIXIE_REPORT_SUCCESS_TEXT,
-	PIXIE_REST_SUCCESS_TEXT,
 	formatAskFailureText,
 	formatDispatchFailureText,
 	formatDispatchSuccessText,
+	formatNameFailureText,
+	formatNameSuccessText,
 	formatReportFailureText,
-	formatRestFailureText,
 	formatSessionListText,
 	mapAskResponse,
 	mapDispatchListResponse,
 	mapDispatchResponse,
 	mapDispatchStateResponse,
+	mapNameResponse,
 	mapReportResponse,
-	mapRestResponse,
 	mapRetryResponse,
 	mapSessionListResponse,
 	mapStopResponse,
@@ -49,7 +50,7 @@ import { recallSegmentsText, sessionPathFromCtx } from "./segments.js";
 export const PIXIE_DISPATCH_NAME = "pixie_dispatch";
 export const PIXIE_REPORT_NAME = "pixie_report";
 export const PIXIE_ASK_NAME = "pixie_ask";
-export const PIXIE_REST_NAME = "pixie_rest";
+export const PIXIE_NAME_NAME = "pixie_name";
 export const PIXIE_STATUS_NAME = "pixie_dispatch_status";
 export const PIXIE_SESSIONS_NAME = "pixie_sessions";
 export const PIXIE_INTERJECT_NAME = "pixie_interject";
@@ -170,12 +171,20 @@ function normalizeName(value: string | undefined): string | undefined {
  * pixie_dispatch 工具壳：执行 = POST /api/pixie/dispatch。
  * 成功响应 { ok: true, dispatchId, sessionId, sessionPath, queued }；
  * 失败响应 { ok: false, error } → isError + 「委派失败：{error}」。
+ * 请求体带上派发方会话自己的 sourceSessionId（取自 ctx），Host 用它把
+ * 委派回报送回正确的会话——工作区里可能同时有多个小精灵会话，不能只投给「最新的那个」。
  */
 export function buildPixieDispatchTool(
-	options: { getPort?: PixiePortReader; timeoutMs?: number } = {},
+	options: {
+		getPort?: PixiePortReader;
+		timeoutMs?: number;
+		/** 派发方会话 id 读取器：默认从 execute 的 ctx 取，测试可注入。 */
+		getSessionId?: (ctx?: unknown) => string | null;
+	} = {},
 ): ToolDefinition {
 	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
 	const timeoutMs = options.timeoutMs ?? PIXIE_DISPATCH_TIMEOUT_MS;
+	const getSessionId = options.getSessionId ?? ((ctx?: unknown) => sessionIdFromCtx(ctx as never));
 	return defineTool({
 		name: PIXIE_DISPATCH_NAME,
 		label: "Pixie dispatch",
@@ -183,13 +192,14 @@ export function buildPixieDispatchTool(
 			"委派任务到某个工作区的正式会话执行（重活专用）。落点规则：默认复用该工作区里【小精灵自己创建的】会话，没有就新开一个；用户自己在 UI 里创建的会话不会被自动复用，除非用户在对话中明确给出该会话 id（那时用 sessionId 参数）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。每条新任务都用 taskName 起个短名，本次要新开会话时再用 sessionName 给会话起名——用户在界面上看的是这两个名字，不是完整提示词。",
 		promptSnippet: "Delegate a task to a workspace session and wait for its callback",
 		parameters: DispatchParams,
-		async execute(_toolCallId, params: DispatchParamsType) {
+		async execute(_toolCallId, params: DispatchParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
 				return errorResult(formatDispatchFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
 			const taskName = normalizeName(params.taskName);
 			const sessionName = normalizeName(params.sessionName);
+			const sourceSessionId = getSessionId(ctx);
 			const body: {
 				cwd: string;
 				task: string;
@@ -200,6 +210,7 @@ export function buildPixieDispatchTool(
 				batchId?: string | null;
 				model?: string | null;
 				thinkingLevel?: string | null;
+				sourceSessionId?: string;
 			} = {
 				cwd: params.cwd,
 				task: params.task,
@@ -210,6 +221,7 @@ export function buildPixieDispatchTool(
 				...(params.batchId !== undefined ? { batchId: params.batchId } : {}),
 				...(params.model !== undefined ? { model: params.model } : {}),
 				...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+				...(sourceSessionId ? { sourceSessionId } : {}),
 			};
 			try {
 				const result = await pixieRequest({
@@ -369,21 +381,14 @@ const AskParams = Type.Object({
 
 type AskParamsType = Static<typeof AskParams>;
 
-const RestParams = Type.Object({
-	phrase: Type.Optional(
-		Type.String({
-			description: "睡觉短语（分隔符文案），如「我先打个盹~」「出去转一圈」。省略则由 Host 从内置短语池随机挑选。",
-		}),
-	),
-	handoff: Type.Optional(
-		Type.String({
-			description:
-				"写给下一段自己的一句话提示（当前话题聊到哪了、有什么没说完）。只写「光看正文看不出来」的事：进行中的承诺、用户还没拍板的决定。上一段正文不会丢，新段会自动带上段索引和收尾，细节由 pixie_recall 回读，所以不必在这里复述历史。",
-		}),
-	),
+const NameParams = Type.Object({
+	name: Type.String({
+		description:
+			"本段会话的新名字（几个词，建议 ≤20 字，如「门店数据对账」）。Host 已按首条用户消息自动起过名；只有当你能给出比它更贴切的名字时才调用本工具改名。",
+	}),
 });
 
-type RestParamsType = Static<typeof RestParams>;
+type NameParamsType = Static<typeof NameParams>;
 
 /**
  * pixie_ask 工具壳：需要用户决策时调用。执行流与 report 一致——先按 armed
@@ -439,42 +444,51 @@ export function buildPixieAskTool(options: {
 }
 
 /**
- * pixie_rest 工具壳：仅在小精灵工作区会话激活（cwd 匹配，由扩展门控）。
- * 执行 = POST /api/pixie/rest；Host 在本回合结束（agent_settled）时收尾当前
- * 会话段，下一条用户消息自动开启新段。
+ * pixie_name 工具壳：给【当前会话段】改名（仅小精灵自己使用）。
+ * 执行 = POST /api/pixie/name，body { name }；Host 成功回 { ok: true }，
+ * 失败回 { ok: false, error }（中文说明）。会话名由 Host 落在 session_info。
  */
-export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}): ToolDefinition {
+export function buildPixieNameTool(
+	options: {
+		getPort?: PixiePortReader;
+		/** 本会话 id 读取器：默认从 execute 的 ctx 取，测试可注入。 */
+		getSessionId?: (ctx?: unknown) => string | null;
+	} = {},
+): ToolDefinition {
 	const getPort: PixiePortReader = options.getPort ?? readPixiePort;
+	const getSessionId = options.getSessionId ?? ((ctx?: unknown) => sessionIdFromCtx(ctx as never));
 	return defineTool({
-		name: PIXIE_REST_NAME,
-		label: "Pixie rest",
+		name: PIXIE_NAME_NAME,
+		label: "Pixie name",
 		description:
-			"结束当前会话段并打个盹（仅小精灵自己使用）。当话题收束、上下文变得臃肿、或用户说「新开一个话题」时调用：phrase 填睡觉短语，handoff 写给下一段自己一句话提示。本段会话名由 Host 处理，不需要你提供。",
-		promptSnippet: "End the current conversation segment and take a nap",
-		parameters: RestParams,
-		async execute(_toolCallId, params: RestParamsType) {
+			"修改当前会话段的名字（仅小精灵自己使用）。Host 在新段开始时已按首条用户消息自动起名；当你判断那个名字不够贴切、能起个更好的短名时调用本工具改名。不能改别的段的名称。",
+		promptSnippet: "Rename the current conversation segment",
+		parameters: NameParams,
+		async execute(_toolCallId, params: NameParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult(formatRestFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+				return errorResult(formatNameFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
+			const name = params.name?.trim() ?? "";
+			if (!name) {
+				return errorResult(formatNameFailureText("name 不能为空。"));
+			}
+			const sessionId = getSessionId(ctx);
 			try {
 				const result = await pixieRequest({
 					port,
 					method: "POST",
-					path: PIXIE_REST_PATH,
-					body: {
-						...(params.phrase !== undefined ? { phrase: params.phrase } : {}),
-						...(params.handoff !== undefined ? { handoff: params.handoff } : {}),
-					},
+					path: PIXIE_NAME_PATH,
+					body: { name, ...(sessionId ? { sessionId } : {}) },
 				});
-				const resolution = mapRestResponse(result);
+				const resolution = mapNameResponse(result);
 				if (!resolution.ok) {
-					return errorResult(formatRestFailureText(resolution.error));
+					return errorResult(formatNameFailureText(resolution.error));
 				}
-				return okResult(PIXIE_REST_SUCCESS_TEXT);
+				return okResult(formatNameSuccessText(name));
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				return errorResult(formatRestFailureText(message));
+				return errorResult(formatNameFailureText(message));
 			}
 		},
 	});
@@ -510,14 +524,14 @@ type RecallParamsType = Static<typeof RecallParams>;
 /**
  * pixie_recall 工具壳：回读小精灵工作区里历史会话段的正文（仅小精灵会话激活）。
  * 执行完全在插件侧——直接读 Pi 的会话目录 <sessionDir>/*.jsonl，不经过 Host 控制面。
- * 打盹只是换了活动会话文件，上一段正文一直在盘上；本工具负责把它按需取回来。
+ * 换段只是换了活动会话文件，上一段正文一直在盘上；本工具负责把它按需取回来。
  */
 export function buildPixieRecallTool(): ToolDefinition {
 	return defineTool({
 		name: PIXIE_RECALL_NAME,
 		label: "Pixie recall",
 		description:
-			"回读小精灵自己历史会话段的正文（仅小精灵使用）。每个会话段都存在本机 Pi 会话目录里，打盹不会删掉上一段。用法：mode=index 先看有哪些段；mode=tail 读某一段的收尾（segment 省略 = 上一段）；mode=search 带 query 在指定段里按关键词找原文。新段首轮系统已自动注入段索引与上一段收尾，只有需要更早的段或细节不够时才调用本工具。",
+			"回读小精灵自己历史会话段的正文（仅小精灵使用）。每个会话段都存在本机 Pi 会话目录里，换段不会删掉上一段。用法：mode=index 先看有哪些段；mode=tail 读某一段的收尾（segment 省略 = 上一段）；mode=search 带 query 在指定段里按关键词找原文。新段首轮系统已自动注入段索引与上一段收尾，只有需要更早的段或细节不够时才调用本工具。",
 		promptSnippet: "Read back the text of your previous conversation segments",
 		parameters: RecallParams,
 		async execute(_toolCallId, params: RecallParamsType, _signal, _onUpdate, ctx) {

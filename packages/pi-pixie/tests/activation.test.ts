@@ -5,7 +5,7 @@
  * - GET /api/pixie/dispatch-state 的 armed true/false 映射（node:http mock 环回）；
  * - 请求携带 sessionId 查询参数；
  * - 端口缺失 / 请求失败 / 超时 → 安全返回未 armed，绝不抛错；
- * - before_agent_start 门控：小精灵会话（env/cwd）→ dispatch/rest 激活；
+ * - before_agent_start 门控：小精灵会话（env/cwd）→ dispatch/name 等指挥台工具激活；
  *   普通会话 → report/ask 仅在 armed 时激活；
  * - 扩展入口注册全部工具（可见性交给 active-tools 门控）。
  */
@@ -25,7 +25,7 @@ import {
   PIXIE_INTERJECT_NAME,
   PIXIE_RECALL_NAME,
   PIXIE_REPORT_NAME,
-  PIXIE_REST_NAME,
+  PIXIE_NAME_NAME,
   PIXIE_RETRY_NAME,
   PIXIE_SESSIONS_NAME,
   PIXIE_STATUS_NAME,
@@ -329,7 +329,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_DISPATCH_NAME,
       PIXIE_REPORT_NAME,
       PIXIE_ASK_NAME,
-      PIXIE_REST_NAME,
+      PIXIE_NAME_NAME,
       PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
@@ -347,7 +347,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
-      PIXIE_REST_NAME,
+      PIXIE_NAME_NAME,
       PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
@@ -358,7 +358,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     await mock.emitBeforeAgentStart(ctxWithSession("pixie-resident"));
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
-      PIXIE_REST_NAME,
+      PIXIE_NAME_NAME,
       PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
@@ -377,7 +377,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     await mock.emitBeforeAgentStart(ctxWithSession("sess-x", "C:\\agent-test\\workspace\\pixie"));
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
-      PIXIE_REST_NAME,
+      PIXIE_NAME_NAME,
       PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,

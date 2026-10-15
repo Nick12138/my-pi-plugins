@@ -91,7 +91,7 @@ afterAll(() => {
 });
 
 describe("listSegments", () => {
-  it("按最近修改排序、排除当前会话文件、跳过空段与坏文件", () => {
+  it("按创建时间排序、排除当前会话文件、跳过空段与坏文件", () => {
     const dir = makeDir();
     writeSession(dir, { id: "old", created: "2026-10-14T09:00:00.000Z", modifiedSec: 1000, messages: [{ role: "user", text: "早上的事" }] });
     writeSession(dir, { id: "new", created: "2026-10-15T09:00:00.000Z", modifiedSec: 2000, messages: [{ role: "user", text: "中午的事" }] });
@@ -106,6 +106,31 @@ describe("listSegments", () => {
     expect(listed[0].messageCount).toBe(1);
     // 不传 currentFile 时本段也算历史。
     expect(listSegments({ sessionDir: dir }).map((segment) => segment.id)).toEqual(["cur", "new", "old"]);
+  });
+
+  it("修改时间不影响段序：创建更早但刚被写过的段仍排在创建更新的段之后", () => {
+    const dir = makeDir();
+    writeSession(dir, { id: "stale", created: "2026-10-12T09:00:00.000Z", modifiedSec: 9_999_999_999, messages: [{ role: "user", text: "旧段但刚被动过盘" }] });
+    writeSession(dir, { id: "fresh", created: "2026-10-15T09:00:00.000Z", modifiedSec: 1_000, messages: [{ role: "user", text: "新创建没人碰" }] });
+    const listed = listSegments({ sessionDir: dir });
+    expect(listed.map((segment) => segment.id)).toEqual(["fresh", "stale"]);
+  });
+
+  it("文件名缺时间戳时退回 mtime，不会把老而相关的段挤掉", () => {
+    const dir = makeDir();
+    // 无文件名时间戳：按 mtime 兜底参与预切片排序。
+    const legacy = join(dir, "legacy.jsonl");
+    writeFileSync(
+      legacy,
+      [
+        JSON.stringify({ type: "session", version: 3, id: "legacy", timestamp: "2026-10-13T09:00:00.000Z", cwd: dir }),
+        JSON.stringify({ type: "message", id: "legacy-m0", parentId: null, timestamp: "2026-10-13T09:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "老规矩" }] } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    writeSession(dir, { id: "recent", created: "2026-10-14T09:00:00.000Z", messages: [{ role: "user", text: "较新" }] });
+    const listed = listSegments({ sessionDir: dir });
+    expect(listed.map((segment) => segment.id)).toEqual(["recent", "legacy"]);
   });
 
   it("目录不存在或不可读时返回空数组", () => {

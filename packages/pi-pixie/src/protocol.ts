@@ -13,7 +13,7 @@ import type { PixieHttpResult } from "./http-client.js";
 export const PIXIE_DISPATCH_PATH = "/api/pixie/dispatch";
 export const PIXIE_REPORT_PATH = "/api/pixie/report";
 export const PIXIE_ASK_PATH = "/api/pixie/ask";
-export const PIXIE_REST_PATH = "/api/pixie/rest";
+export const PIXIE_NAME_PATH = "/api/pixie/name";
 export const PIXIE_INJECT_PATH = "/api/pixie/inject";
 export const PIXIE_DISPATCH_STATE_PATH = "/api/pixie/dispatch-state";
 export const PIXIE_INTERJECT_PATH = "/api/pixie/interject";
@@ -43,7 +43,7 @@ export type PixieDispatchResolution = PixieDispatchSuccess | PixieDispatchFailur
 export type PixieReportResolution = { ok: true } | { ok: false; error: string };
 
 export type PixieAskResolution = { ok: true } | { ok: false, error: string };
-export type PixieRestResolution = { ok: true } | { ok: false, error: string };
+export type PixieNameResolution = { ok: true } | { ok: false; error: string };
 
 /** pixie_stop 的回执动作。 */
 export type PixieStopAction = "aborted" | "already-stopped" | "cancelled";
@@ -219,8 +219,8 @@ export function mapAskResponse(result: PixieHttpResult): PixieAskResolution {
 	return mapReportResponse(result);
 }
 
-/** POST /api/pixie/rest 响应 → 工具结果（与 report 同构）。 */
-export function mapRestResponse(result: PixieHttpResult): PixieRestResolution {
+/** POST /api/pixie/name 响应 → 工具结果（与 report 同构）。 */
+export function mapNameResponse(result: PixieHttpResult): PixieNameResolution {
 	return mapReportResponse(result);
 }
 
@@ -433,11 +433,12 @@ export function formatAskFailureText(error: string): string {
 	return `Error: ${error}`;
 }
 
-/** pixie_rest 成功文本。 */
-export const PIXIE_REST_SUCCESS_TEXT =
-	"好的，本回合结束后小精灵会打个盹并开启新的会话段。请自然收尾当前回复。下一段会自动带上历史段索引与上一段收尾，需要更早的细节时用 pixie_recall 回读，不必在此复述记忆。";
+/** pixie_name 成功文本。 */
+export function formatNameSuccessText(name: string): string {
+	return `已把本段会话名设为「${name}」。`;
+}
 
-/** pixie_rest 失败文本。 */
-export function formatRestFailureText(error: string): string {
+/** pixie_name 失败文本。 */
+export function formatNameFailureText(error: string): string {
 	return `Error: ${error}`;
 }

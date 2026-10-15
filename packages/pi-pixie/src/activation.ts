@@ -2,8 +2,8 @@
  * pi-pixie 会话角色判定 + report/ask 激活门控扩展。
  *
  * 角色判定（v4）：每个 before_agent_start 按 ctx.cwd 与解析后的小精灵工作区
- * 路径比较（Windows 大小写归一），命中 → 小精灵会话（dispatch/rest 常驻
- * active）；否则 → 普通会话。PIABYSS_PIXIE_RESIDENT=1 保留为旧 Host 的兼容
+ * 路径比较（Windows 大小写归一），命中 → 小精灵会话（dispatch/name 等指挥台
+ * 工具常驻 active）；否则 → 普通会话。PIABYSS_PIXIE_RESIDENT=1 保留为旧 Host 的兼容
  * 判定（v3 环境变量窗口）。工作区路径来自 PIABYSS_PIXIE_WORKSPACE（支持
  * {agentDir} 占位符），留空 = <agentDir>/workspace/pixie。
  *
@@ -20,9 +20,9 @@ import {
 	PIXIE_ASK_NAME,
 	PIXIE_DISPATCH_NAME,
 	PIXIE_INTERJECT_NAME,
+	PIXIE_NAME_NAME,
 	PIXIE_RECALL_NAME,
 	PIXIE_REPORT_NAME,
-	PIXIE_REST_NAME,
 	PIXIE_RETRY_NAME,
 	PIXIE_SESSIONS_NAME,
 	PIXIE_STATUS_NAME,
@@ -109,9 +109,9 @@ export type SessionIdReader = (ctx?: ExtensionContext) => string | null;
 /**
  * 创建激活扩展工厂：每个会话实例在 before_agent_start 重新评估角色与门控。
  *
- * - 小精灵工作区会话（cwd 匹配或旧 env 标记）：dispatch/rest 钉回 active
+ * - 小精灵工作区会话（cwd 匹配或旧 env 标记）：dispatch/name 等指挥台工具钉回 active
  *   tools，report/ask 移出——委派工具从第一轮就可用。
- * - 普通会话：dispatch/rest 移出；armed → report/ask 进入 active tools，
+ * - 普通会话：指挥台工具移出；armed → report/ask 进入 active tools，
  *   否则剪除。门控查询失败/超时绝不抛出（不能让 agent 启动失败）。
  */
 export function createPixieReportActivationExtension(options: {
@@ -163,7 +163,7 @@ export function createPixieReportActivationExtension(options: {
 			}
 			const residentTools = [
 				PIXIE_DISPATCH_NAME,
-				PIXIE_REST_NAME,
+				PIXIE_NAME_NAME,
 				PIXIE_RECALL_NAME,
 				PIXIE_STATUS_NAME,
 				PIXIE_SESSIONS_NAME,

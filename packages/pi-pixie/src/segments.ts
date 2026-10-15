@@ -1,9 +1,13 @@
 /**
- * 会话段（打盹前后）的正文读取与文本装配。
+ * 会话段（换段前后）的正文读取与文本装配。
  *
- * 事实前提：Pi 把每个会话段存成 <sessionDir>/<ISO>_<uuid>.jsonl，打盹只是换了
+ * 事实前提：Pi 把每个会话段存成 <sessionDir>/<ISO>_<uuid>.jsonl，换段只是换了
  * 活动会话文件，上一段正文一直在盘上。这里不依赖 Host 的任何新端点：直接用
  * node:fs 读当前工作区会话目录里的兄弟会话。
+ *
+ * 段序口径：按【创建时间】新→旧（产品规则：创建时间最新的会话就是当前段）。
+ * 创建时间取会话 header 的 `timestamp`，缺失时退回文件名里的 ISO 时间戳，
+ * 两者都没有才用文件 mtime 兜底。
  *
  * 分工：
  * - listSegments()：目录里的历史段索引（新→旧，排除当前会话文件）。
@@ -291,13 +295,27 @@ function fileNameTimestamp(file: string): string {
 	return m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}Z` : "";
 }
 
+/** 文件名时间戳的毫秒值（预切片排序用；文件名不带 ISO 前缀时返回 null）。 */
+function fileNameTimestampMs(file: string): number | null {
+	const ms = Date.parse(fileNameTimestamp(file));
+	return Number.isFinite(ms) ? ms : null;
+}
+
+/** 段的创建时间毫秒值：header/文件名 ISO 优先，mtime 兜底。 */
+function segmentCreatedMs(segment: SegmentRecord): number {
+	const ms = Date.parse(segment.created);
+	return Number.isFinite(ms) ? ms : segment.modifiedMs;
+}
+
 function sameFile(a: string, b: string): boolean {
 	return pathKey(a) === pathKey(b);
 }
 
 /**
- * 列出目录里的历史段（新→旧）。`currentFile` 命中时排除自身；
+ * 列出目录里的历史段（按创建时间新→旧）。`currentFile` 命中时排除自身；
  * 只保留有可见消息的段——空的、坏掉的、以及正在写入的本段之外才算历史。
+ * 预切片按便宜的stat信息排序（文件名 ISO 优先、mtime 兜底），解析后再按
+ * header 的真实创建时间重排，保证老但相关的段不因 mtime 被提前丢弃。
  */
 export function listSegments(input: {
 	sessionDir: string;
@@ -312,7 +330,7 @@ export function listSegments(input: {
 		return [];
 	}
 	const current = input.currentFile ? resolve(input.currentFile) : null;
-	const limit = Math.max(1, input.maxSegments ?? DEFAULT_INDEX_SEGMENTS) * 3;
+	const max = Math.max(1, input.maxSegments ?? DEFAULT_INDEX_SEGMENTS);
 	const candidates = files
 		.map((name) => join(dir, name))
 		.filter((file) => (current ? !sameFile(file, current) : true))
@@ -323,18 +341,19 @@ export function listSegments(input: {
 			} catch {
 				modifiedMs = 0;
 			}
-			return { file, modifiedMs };
+			return { file, modifiedMs, createdMs: fileNameTimestampMs(file) ?? modifiedMs };
 		})
-		.sort((a, b) => b.modifiedMs - a.modifiedMs || b.file.localeCompare(a.file))
-		.slice(0, limit)
+		.sort((a, b) => b.createdMs - a.createdMs || b.file.localeCompare(a.file))
+		.slice(0, max * 3)
 		.map(({ file, modifiedMs }) => parseSegment(file, modifiedMs))
-		.filter((segment) => segment.messageCount > 0);
-	return candidates.slice(0, Math.max(1, input.maxSegments ?? DEFAULT_INDEX_SEGMENTS));
+		.filter((segment) => segment.messageCount > 0)
+		.sort((a, b) => segmentCreatedMs(b) - segmentCreatedMs(a) || a.file.localeCompare(b.file));
+	return candidates.slice(0, max);
 }
 
 /**
  * 上一段指针 + 与之对齐的历史清单：优先 header.parentSession（Pi 原生 newSession
- * 会写），退回按最近修改排序的第一个历史段。返回的 history 保证「上一段」就在
+ * 会写），退回按创建时间最新的那个历史段。返回的 history 保证「上一段」就在
  * index 0——卡片里的序号、pixie_recall 省略 segment 时的默认落点，三者必须一致。
  */
 export function previousSegment(input: {
