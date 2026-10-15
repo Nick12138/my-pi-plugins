@@ -1,6 +1,6 @@
 {
   "name": "pi-pixie",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "Pixie delegation & command console plugin (dispatch/report/ask/rest/recall/status/interject/stop/retry): talks to the PiAbyss Host loopback control plane; the delegation engine stays Host-side. Post-nap memory is plugin-side: the first turn of a new segment gets an index of past segments plus the previous segment's tail, read straight from Pi's session directory, and pixie_recall reads older segments on demand. Dispatch carries optional taskName/sessionName short names for the host's workspace → session → task delegation list.",
   "keywords": [
     "pi-package",
