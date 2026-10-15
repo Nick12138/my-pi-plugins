@@ -64,6 +64,18 @@ const DispatchParams = Type.Object({
 		description:
 			"委派提示词：包含任务目标、必要的上下文、完成后的回调要求（调用 pixie_report 报告「已完成 + 结果摘要」；需要用户决策时调用 pixie_ask）。若任务源自某条备忘录，还应要求被委派 Agent 完成后用 piabyss_memo complete 回填。",
 	}),
+	taskName: Type.Optional(
+		Type.String({
+			description:
+				"任务名（几个词，≤20 字，如「门店数据对账」）：前端的委派列表只显示它 + 状态，不显示完整提示词。每派一条新任务都传——复用既有会话也算一条新任务。往进行中的任务追加消息不算新任务，用 pixie_interject（不带任务名）。省略则由 Host 截取任务前缀兜底。",
+		}),
+	),
+	sessionName: Type.Optional(
+		Type.String({
+			description:
+				"会话名（几个词，≤20 字，如「门店数据整理」）：【本次会新开会话】时才传，成为新会话的名字兼前端委派列表的分组标题——即填了 newSession: true，或该工作区里还没有小精灵自己创建的会话。复用既有会话（包括用 sessionId 指定时）不要传，会话沿用原名。不确定会不会新开就照常传：Host 只在真正新建会话时采用它，复用既有会话时忽略。省略且确实新开会话时由 Host 截取任务前缀兜底（不会留下「新会话」这种无名字）。",
+		}),
+	),
 	sessionId: Type.Optional(
 		Type.String({
 			description:
@@ -141,6 +153,12 @@ function okResult(text: string): { content: [{ type: "text"; text: string }]; de
 /** 端口读取器：默认读环境变量（延迟读取，便于测试替换）。 */
 export type PixiePortReader = () => number | null;
 
+/** 名称类参数只保留非空值：空串会让 Host 的「截取任务前缀」兜底失效。 */
+function normalizeName(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed ? trimmed : undefined;
+}
+
 /**
  * pixie_dispatch 工具壳：执行 = POST /api/pixie/dispatch。
  * 成功响应 { ok: true, dispatchId, sessionId, sessionPath, queued }；
@@ -155,7 +173,7 @@ export function buildPixieDispatchTool(
 		name: PIXIE_DISPATCH_NAME,
 		label: "Pixie dispatch",
 		description:
-			"委派任务到某个工作区的正式会话执行（重活专用）。落点规则：默认复用该工作区里【小精灵自己创建的】会话，没有就新开一个；用户自己在 UI 里创建的会话不会被自动复用，除非用户在对话中明确给出该会话 id（那时用 sessionId 参数）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。",
+			"委派任务到某个工作区的正式会话执行（重活专用）。落点规则：默认复用该工作区里【小精灵自己创建的】会话，没有就新开一个；用户自己在 UI 里创建的会话不会被自动复用，除非用户在对话中明确给出该会话 id（那时用 sessionId 参数）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。每条新任务都用 taskName 起个短名，本次要新开会话时再用 sessionName 给会话起名——用户在界面上看的是这两个名字，不是完整提示词。",
 		promptSnippet: "Delegate a task to a workspace session and wait for its callback",
 		parameters: DispatchParams,
 		async execute(_toolCallId, params: DispatchParamsType) {
@@ -163,9 +181,13 @@ export function buildPixieDispatchTool(
 			if (port === null) {
 				return errorResult(formatDispatchFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
+			const taskName = normalizeName(params.taskName);
+			const sessionName = normalizeName(params.sessionName);
 			const body: {
 				cwd: string;
 				task: string;
+				taskName?: string;
+				sessionName?: string;
 				newSession?: boolean;
 				sessionId?: string | null;
 				batchId?: string | null;
@@ -174,6 +196,8 @@ export function buildPixieDispatchTool(
 			} = {
 				cwd: params.cwd,
 				task: params.task,
+				...(taskName !== undefined ? { taskName } : {}),
+				...(sessionName !== undefined ? { sessionName } : {}),
 				...(params.newSession !== undefined ? { newSession: params.newSession } : {}),
 				...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
 				...(params.batchId !== undefined ? { batchId: params.batchId } : {}),

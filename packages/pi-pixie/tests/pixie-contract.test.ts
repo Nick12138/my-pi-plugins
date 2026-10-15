@@ -182,6 +182,25 @@ describe("pixie_dispatch contract", () => {
 		expect(lastOmitted.method).toBe("POST");
 	});
 
+	it("taskName / sessionName 透传：只在非空时进请求体（空串 = 未传，交 Host 兜底）", async () => {
+		await execute(dispatchTool(), {
+			cwd: "D:/ws",
+			task: "idle",
+			newSession: true,
+			taskName: " 对账任务 ",
+			sessionName: "门店数据整理",
+		});
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({
+			cwd: "D:/ws",
+			task: "idle",
+			taskName: "对账任务",
+			sessionName: "门店数据整理",
+			newSession: true,
+		});
+		await execute(dispatchTool(), { cwd: "D:/ws", task: "idle", taskName: "   ", sessionName: "" });
+		expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ cwd: "D:/ws", task: "idle" });
+	});
+
 	it("{ok:false} 失败 → isError + 委派失败文案", async () => {
 		const out = await execute(dispatchTool(), { cwd: "D:/ws", task: "boom" });
 		expect(out.isError).toBe(true);
