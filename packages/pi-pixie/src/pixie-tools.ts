@@ -44,6 +44,7 @@ import {
 	mapSessionListResponse,
 	mapStopResponse,
 } from "./protocol.js";
+import { recallSegmentsText, sessionPathFromCtx } from "./segments.js";
 
 export const PIXIE_DISPATCH_NAME = "pixie_dispatch";
 export const PIXIE_REPORT_NAME = "pixie_report";
@@ -54,6 +55,12 @@ export const PIXIE_SESSIONS_NAME = "pixie_sessions";
 export const PIXIE_INTERJECT_NAME = "pixie_interject";
 export const PIXIE_STOP_NAME = "pixie_stop";
 export const PIXIE_RETRY_NAME = "pixie_retry";
+export const PIXIE_RECALL_NAME = "pixie_recall";
+
+/** pixie_recall 走本地会话目录，不经环回控制面，失败文案单独一套。 */
+function formatRecallFailureText(error: string): string {
+	return `Error: ${error}`;
+}
 
 const DispatchParams = Type.Object({
 	cwd: Type.String({
@@ -376,7 +383,8 @@ const RestParams = Type.Object({
 	),
 	handoff: Type.Optional(
 		Type.String({
-			description: "写给下一段自己的一句话交接摘要（当前话题聊到哪了、有什么没说完）。建议填写，省略则为空。",
+			description:
+				"写给下一段自己的一句话提示（当前话题聊到哪了、有什么没说完）。只写「光看正文看不出来」的事：进行中的承诺、用户还没拍板的决定。上一段正文不会丢，新段会自动带上段索引和收尾，细节由 pixie_recall 回读，所以不必在这里复述历史。",
 		}),
 	),
 });
@@ -475,6 +483,69 @@ export function buildPixieRestTool(options: { getPort?: PixiePortReader } = {}):
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResult(formatRestFailureText(message));
 			}
+		},
+	});
+}
+
+const RecallParams = Type.Object({
+	mode: Type.Optional(
+		Type.String({
+			description:
+				"index = 只列历史段清单；tail = 读某一段的收尾（默认）；search = 按关键词在某一段里找原文。",
+		}),
+	),
+	segment: Type.Optional(
+		Type.String({
+			description:
+				"读哪一段：省略或 \"0\" = 上一段，\"1\"/\"2\" = 往前第 N 段（序号取自首轮注入的段索引）；也可以填段名关键词或会话 id 前缀。",
+		}),
+	),
+	query: Type.Optional(
+		Type.String({
+			description: "mode=search 的关键词（不区分大小写的子串匹配，命中处会带前后一条作上下文）。",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({
+			description: "条数上限：tail 默认 12 条，search 默认 8 处命中。",
+		}),
+	),
+});
+
+type RecallParamsType = Static<typeof RecallParams>;
+
+/**
+ * pixie_recall 工具壳：回读小精灵工作区里历史会话段的正文（仅小精灵会话激活）。
+ * 执行完全在插件侧——直接读 Pi 的会话目录 <sessionDir>/*.jsonl，不经过 Host 控制面。
+ * 打盹只是换了活动会话文件，上一段正文一直在盘上；本工具负责把它按需取回来。
+ */
+export function buildPixieRecallTool(): ToolDefinition {
+	return defineTool({
+		name: PIXIE_RECALL_NAME,
+		label: "Pixie recall",
+		description:
+			"回读小精灵自己历史会话段的正文（仅小精灵使用）。每个会话段都存在本机 Pi 会话目录里，打盹不会删掉上一段。用法：mode=index 先看有哪些段；mode=tail 读某一段的收尾（segment 省略 = 上一段）；mode=search 带 query 在指定段里按关键词找原文。新段首轮系统已自动注入段索引与上一段收尾，只有需要更早的段或细节不够时才调用本工具。",
+		promptSnippet: "Read back the text of your previous conversation segments",
+		parameters: RecallParams,
+		async execute(_toolCallId, params: RecallParamsType, _signal, _onUpdate, ctx) {
+			const sessionDir = sessionPathFromCtx(ctx, "getSessionDir");
+			if (!sessionDir) {
+				return errorResult(formatRecallFailureText("拿不到当前会话目录（ctx.sessionManager.getSessionDir 不可用）。"));
+			}
+			const mode = params.mode === undefined || params.mode === "" ? "tail" : params.mode;
+			if (mode !== "index" && mode !== "tail" && mode !== "search") {
+				return errorResult(formatRecallFailureText("mode 只能是 index、tail 或 search。"));
+			}
+			const result = recallSegmentsText({
+				sessionDir,
+				currentFile: sessionPathFromCtx(ctx, "getSessionFile"),
+				mode,
+				segment: params.segment,
+				query: params.query,
+				limit: params.limit,
+			});
+			if (!result.ok) return errorResult(formatRecallFailureText(result.error));
+			return okResult(result.text);
 		},
 	});
 }

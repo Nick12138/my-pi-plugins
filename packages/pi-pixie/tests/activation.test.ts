@@ -23,6 +23,7 @@ import {
   PIXIE_ASK_NAME,
   PIXIE_DISPATCH_NAME,
   PIXIE_INTERJECT_NAME,
+  PIXIE_RECALL_NAME,
   PIXIE_REPORT_NAME,
   PIXIE_REST_NAME,
   PIXIE_RETRY_NAME,
@@ -329,6 +330,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
       PIXIE_REPORT_NAME,
       PIXIE_ASK_NAME,
       PIXIE_REST_NAME,
+      PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
@@ -346,6 +348,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
+      PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
@@ -356,6 +359,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
+      PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,
@@ -374,6 +378,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
     expect(mock.active).toEqual([
       PIXIE_DISPATCH_NAME,
       PIXIE_REST_NAME,
+      PIXIE_RECALL_NAME,
       PIXIE_STATUS_NAME,
       PIXIE_SESSIONS_NAME,
       PIXIE_INTERJECT_NAME,

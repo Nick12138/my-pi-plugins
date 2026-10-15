@@ -262,9 +262,9 @@
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "小精灵工作区化工具壳 v0.5：pixie_dispatch（委派，支持批次/排队/会话归属，并可带短名 taskName/sessionName）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。配置项含每日自动打盹开关、失联超时与轮数上限。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
+      "description": "小精灵工作区化工具壳 v0.6：pixie_dispatch（委派，支持批次/排队/会话归属，并可带短名 taskName/sessionName）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_rest（打盹换段）/ pixie_recall（回读历史会话段正文）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。打盹后的记忆在插件侧：新段首轮自动注入「历史段索引 + 上一段收尾」（直接读 Pi 会话目录里的 jsonl，不经 Host），更早的段用 pixie_recall 按需回读，handoff 只用于写正文里看不出来的口头承诺。配置项含每日自动打盹开关、失联超时与轮数上限。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
       "icon": "🧚",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "author": "Nick12138",
       "tags": [
         "pixie",

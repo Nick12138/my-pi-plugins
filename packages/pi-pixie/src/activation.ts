@@ -20,6 +20,7 @@ import {
 	PIXIE_ASK_NAME,
 	PIXIE_DISPATCH_NAME,
 	PIXIE_INTERJECT_NAME,
+	PIXIE_RECALL_NAME,
 	PIXIE_REPORT_NAME,
 	PIXIE_REST_NAME,
 	PIXIE_RETRY_NAME,
@@ -59,6 +60,15 @@ export function sessionIdFromCtx(ctx?: ExtensionContext): string | null {
 		return ctx?.sessionManager?.getSessionId?.() ?? null;
 	} catch {
 		return null;
+	}
+}
+
+/** 本会话是否为常驻小精灵会话（工作区 cwd 匹配，或旧 Host 的 env 标记）。 */
+export function isPixieResidentSession(ctx?: ExtensionContext): boolean {
+	try {
+		return isPixieWorkspaceCwd(ctx?.cwd) || process.env.PIABYSS_PIXIE_RESIDENT === "1";
+	} catch {
+		return false;
 	}
 }
 
@@ -113,14 +123,7 @@ export function createPixieReportActivationExtension(options: {
 } = {}): (pi: ExtensionAPI) => void {
 	const getPort = options.getPort ?? readPixiePort;
 	const getSessionId: SessionIdReader = options.getSessionId ?? sessionIdFromCtx;
-	const isResident =
-		options.isResident ?? ((ctx?: ExtensionContext) => {
-			try {
-				return isPixieWorkspaceCwd(ctx?.cwd) || process.env.PIABYSS_PIXIE_RESIDENT === "1";
-			} catch {
-				return false;
-			}
-		});
+	const isResident = options.isResident ?? isPixieResidentSession;
 	const failureBackoffMs = options.failureBackoffMs ?? 30_000;
 	let lastFailureAt = Number.NEGATIVE_INFINITY;
 	return (pi: ExtensionAPI): void => {
@@ -161,6 +164,7 @@ export function createPixieReportActivationExtension(options: {
 			const residentTools = [
 				PIXIE_DISPATCH_NAME,
 				PIXIE_REST_NAME,
+				PIXIE_RECALL_NAME,
 				PIXIE_STATUS_NAME,
 				PIXIE_SESSIONS_NAME,
 				PIXIE_INTERJECT_NAME,

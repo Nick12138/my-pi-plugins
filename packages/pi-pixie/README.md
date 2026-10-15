@@ -10,7 +10,8 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
   **落点规则（v4.3 会话归属）**：默认只复用**小精灵自己创建的**会话（没有就自动新开一个）；用户自己在 UI 里创建的会话**不会被自动复用**——除非用户在对话中明确给出该会话 id，此时用 `sessionId` 参数指定（找不到会直接报错，不会改落到别的会话）。`newSession: true` 强制新开。受理回执会写明落点是「复用了小精灵自己的会话」还是「新开了干净会话」。
   **命名（v0.5）**：每条新任务带 `taskName`（短名），本次要新开会话时再带 `sessionName`（新会话名）——前端的委派列表按工作区分组显示这两个名字 + 状态，不再显示完整提示词。
 - **pixie_sessions**（小精灵会话专用）：读会话缓存（`GET /api/pixie/sessions`），列出小精灵自己创建的会话（可自动复用）与用户会话（仅显式给出 id 时可委托），含所属工作区、会话简介与最近结果。
-- 其余指挥台工具：`pixie_report`（被委派会话回调）/ `pixie_ask`（询问用户）/ `pixie_rest`（打盹换段）/ `pixie_dispatch_status`（查岗）/ `pixie_interject`（插话）/ `pixie_stop`（叫停）/ `pixie_retry`（续跑或重派）。
+- 其余指挥台工具：`pixie_report`（被委派会话回调）/ `pixie_ask`（询问用户）/ `pixie_rest`（打盹换段）/ `pixie_recall`（回读历史会话段正文）/ `pixie_dispatch_status`（查岗）/ `pixie_interject`（插话）/ `pixie_stop`（叫停）/ `pixie_retry`（续跑或重派）。
+- **打盹后的记忆（v0.6，插件侧）**：换段只换「当前活动会话文件」，上一段的正文一直在本机 Pi 会话目录里。新段的第一条用户消息之前，插件直接读会话目录注入一张**交接卡片**：历史段索引（一段一行：段名 · 时间 · 条数 · 序号）+ 上一段的收尾若干条；更早或更细的内容用 `pixie_recall` 按需回读。**这条路完全不经过 Host**，只依赖 Pi 的原生会话存储（见下节）。`pixie_rest` 的 `handoff` 因此退回它该干的活：只写正文里看不出来的口头承诺与未拍板的决定，不再承担「记忆」本身。
 - **每日自动打盹**（Host 侧行为，插件设置里只有一个开关）：新的一天自动换一个干净会话段，但**不按钟点**判定——以上次活动跨过本地日界、且静默达到阈值（默认 3h，随历史静默间隔上抬但不超过 12h）为准；封段会带一份规则拼出的交接摘要（上段尾巴 + 未回音委派 + 备忘录未完成）。Host 重启后由"今天第一条消息之前"的懒兜底判定补偿。阈值内置不开放调整：自适应已经按用户作息在调它。
 - **pixie_report**（注册在每个非小精灵会话上，但默认保持休眠）：被委派的任务会话在完成任务后回调。参数与原实现一致 `{ result, success? }`——dispatchId 对模型透明，插件先查 dispatch-state 端点按当前会话解析出 dispatchId，再 POST `{ dispatchId, summary, success }`。
 - 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：PiAbyss Host 注入的代理设置会拦截环回请求），单请求超时默认 3 秒；`POST /api/pixie/dispatch` 单独放宽到 **15 秒**（受理要先打开目标工作区的后台图，实测 0.9–3.3 秒，3 秒预算会让已受理的委派被误报为失败并诱发重复派单）。
@@ -20,6 +21,15 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
 - `pixie_dispatch`：Host 在常驻小精灵会话注入环境变量 `PIABYSS_PIXIE_RESIDENT=1`，扩展入口仅在该会话注册此工具；普通会话完全不注册、不可见。
 - `pixie_report`：注册在每个非小精灵会话上，但由激活扩展保持在 active tools 之外——扩展在每个 `before_agent_start` 调 `GET /api/pixie/dispatch-state?sessionId=<当前会话id>`，**仅当响应为 `{ armed: true }` 时才把工具加入 active tools**，否则剪除。因此普通工作区会话永远看不到该工具，工作区 agent 无法在无委派的情况下调用它。
 - 门控查询的任何失败（端口缺失/非法、连接失败、3 秒超时、非 200、响应体不合法）一律**保守地视为未 armed**，且绝不抛错——不会让 agent 启动失败。armed 状态每轮重新评估：委派注入时工具加入，委派结束后工具重新剪除。查询**失败后有 30 秒退避**（退避期内不再重复查询，避免 Host 挂死时每轮阻塞 3 秒）；Host 健康时仍每轮实时评估。
+
+## 会话段记忆（v0.6）：读盘不读 Host
+
+- **数据来源**：`ctx.sessionManager.getSessionDir()` 目录下的 `*.jsonl`（Pi 按 cwd 分目录存会话，每段一个文件）。当前段用 `getSessionFile()` 排除自己。
+- **上一段判定**：优先当前会话 header 的 `parentSession`；没有则取按修改时间最近的其它段。两者都拿不到就不注入卡片。序号对齐：卡片里标为 `0` 的那一段，就是 `pixie_recall` 省略 `segment` 时读到的那一段。
+- **注入时机（幂等）**：仅当①小精灵常驻会话（cwd 匹配）②会话条目里既没有用户消息、也没有本插件的卡片（`customType` 以 `pixie` 开头）时，才在 `before_agent_start` 返回 `message`。用会话条目本身判定而不是进程内状态，所以 Host 重启、扩展实例重建都不会重复灌卡片或灌错轮。
+- **渲染口径**：只取 user / assistant 文本（assistant 的工具调用折叠成 `〔调用 x〕`），跳过 toolResult 与压缩/分支条目；过滤本插件注入的旧卡片，否则每段都会复述上一段看到的卡片。
+- **边界**：单段最多读 4MB（超出只读尾部并在输出里标注）；单次输出 ≤ 6000 字符；索引默认 8 段。判定或读盘的任何失败一律降级为「不注入」或可读错误，绝不抛错。
+- **对 Host 的要求**（不新增端点）：① 换段沿用 Pi 原生会话存储，新段落在**同一 sessionDir**（同一 cwd）；② 新段 header 带 `parentSession`（`sessionManager.newSession({ parentSession })` 本来就会写），缺了也能工作，只是「上一段」退回按修改时间判定。若 Host 改为自维护会话文本而不写 Pi 的 jsonl，本节的回读会退化成「没有历史段」，那时才需要 Host 提供段正文端点。
 
 ## 环回 HTTP API 契约
 
@@ -116,4 +126,4 @@ Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，共 3 个端点�
 npx vitest run packages/pi-pixie
 ```
 
-测试用 `node:http` 在 `127.0.0.1` 随机端口起 mock 环回服务，覆盖成功/失败/排队文案的逐字节对照、超时与非 200 映射、armed 门控与扩展入口注册语义。
+测试用 `node:http` 在 `127.0.0.1` 随机端口起 mock 环回服务，覆盖成功/失败/排队文案的逐字节对照、超时与非 200 映射、armed 门控与扩展入口注册语义；段记忆用例（`tests/segments.test.ts`、`tests/segment-memory.test.ts`）在临时目录里合成 Pi 会话 jsonl，覆盖排序与排除、`parentSession` 与 recall 默认落点对齐、卡片幂等、截断与读盘降级。

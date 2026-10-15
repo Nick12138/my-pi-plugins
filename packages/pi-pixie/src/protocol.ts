@@ -435,7 +435,7 @@ export function formatAskFailureText(error: string): string {
 
 /** pixie_rest 成功文本。 */
 export const PIXIE_REST_SUCCESS_TEXT =
-	"好的，本回合结束后小精灵会打个盹并开启新的会话段。请自然收尾当前回复。";
+	"好的，本回合结束后小精灵会打个盹并开启新的会话段。请自然收尾当前回复。下一段会自动带上历史段索引与上一段收尾，需要更早的细节时用 pixie_recall 回读，不必在此复述记忆。";
 
 /** pixie_rest 失败文本。 */
 export function formatRestFailureText(error: string): string {
