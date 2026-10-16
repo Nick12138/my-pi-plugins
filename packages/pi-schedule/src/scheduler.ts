@@ -12,11 +12,14 @@ import { dirname } from "node:path";
 import {
 	appendLedger,
 	ensureRoot,
+	getJob,
+	listAllRuns,
 	listJobs,
 	listRuns,
 	patchJobsWith,
 	paths,
 	tryAcquireRunLock,
+	writeRun,
 } from "./store.ts";
 import { runJob } from "./runner.ts";
 import { advanceNextRunAt, shouldFire, systemTimezone } from "./schedule.ts";
@@ -39,6 +42,21 @@ export interface FireOptions {
 	replyText?: string | null;
 	permissionOverride?: Job["permission"];
 	timeoutMsOverride?: number;
+}
+
+/** 每次扫描最多检查多少条最近的 run 记录找僵尸（终态 once-and-for-all，不必全量重扫）。 */
+const ZOMBIE_SWEEP_LIMIT = 100;
+
+/**
+ * 一条 `running` 记录最多还能被认为是活的多久。
+ *
+ * 判据来自执行器自己的口径：会话型到 `timeoutMs` 会被 abort、命令型到 `timeoutMs` 会被
+ * 杀进程树，所以「开始时间 + timeoutMs + 宽限」之后仍是 `running` 的记录，在任何进程里
+ * 都不可能是真在跑——那是宿主被强杀/崩溃留下的僵尸。宽限期同时兜住「另一个宿主进程
+ * 共用同一数据目录、正在跑」这种情况，所以据此收口不会误伤活着的轮次。
+ */
+export function runningBoundMs(timeoutMs: number | undefined): number {
+	return Math.max(60_000, (timeoutMs ?? DEFAULTS.timeoutMs) + 5 * 60_000);
 }
 
 export class Scheduler {
@@ -134,6 +152,10 @@ export class Scheduler {
 			const now = new Date();
 			const staleIds: string[] = [];
 
+			// 先收僵尸再决策：`advanceStaleJobs` 把「有未超宽限的 running 记录」当作
+			// 「有人在跑」，一条永远不会变的僵尸记录会把这条任务永久钉死。
+			this.settleZombieRuns(now);
+
 			for (const job of jobList) {
 				// per-job 兜底：形状校验之外的意外脏数据也不允许拖垮整个扫描
 				try {
@@ -152,6 +174,36 @@ export class Scheduler {
 	}
 
 	/** 单个任务的扫描逻辑（由 tick 逐个调用，异常不影响其他任务）。 */
+	/**
+	 * 把超出宽限仍是 `running` 的记录收口成 `timeout`。
+	 *
+	 * 只写 run 记录 + 台账，**不动任务的 runCount / nextRunAt**：那些是 `afterRun` 的账，
+	 * 在这里补一次就会和正常终态重复计数；任务侧交给下一次扫描按既定策略推进。
+	 */
+	private settleZombieRuns(now: Date): void {
+		for (const record of listAllRuns(ZOMBIE_SWEEP_LIMIT)) {
+			if (record.status !== "running") continue;
+			// 本进程正在跑的那一轮绝不碰（它可能正当然地超过某个默认值）。
+			if (this.activeRuns.has(record.jobId)) continue;
+			const startedMs = Date.parse(record.startedAt);
+			if (!Number.isFinite(startedMs)) continue;
+			const bound = runningBoundMs(getJob(record.jobId)?.timeoutMs);
+			if (now.getTime() - startedMs < bound) continue;
+			record.status = "timeout";
+			record.finishedAt = now.toISOString();
+			record.error = `执行未完成（超过 ${Math.round(bound / 1000)}s 未回写终态）：宿主可能在执行中途退出`;
+			writeRun(record);
+			appendLedger({
+				at: now.toISOString(),
+				event: "error",
+				jobId: record.jobId,
+				jobName: record.jobName,
+				runId: record.runId,
+				detail: "zombie settled: running 记录超宽限未回写终态，按超时收口",
+			});
+		}
+	}
+
 	private scanJob(job: Job, now: Date, staleIds: string[]): void {
 		if (!job.enabled || job.terminated) return;
 		if (job.trigger.type === "manual") return;
