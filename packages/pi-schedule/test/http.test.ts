@@ -280,3 +280,42 @@ test("加固：单飞冲突返回 409（不是 500）", async () => {
 	release?.();
 	await call("DELETE", `/jobs/${id}`);
 });
+
+test("POST /runs/:runId/abort：运行中可叫停，已终态时 409", async () => {
+	const created = await call("POST", "/jobs", {
+		name: "长跑命令",
+		command: `node -e "setTimeout(function(){},30000)"`,
+		cwd: CWD,
+		trigger: { type: "manual" },
+	});
+	const id = created.data.job.id;
+	// run_now 是长请求：不等它返回，先去中止这一轮
+	const pending = call("POST", `/jobs/${id}/run_now`);
+	let runId = "";
+	for (let i = 0; i < 200 && !runId; i += 1) {
+		const runs = await call("GET", `/jobs/${id}/runs`);
+		runId = runs.data?.runs?.[0]?.runId ?? "";
+		if (!runId) await new Promise((r) => setTimeout(r, 10));
+	}
+	assert.ok(runId, "应已落一条 running 记录");
+
+	const aborted = await call("POST", `/runs/${runId}/abort`);
+	assert.equal(aborted.status, 200, `运行中应接受中止，实际 ${aborted.status}`);
+	const done = await pending;
+	assert.equal(done.data.run.status, "aborted", "长请求应带回 aborted 终态");
+	assert.ok(Array.isArray(done.data.run.tools), "摘要要带实际生效的工具白名单");
+
+	// 同一 run 再中止：已经不在执行中，必须 409 而不是假装成功
+	const again = await call("POST", `/runs/${runId}/abort`);
+	assert.equal(again.status, 409);
+
+	// 未知 runId 走 404（run 记录都不存在）
+	const ghost = await call("POST", "/runs/deadbeef/abort");
+	assert.equal(ghost.status, 404);
+
+	// 免 token 中止不被允许：控制面写操作一律要鉴权
+	const noToken = await fetch(`${base}/runs/${runId}/abort`, { method: "POST" });
+	assert.equal(noToken.status, 401);
+
+	await call("DELETE", `/jobs/${id}`);
+});

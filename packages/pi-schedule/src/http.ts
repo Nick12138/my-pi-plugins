@@ -10,6 +10,7 @@
 import * as http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { abortRun } from "./runner.ts";
 import { createJob, deleteJob, describeJob, setEnabled, updateJob, type JobInput, type JobPatch } from "./jobs.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { assertPermissionTier } from "./permissions.ts";
@@ -462,6 +463,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 		if (req.method === "GET" && seg[2] === "transcript") {
 			const entries = record.sessionPath ? readSessionTranscript(record.sessionPath) : [];
 			json(res, 200, { runId, sessionPath: record.sessionPath, entries });
+			return;
+		}
+		// POST /api/runs/:runId/abort —— 叫停这一轮（会话型 session.abort()，命令型杀进程树）
+		// 立即返回不等终态：runner 落 aborted 之后由 onStatusChange 与 listRuns 反映。
+		// 语义只中止当前这一轮，任务本身保留、下个节拍照常触发；aborted 不消耗投递配额。
+		if (req.method === "POST" && seg[2] === "abort") {
+			if (!abortRun(runId)) {
+				json(res, 409, { error: `这一轮已不在执行中：${runId}`, run: toRunSummary(record) });
+				return;
+			}
+			json(res, 200, { aborted: true, run: toRunSummary(record) });
 			return;
 		}
 		// POST /api/runs/:runId/reply  —— 续聊（fork 语义，源会话只读不改）

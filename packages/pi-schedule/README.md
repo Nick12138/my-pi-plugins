@@ -64,8 +64,8 @@ schedule(action:"create", name:"每日备份", trigger:"cron", cron:"0 2 * * *",
 > 通过 `X-Pi-Schedule-Token` 头传入。写不进文件时它只在内存里生效，插件会打一条 `token 无法写入` 告警。
 > 不下发 CORS 头（防跨源页面打本地端口）。
 
-`/jobs`、`/jobs/:id/run_now`、`/runs/:runId/reply`、`/cron/validate` 等，
-完整清单见 [docs/CONTRACT.md](docs/CONTRACT.md)。
+`/jobs`、`/jobs/:id/run_now`、`/runs/:runId/reply`、`/runs/:runId/abort`（叫停这一轮）、
+`/cron/validate` 等，完整清单见 [docs/CONTRACT.md](docs/CONTRACT.md)。
 
 ## 数据目录
 

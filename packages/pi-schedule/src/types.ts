@@ -33,7 +33,12 @@ export type MissedWindow = "catch_up_one" | "skip";
 /** 完成通知推送方式。"tg" 为未来 Telegram 推送预留，当前无行为差异（面板仍以 notify-queue 为准）。 */
 export type NotifyMode = "none" | "system" | "tg";
 
-/** 执行终态。command 型任务不会出现 aborted（无会话可中止）。 */
+/**
+ * 执行终态。
+ * - `aborted` 有两种来路：会话型任务被 `session.abort()`（用户经 `/api/runs/:id/abort` 叫停，
+ *   或超时定时器）；命令型任务被 `child.kill()`。
+ * - 超时始终记 `timeout` 不记 `aborted`：kill/abort 之前先落 `timedOut` 标志，两者靠这个区分。
+ */
 export type RunStatus = "running" | "ok" | "error" | "timeout" | "aborted";
 
 /** 触发来源，落进 run 记录用于审计。 */
@@ -133,6 +138,16 @@ export interface RunSummary {
 	durationMs: number | null;
 	model: ModelRef | null;
 	permission: PermissionTier;
+	/**
+	 * 本次实际生效的工具白名单（full 档为 ["*"]）。
+	 * 无人值守执行的基本盘：面板要能回答「这一轮到底给了哪些工具」，
+	 * 否则用户看不出「任务书要用 OCR，可这个会话里根本没有那个工具」。
+	 */
+	tools: string[];
+	/** 执行会话文件路径；命令型任务与尚未建会话的早期 running 为 null。 */
+	sessionPath: string | null;
+	/** 本次执行的命令（仅命令型任务非空）。 */
+	command: string | null;
 	forkOf: string | null;
 	summary: string;
 	error: string | null;

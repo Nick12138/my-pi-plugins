@@ -162,6 +162,8 @@
 - 针对具体任务的操作（`PATCH/DELETE/GET /jobs/:id`、`enable/disable`、`run_now`、`/jobs/:id/runs`）
   在任务不存在时一律 `404`。
 - `/runs/:runId/reply` 若该 run 没有可续聊的会话文件 → `409`。
+- `/runs/:runId/abort` 若该 run 存在但本进程已无中止句柄（已终态，或宿主重启留下的
+  `running` 僵尸）→ `409`；run 记录本身不存在才 `404`。
 
 ### `GET /api/health`（免 token）
 
@@ -183,6 +185,7 @@
 | GET | `/runs?limit=` | 全部执行历史（倒序） |
 | GET | `/runs/:runId` | 执行详情（完整 RunRecord） |
 | GET | `/runs/:runId/transcript` | 会话转录（`{ entries: [{id, role, text, at}] }`，末尾 200 条） |
+| POST | `/runs/:runId/abort` | **叫停这一轮**：`{ aborted: true, run }`；已不在执行中 → `409`，run 不存在 → `404` |
 | POST | `/runs/:runId/reply` | **续聊**：`{ text }` → fork 该 run 的会话再执行，返回新 run |
 | GET | `/ledger?limit=` | 台账（fire/skip/lock/terminate/error/reply） |
 | GET | `/notifications?limit=` | 通知队列 |
@@ -218,6 +221,24 @@
 
 > 并发上限（默认 2）只约束**定时扫描**发起的执行；`run_now`/`reply` 是显式操作，不受该上限限制。
 > 同一任务的单飞锁对两者都生效（不会并发跑同一个任务）。
+> 被 `run_now` 触发的那一轮可以用 `/runs/:runId/abort` 叫停：这个长请求会随即带回 `aborted` 终态。
+
+### `POST /runs/:runId/abort` 的语义
+
+只中止**当前这一轮**：任务本身保留（`enabled` / `trigger` / `nextRunAt` 都不动），下个节拍照常触发；
+终态记 `aborted`，所以不消耗 `runCount` / `maxRuns` 配额（见六.9）。
+接口立即返回、不等终态落盘——面板随后轮询 `/jobs/:id/runs` 取最终记录即可。
+会话型走 `session.abort()`；命令型杀**整棵进程树**（Windows `taskkill /T /F`，Unix 给进程组发信号）——
+只杀 shell 会留下挂着的 node/git 子进程。
+
+### 转录的两种读法（要展示「过程」的必读）
+
+`/runs/:runId/transcript` 是**拍平的纯文本**视图：条目只有 `{id, role, text, at}`，
+thinking 被混进文本、`role=toolResult` 直接不返回（源码注释：「工具输出噪音大，面板按需另取」）。
+需要像普通会话那样折叠展示思考与工具调用时，**请拿 run 记录里的 `sessionPath` 直接读那个会话 jsonl**
+（`type:"message"` 条目保留完整 content 块与 toolCall/toolResult 关联）。它就在
+`<root>/sessions/<jobId>/` 下，与 `jobs.json` 同一个数据根，宿主本来就有读盘权限。
+本插件不把这套投影搬到 HTTP 层——数据面本来就是文件（见一）。
 
 ---
 
@@ -262,11 +283,17 @@
     但**进会话的消息**只发「失败类」或「用户主动触发（run_now/reply）」——
     高频成功轮询保持安静（自定义消息会进入 LLM 上下文，不能刷屏）。
 16. **命令型任务**（`command` 非空）：触发后直接执行 shell 命令（跟随系统：
-    Windows=cmd，Unix=sh），**不经模型、无执行会话**。cwd=任务工作区；
-    退出码 0=ok、非 0=error（带退出码与 stderr）、超时=timeout；
+    Windows=cmd.exe，Unix=`$SHELL` 或 sh），**不经模型、无执行会话**。cwd=任务工作区；
+    退出码 0=ok、非 0=error（带退出码与 stderr）、超时=timeout、被叫停=aborted；
     stdout+stderr 截断后写入 run 记录的 `outputText`/`summary`。
+    执行中**每秒增量落盘**（面板能在跑的过程中看到输出），不再是跑完才有结果。
     权限档/模型/工具白名单对它无意义；`reply` 续聊不可用（返回 409）；
     runCount/maxRuns/单飞/错过窗口/台账照常生效。
+17. **叫停与超时分家**：两者都靠 `abort()`/kill 落地，但状态严格区分——
+    定时器先置 `timedOut` 再杀，所以超时永远记 `timeout`，不会串成 `aborted`；
+    用户叫停则记 `aborted` 并写「已被用户中止」。中止句柄按 runId 注册在进程内
+    （`liveRuns`），终态在 finally 摘除，因此宿主重启后遗留的 `running` 记录既查不到句柄、
+    也不会被 `/abort` 接受（返回 `409`），面板据此该显示「僵尸」而不是「停止」按钮。
 
 ---
 

@@ -8,7 +8,7 @@
  * - noExtensions 默认开启，避免执行会话重复加载扩展（防递归 + 降开销）。
  */
 import { existsSync, mkdirSync } from "node:fs";
-import { exec } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { decodeConsoleOutput } from "./console-decode.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +69,31 @@ export interface ModelRefLike {
 export interface ResolvedModel {
 	model: Model<string>;
 	ref: ModelRefLike;
+}
+
+/**
+ * 正在执行的 run → 可中止句柄。
+ *
+ * 为什么需要这张表：`session` 是 `runJob` 闭包里的局部变量，`Scheduler.activeRuns`
+ * 只存 `Promise<RunRecord>`，所以控制面拿到 runId 也够不着正在跑的会话——
+ * 用户点「停止」无路可走。这里按 runId 注册一个幂等的 abort 句柄，终态在 finally 摘除。
+ * 中止语义早已内建：`ScheduleRunStatus` 有 `aborted`，`afterRun` 也写明
+ * 「aborted 不计入投递次数（用户主动中止不应消耗配额）」，缺的只是这个入口。
+ */
+type RunHandle = { abort(): void };
+const liveRuns = new Map<string, RunHandle>();
+
+/** 叫停一次执行。返回 false = 这一轮已经结束（或 runId 不存在）。 */
+export function abortRun(runId: string): boolean {
+	const handle = liveRuns.get(runId);
+	if (!handle) return false;
+	handle.abort();
+	return true;
+}
+
+/** 这一轮是否还在本进程执行中（面板用来决定要不要显示「停止」）。 */
+export function isRunLive(runId: string): boolean {
+	return liveRuns.has(runId);
 }
 
 function resolveAgentDir(explicit?: string): string {
@@ -223,6 +248,7 @@ export async function runJob(job: Job, options: RunOptions): Promise<RunRecord> 
 	let unsubscribe: (() => void) | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let timedOut = false;
+	let userAborted = false;
 
 	try {
 		const runtime = await ModelRuntime.create({});
@@ -266,6 +292,12 @@ export async function runJob(job: Job, options: RunOptions): Promise<RunRecord> 
 			sessionManager,
 		});
 		session = created.session;
+		liveRuns.set(runId, {
+			abort: () => {
+				userAborted = true;
+				void session?.abort().catch(() => undefined);
+			},
+		});
 
 		try {
 			session.setSessionName(`[定时] ${job.name} #${runId}`);
@@ -314,16 +346,25 @@ export async function runJob(job: Job, options: RunOptions): Promise<RunRecord> 
 			// abort() 会让 prompt() 正常返回：超时必须在这里判，不能等 catch
 			record.status = "timeout";
 			record.error = `执行超时（${Math.round(timeoutMs / 1000)}s）`;
+		} else if (userAborted) {
+			record.status = "aborted";
+			record.error = "已被用户中止";
 		} else {
 			const outcome = inspectAssistantOutcome(messages);
 			record.status = outcome.status;
 			record.error = outcome.error;
 		}
 	} catch (error) {
-		const { status, message } = statusFromError(error, timedOut);
-		record.status = status;
-		record.error = message;
+		if (userAborted && !timedOut) {
+			record.status = "aborted";
+			record.error = "已被用户中止";
+		} else {
+			const { status, message } = statusFromError(error, timedOut);
+			record.status = status;
+			record.error = message;
+		}
 	} finally {
+		liveRuns.delete(runId);
 		if (timer) clearTimeout(timer);
 		try {
 			unsubscribe?.();
@@ -374,13 +415,51 @@ function aggregateUsage(messages: Array<{ role?: string; usage?: unknown }>): Us
 	return { input, output, total: input + output, cost };
 }
 
+/** 命令型任务的输出增量落盘周期：跑完才有输出的旧行为，等于让用户在面板前干等。 */
+const COMMAND_FLUSH_MS = 1_000;
+/** 输出缓冲上限（与原 `exec` 的 maxBuffer 同档）：超出停止累积，只留前 10MB。 */
+const MAX_COMMAND_BYTES = 10 * 1024 * 1024;
+
+/**
+ * 杀整棵进程树。
+ *
+ * - Windows：cmd.exe 死了不等于它里面的 node/git/npm 死了，必须 `taskkill /T /F`；
+ * - Unix：spawn 时 detached 让 shell 自成进程组，给 `-pid` 发信号才能连同
+ *   `sh -c "a && b"` 起的孙子一起收掉（只 kill(child) 会留下挂着的子进程）。
+ *
+ * 杀不动就当它已经死了：close 迟早会来。
+ */
+function killTree(child: ChildProcess): void {
+	const pid = child.pid;
+	if (pid === undefined) return;
+	if (process.platform === "win32") {
+		try {
+			spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
+				.on("error", () => undefined);
+		} catch {
+			/* 已经死了 */
+		}
+		return;
+	}
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch {
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			/* 已经死了 */
+		}
+	}
+}
+
 /**
  * 命令型任务执行：直接跑 shell 命令，不经模型、无执行会话。
  *
- * - shell 跟随系统（Windows=cmd，Unix=/bin/sh）；
- * - timeoutMs 到点杀进程，保留已捕获的输出；
- * - 退出码 0 → ok；非 0 → error；超时 → timeout；
- * - stdout+stderr 写进 run 记录（summary），终态照常走 onRunFinished → 通知队列/会话。
+ * - shell 跟随系统（Windows=cmd.exe，Unix=$SHELL 或 /bin/sh）；
+ * - timeoutMs 到点杀进程树，保留已捕获的输出；
+ * - 可中途叫停（`abortRun` → 杀进程树），终态记 aborted，与超时分开判；
+ * - 退出码 0 → ok；非 0 → error；超时 → timeout；用户中止 → aborted；
+ * - stdout+stderr 边收边增量写进 run 记录，终态照常走 onStatusChange → 通知队列。
  */
 async function runCommandJob(job: Job, options: RunOptions): Promise<RunRecord> {
 	ensureRoot();
@@ -417,32 +496,101 @@ async function runCommandJob(job: Job, options: RunOptions): Promise<RunRecord> 
 	writeRun(record);
 	options.onStatusChange?.(record);
 
+	let userAborted = false;
+	let timedOut = false;
+
 	await new Promise<void>((resolve) => {
-		// encoding:"buffer"：Windows 中文系统控制台是 GBK，不能让 exec 按 utf-8 解码
-		//（中文会变成不可逆的 U+FFFD），拿原始字节交给 decodeConsoleOutput 处理。
-		exec(
-			command,
-			{ cwd: job.cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true, encoding: "buffer" },
-			(error, stdout, stderr) => {
-				const out = decodeConsoleOutput(stdout);
-				const err = decodeConsoleOutput(stderr);
-				const combined = `${out}${err ? (out ? "\n" : "") + err : ""}`.trim();
-				record.outputText = truncate(combined, LIMITS.maxOutputChars);
-				record.summary = summarize(record.outputText, LIMITS.maxSummaryChars);
-				if (error && (error as { killed?: boolean }).killed) {
-					record.status = "timeout";
-					record.error = `执行超时（${Math.round(timeoutMs / 1000)}s）`;
-				} else if (error) {
-					const code = (error as { code?: unknown }).code;
-					record.status = "error";
-					record.error = `退出码 ${String(code ?? "?")}：${truncate(String(err || error.message), 600)}`;
-				} else {
-					record.status = "ok";
-					record.error = null;
-				}
-				resolve();
+		const isWin = process.platform === "win32";
+		const shell = isWin ? process.env.ComSpec?.trim() || "cmd.exe" : process.env.SHELL?.trim() || "/bin/sh";
+		const args = isWin ? ["/d", "/s", "/c", command] : ["-c", command];
+		const child = spawn(shell, args, {
+			cwd: job.cwd,
+			detached: !isWin,
+			windowsHide: true,
+			// cmd.exe 的参数必须原样交出去，Node 的转义会把命令里的引号弄坏
+			//（exec 内部也是这个口径）
+			windowsVerbatimArguments: isWin,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		liveRuns.set(runId, {
+			abort: () => {
+				userAborted = true;
+				killTree(child);
 			},
-		);
+		});
+
+		// 不设 setEncoding：先攒原始字节，最后统一解码。Windows 中文系统控制台是 GBK，
+		// 按 utf-8 直接解会让中文变成不可逆的 U+FFFD。
+		const outParts: Buffer[] = [];
+		const errParts: Buffer[] = [];
+		let buffered = 0;
+		const collect = (bucket: Buffer[]) => (chunk: Buffer | string) => {
+			if (buffered > MAX_COMMAND_BYTES) return;
+			const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+			bucket.push(buf);
+			buffered += buf.length;
+		};
+		child.stdout?.on("data", collect(outParts));
+		child.stderr?.on("data", collect(errParts));
+		const decoded = (): { out: string; err: string; combined: string } => {
+			const out = decodeConsoleOutput(Buffer.concat(outParts));
+			const err = decodeConsoleOutput(Buffer.concat(errParts));
+			return { out, err, combined: `${out}${err ? (out ? "\n" : "") + err : ""}`.trim() };
+		};
+
+		let done = false;
+		const settle = () => {
+			if (done) return false;
+			done = true;
+			clearTimeout(timer);
+			clearInterval(flush);
+			liveRuns.delete(runId);
+			return true;
+		};
+
+		const timer = setTimeout(() => {
+			timedOut = true;
+			killTree(child);
+		}, timeoutMs);
+		// 定时器与增量写盘都不该独自把事件循环撑住
+		timer.unref();
+
+		const flush = setInterval(() => {
+			if (done) return;
+			record.outputText = truncate(decoded().combined, LIMITS.maxOutputChars);
+			record.summary = summarize(record.outputText, LIMITS.maxSummaryChars);
+			writeRun(record);
+			options.onStatusChange?.(record);
+		}, COMMAND_FLUSH_MS);
+		flush.unref();
+
+		child.on("error", (error) => {
+			if (!settle()) return;
+			record.status = "error";
+			record.error = truncate(`无法启动 ${shell}：${error.message}`, 600);
+			resolve();
+		});
+
+		child.on("close", (code, signal) => {
+			if (!settle()) return;
+			const { err, combined } = decoded();
+			record.outputText = truncate(combined, LIMITS.maxOutputChars);
+			record.summary = summarize(record.outputText, LIMITS.maxSummaryChars);
+			if (timedOut) {
+				record.status = "timeout";
+				record.error = `执行超时（${Math.round(timeoutMs / 1000)}s）`;
+			} else if (userAborted) {
+				record.status = "aborted";
+				record.error = "已被用户中止";
+			} else if (code === 0) {
+				record.status = "ok";
+				record.error = null;
+			} else {
+				record.status = "error";
+				record.error = `退出码 ${String(code ?? signal ?? "?")}：${truncate(err || combined, 600)}`;
+			}
+			resolve();
+		});
 	});
 
 	record.finishedAt = new Date().toISOString();
