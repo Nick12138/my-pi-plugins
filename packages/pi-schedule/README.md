@@ -60,8 +60,9 @@ schedule(action:"create", name:"每日备份", trigger:"cron", cron:"0 2 * * *",
 
 `http://127.0.0.1:18766/api`（`PI_SCHEDULE_PORT` 可改）。
 
-> 除 `GET /api/health` 外都需鉴权：token 在 `~/.pi/schedule/token`（首次启动自动生成），
-> 通过 `X-Pi-Schedule-Token` 头传入。不下发 CORS 头（防跨源页面打本地端口）。
+> 除 `GET /api/health` 外都需鉴权：token 启动时写入 `~/.pi/schedule/token`（`PI_SCHEDULE_TOKEN` 可覆盖），
+> 通过 `X-Pi-Schedule-Token` 头传入。写不进文件时它只在内存里生效，插件会打一条 `token 无法写入` 告警。
+> 不下发 CORS 头（防跨源页面打本地端口）。
 
 `/jobs`、`/jobs/:id/run_now`、`/runs/:runId/reply`、`/cron/validate` 等，
 完整清单见 [docs/CONTRACT.md](docs/CONTRACT.md)。

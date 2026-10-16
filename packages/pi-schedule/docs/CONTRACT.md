@@ -145,7 +145,9 @@
 
 除 `GET /api/health` 外，**所有接口都需要 token**：
 
-1. token 位于 `~/.pi/schedule/token`（首次启动自动生成，权限 0600）；也可用 `PI_SCHEDULE_TOKEN` 指定。
+1. token 解析优先级：`PI_SCHEDULE_TOKEN` > `<root>/token` > 现场生成并写回 `<root>/token`（0600）。
+   写回失败时 token 只在**本进程内存**生效（插件会打一条 `token 无法写入` 告警），
+   此时按文件取 token 的调用方一律 `401`，只能改用同一个 `PI_SCHEDULE_TOKEN` 才能握手。
 2. 传递方式：请求头 `X-Pi-Schedule-Token: <token>`。**写操作（POST/PATCH/DELETE）必须用头部**；
    `?token=` 仅对只读 GET 有效（写走 query 会被当作 CORS「简单请求」绕过预检，属 CSRF 面）。
 3. 缺少/错误 → `401`。
@@ -164,6 +166,8 @@
 ### `GET /api/health`（免 token）
 
 返回 `{ ok, root, port, activeJobs, tickMs, maxConcurrent }`，不泄露任务内容/密钥。
+**字段集合是固定契约**：PiAbyss 侧 `isScheduleHealth` 用 `hasExactKeys` 校验，插件单方面加字段
+会把 `schedule.status` 整个打挂——加字段必须与 Host 同版本升级。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -276,7 +280,7 @@
 | `PI_SCHEDULE_PORT` | `18766` | HTTP 端口 |
 | `PI_SCHEDULE_TICK_MS` | `30000` | 扫描间隔（最小 1000） |
 | `PI_SCHEDULE_TZ` | 系统时区 | 默认时区（cron 未指定 timezone 时；**任务自带 timezone 优先**） |
-| `PI_SCHEDULE_TOKEN` | 自动生成 | HTTP 控制面鉴权 token（不设则写入 `<root>/token`） |
+| `PI_SCHEDULE_TOKEN` | 自动生成 | HTTP 控制面鉴权 token；设了它就不再读写 `<root>/token`（优先级最高） |
 
 ---
 
@@ -287,6 +291,11 @@
    绕开 fetch 代理问题），前端只调用 `schedule.*` 一个薄方法。
    **代理时必须带上 `X-Pi-Schedule-Token`**（读 `~/.pi/schedule/token`，或环境变量 `PI_SCHEDULE_TOKEN`），
    否则所有接口返回 401。
+   **Host 与插件同进程时优先用 env**：启动时在加载扩展**之前**把 token 定进
+   `process.env.PI_SCHEDULE_TOKEN`（文件已存在就沿用它，否则生成后尽力落盘，落盘失败无所谓）。
+   两侧都按 env 优先取值，握手就不再依赖文件写得成功；文件只是留给进程外调用方的。
+   反例（曾经的线上故障）：插件内存里有 token、Host 只认文件 → 文件缺失 → 整个进程生命周期
+   里每个 `schedule.*` 都 401，面板只显示「缺少或错误的 token」，看不出是没带 token。
 2. **Host 侧**：新增 `packages/pi-host/src/schedule-*.ts`，
    - HTTP 客户端（控制）；
    - 读盘投影（列表/历史/转录，参考 `subagent-runs.ts` 的有界截断常量）；

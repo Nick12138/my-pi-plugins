@@ -15,7 +15,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerScheduleTool } from "../src/tool.ts";
 import { getScheduler, type Scheduler } from "../src/scheduler.ts";
-import { startHttpServer, resolvePort } from "../src/http.ts";
+import { startHttpServer, resolvePort, authTokenInfo } from "../src/http.ts";
 import { appendNotify, paths } from "../src/store.ts";
 import { DEFAULTS, TICK_ENV, type RunRecord } from "../src/types.ts";
 
@@ -75,13 +75,17 @@ function ensureRuntime(): ScheduleRuntime {
 	store[RUNTIME_KEY] = runtime;
 	runtime.scheduler.start();
 
+	// 立刻解析 token：落盘要发生在任何调用方连上控制面之前，而不是拖到第一个
+	// 需要鉴权的请求——写不进去时这一步的告警也是最早可见的信号。
+	authTokenInfo();
+
 	// 监听失败必须显式报错：不能打印一个并不存在的控制面地址
 	void startHttpServer(runtime.scheduler, runtime.configuredPort)
 		.then((port) => {
 			runtime.httpPort = port;
 			runtime.httpError = null;
 			console.error(
-				`[pi-schedule] 已启动：数据目录 ${paths().root}，控制面 http://127.0.0.1:${port}，tick ${resolveTickMs()}ms`,
+				`[pi-schedule] 已启动：数据目录 ${paths().root}，控制面 http://127.0.0.1:${port}，tick ${resolveTickMs()}ms，token 来源 ${authTokenInfo().source}`,
 			);
 		})
 		.catch((error: unknown) => {

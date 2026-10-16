@@ -63,6 +63,16 @@ after(() => {
 test("鉴权：health 免 token；其他接口无 token 401", async () => {
 	const health = await call("GET", "/health", undefined, { token: false });
 	assert.equal(health.status, 200);
+	// health 免 token，所以绝不能把 token 带出去；字段集合还是 Host 侧 hasExactKeys 的固定契约
+	assert.ok(!JSON.stringify(health.data).includes(TOKEN));
+	assert.deepEqual(Object.keys(health.data).sort(), [
+		"activeJobs",
+		"maxConcurrent",
+		"ok",
+		"port",
+		"root",
+		"tickMs",
+	]);
 
 	const noToken = await call("GET", "/jobs", undefined, { token: false });
 	assert.equal(noToken.status, 401);

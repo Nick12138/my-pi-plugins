@@ -37,34 +37,59 @@ const MAX_BODY_BYTES = 128 * 1024;
  * 必要性：仅监听 127.0.0.1 **不是**安全边界——任意网页都能发起跨源请求
  * （简单请求免预检），若不加鉴权，一个恶意页面就能创建 full 权限任务 = 任意命令执行。
  * 所以：默认不允许跨源（不发 ACAO），且非 health 接口一律要求 token。
- * PiAbyss 侧读 `~/.pi/schedule/token` 并带上 `X-Pi-Schedule-Token` 头即可。
+ * 调用方读 `~/.pi/schedule/token` 并带上 `X-Pi-Schedule-Token` 头即可。
+ *
+ * 落盘失败绝不静默：token 只活在内存里时，任何按契约读文件的调用方（同机的
+ * PiAbyss 面板、CLI、cron 脚本）都再也拿不到它，只能对着 401 猜根因，且本进程
+ * 活着就永远解不开。所以这里打告警，来源（env / file / memory）也由
+ * `authTokenInfo().source` 交给启动日志。
  */
-export function resolveToken(): string {
-	const fromEnv = process.env[TOKEN_ENV]?.trim();
-	if (fromEnv) return fromEnv;
+export type TokenSource = "env" | "file" | "memory";
+
+let authToken: string | null = null;
+let authTokenSource: TokenSource = "memory";
+
+/** 解析（并缓存）控制面 token：env > `<root>/token` > 生成后落盘。 */
+export function authTokenInfo(): { token: string; source: TokenSource } {
+	if (authToken) return { token: authToken, source: authTokenSource };
 	const file = `${paths().root}/token`;
+	const fromEnv = process.env[TOKEN_ENV]?.trim();
+	if (fromEnv) {
+		authToken = fromEnv;
+		authTokenSource = "env";
+		return { token: authToken, source: authTokenSource };
+	}
 	try {
 		if (existsSync(file)) {
 			const existing = readFileSync(file, "utf8").trim();
-			if (existing) return existing;
+			if (existing) {
+				authToken = existing;
+				authTokenSource = "file";
+				return { token: authToken, source: authTokenSource };
+			}
 		}
-	} catch {
-		/* 读失败则重新生成 */
+	} catch (error) {
+		console.error(
+			`[pi-schedule] 读取 ${file} 失败，将重新生成 token：${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
-	const token = randomBytes(24).toString("hex");
+	authToken = randomBytes(24).toString("hex");
+	authTokenSource = "memory";
 	try {
-		writeFileSync(file, token, { encoding: "utf8", mode: 0o600 });
-	} catch {
-		/* 写不了就只在内存里生效 */
+		writeFileSync(file, authToken, { encoding: "utf8", mode: 0o600 });
+		authTokenSource = "file";
+	} catch (error) {
+		console.error(
+			`[pi-schedule] ⚠ token 无法写入 ${file}（${error instanceof Error ? error.message : String(error)}）：` +
+				"本次只在内存生效，按契约读该文件的调用方会一律 401。" +
+				`请检查数据目录权限/可写性，或用 ${TOKEN_ENV} 指定 token。`,
+		);
 	}
-	return token;
+	return { token: authToken, source: authTokenSource };
 }
 
-let authToken: string | null = null;
-
 function token(): string {
-	if (!authToken) authToken = resolveToken();
-	return authToken;
+	return authTokenInfo().token;
 }
 
 function json(res: http.ServerResponse, code: number, data: unknown): void {
