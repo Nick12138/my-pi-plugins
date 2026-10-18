@@ -61,10 +61,10 @@
 - 调用 `subagent(action:"merge", runId:"<id>")` → "已合并分支，worktree 已清理"。
 - 确认 `worktree-demo.txt` 出现在主分支工作区（git status 可看到）。
 
-### 9. 双向工具回调（contact_supervisor ↔ subagent_supervisor）
+### 9. 双向工具回调（contact_supervisor ↔ subagent supervisor_reply）
 - 提交任务：`subagent(agent:"worker", task:"分三步：1) bash 执行 ls packages/ | wc -l 统计插件目录数；2) 调用 contact_supervisor({reason:'need_decision', message:'统计完成，请确认是否继续'}) 并阻塞等待回复，不要提前结束；3) 收到回复后把回复内容写入 packages/pi-subagent/supervisor-reply.txt 并读取确认", title:"双向回调测试")`
 - **预期**：子代理运行中，`%TEMP%/pi-subagent-supervisor-channels/<runId>-worker-0/requests/` 下出现 `<uuid>.json`（含 `orchestratorSessionId` 与主会话 id 一致）。
-- 主 agent 调用 `subagent_supervisor({action:"pending"})` → 能看到该请求；`subagent_supervisor({action:"reply", replyTo:"<id>", message:"确认继续，验证码 X"})` → 返回“Replied to supervisor request”。
+- 主 agent 调用 `subagent({action:"supervisor_pending"})` → 能看到该请求；`subagent({action:"supervisor_reply", replyTo:"<id>", message:"确认继续，验证码 X"})` → 返回“Replied to supervisor request”。
 - **预期**：子代理解除阻塞继续，`supervisor-reply.txt` 出现回复内容（含验证码 X），run 完成。
 - 可选：再测 `progress_update`（单向不等待）与 `contact_supervisor` 超时（`PI_SUBAGENT_SUPERVISOR_TIMEOUT_MS` 设小值）。
 

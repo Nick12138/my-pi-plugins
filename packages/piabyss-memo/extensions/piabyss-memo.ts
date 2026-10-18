@@ -41,30 +41,16 @@ const MEMO_TOOL_NAME = "piabyss_memo";
 /** 周期规则入参（工具层形状；经 toStoreRecurrence 转换后交 store 校验归一）。 */
 const RecurrenceSchema = Type.Object({
   frequency: Type.Union([Type.Literal("daily"), Type.Literal("weekly"), Type.Literal("monthly")], {
-    description: "daily / weekly / monthly.",
+    description: "daily|weekly|monthly",
   }),
-  interval: Type.Optional(
-    Type.Number({ description: "Every N days/weeks/months (default 1)." }),
-  ),
-  weekdays: Type.Optional(
-    Type.Array(Type.Number(), {
-      description: "weekly only: ISO weekdays, 1=Mon … 7=Sun. Required for weekly.",
-    }),
-  ),
+  interval: Type.Optional(Type.Number({ description: "每 N 个周期，默认 1" })),
+  weekdays: Type.Optional(Type.Array(Type.Number(), { description: "weekly 必填：1=周一 … 7=周日" })),
   monthDay: Type.Optional(
-    Type.Union([Type.Number(), Type.Null()], {
-      description: "monthly only: day of month 1-31 (months without this day are skipped). Required for monthly.",
-    }),
+    Type.Union([Type.Number(), Type.Null()], { description: "monthly 必填：1-31（无此日的月份跳过）" }),
   ),
-  time: Type.String({ description: "Local clock time on the due day, 24h 'HH:mm'." }),
-  tz: Type.Optional(
-    Type.String({ description: "IANA time zone, e.g. 'Asia/Shanghai' (default)." }),
-  ),
-  until: Type.Optional(
-    Type.Union([Type.String(), Type.Null()], {
-      description: "End of the series: 'YYYY-MM-DD[ HH:mm]' or ISO. null = open-ended.",
-    }),
-  ),
+  time: Type.String({ description: "本地时间 HH:mm" }),
+  tz: Type.Optional(Type.String({ description: "IANA 时区，默认 Asia/Shanghai" })),
+  until: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "结束日期或 ISO；null=长期" })),
 });
 
 type RecurrenceParam = Static<typeof RecurrenceSchema>;
@@ -80,39 +66,26 @@ const ParamsSchema = Type.Object({
     ],
     {
       description:
-        "list = show all memo notes with ids and statuses; create = add a new note to the board (title required); complete = mark a note as done, ONLY when the work it asked for is truly finished and nothing is awaited from the user; reopen = mark a done note as open again; update = change a note's title/content/tags/plan (dueAt, recurrence).",
+        "list=列出全部；create=新建（需 title）；complete=完成并写 result；reopen=重开；update=改标题/正文/标签/计划。",
     },
   ),
-  id: Type.Optional(
-    Type.String({ description: "The memo note id. Required for complete/reopen/update." }),
-  ),
-  title: Type.Optional(
-    Type.String({ description: "Note title. Required for create; changes the title for update." }),
-  ),
-  contentMd: Type.Optional(
-    Type.String({ description: "Markdown body (create / update actions)." }),
-  ),
-  tags: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Tag list (create: initial tags; update: replaces the old list).",
-    }),
-  ),
+  id: Type.Optional(Type.String({ description: "便签 id（complete/reopen/update 必填；不知道就先 list）。" })),
+  title: Type.Optional(Type.String({ description: "标题（create 必填；update 时改标题）。" })),
+  contentMd: Type.Optional(Type.String({ description: "Markdown 正文（create/update）。" })),
+  tags: Type.Optional(Type.Array(Type.String(), { description: "标签（create 初始；update 整体替换）。" })),
   result: Type.Optional(
     Type.String({
-      description:
-        "Required for complete: a concise markdown summary of what was done, the outcome/outputs, and any remaining follow-ups. Overwrites any previous summary on the note.",
+      description: "complete 必填：做了什么 + 产出/结论 + 待跟进项（覆盖旧摘要）。",
     }),
   ),
   dueAt: Type.Optional(
     Type.Union([Type.String(), Type.Null()], {
-      description:
-        "Create / update actions: one-shot due datetime. Accepts 'YYYY-MM-DD', 'YYYY-MM-DD HH:mm' (device-local time) or a full ISO string; null clears it.",
+      description: "一次性到期：YYYY-MM-DD[ HH:mm] 或 ISO；null 清除。",
     }),
   ),
   recurrence: Type.Optional(
     Type.Union([RecurrenceSchema, Type.Null()], {
-      description:
-        "Create / update actions: recurring plan rule; null clears it (the note becomes a normal one).",
+      description: "周期规则；null 清除变普通便签。",
     }),
   ),
 });
@@ -127,18 +100,8 @@ type MemoSessionInfo = {
   cwd: string | null;
 };
 
-const TOOL_DESCRIPTION = [
-  "Access the user's PiAbyss 待办 · 速记 board (待办 · 速记 · 备忘 · 收集).",
-  "Use it to list pending notes, to add a new note (create) when the user asks to write something down or set a reminder/todo, or to mark a note as complete (complete) once the task described in it has been handled.",
-  "create takes a required title plus optional contentMd / tags, and optionally a plan: a one-shot dueAt or a recurring rule.",
-  "Before calling complete, self-check: has the task produced a final result? Are you still waiting for user input or a user decision? If anything is still awaited (e.g. you asked the user to pick an option), do NOT call complete — reply and wait instead.",
-  "Instructions the user sends manually in the session always override memo prompts: if the user says not to mark a note done yet, do not call complete.",
-  "complete REQUIRES a `result` parameter: a concise markdown summary of what was done and the outcome; it overwrites any previous summary.",
-  "A note id is required for complete/reopen/update; call list first if you don't have one. create returns the new id.",
-  "Notes may carry a plan: a one-shot dueAt, or a recurring rule (recurrence, e.g. weekly on Monday at 13:00 in a given timezone).",
-  "Completing a RECURRING note finishes only the current cycle: the tool records the summary and rolls the next due time automatically, keeping the note open for the next cycle.",
-  "Never set a recurring note to done via update — clear its recurrence (recurrence: null) first if the user wants to end it.",
-].join(" ");
+const TOOL_DESCRIPTION =
+  "PiAbyss「待办 · 速记」看板（待办/备忘/收集）。记一笔或设提醒用 create；查用 list；任务真的做完、且没有在等用户决定的事时才 complete，必须给 result 摘要。周期便签 complete 只结当前轮，要停掉先清 recurrence。用户口头指令优先于便签字面。";
 
 const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -245,7 +208,7 @@ export default function (pi: ExtensionAPI) {
     name: MEMO_TOOL_NAME,
     label: "待办 · 速记",
     description: TOOL_DESCRIPTION,
-    promptSnippet: "Create, list and update the user's memo notes (mark done after handling)",
+    promptSnippet: "待办 · 速记看板：list/create/complete/reopen/update",
     parameters: ParamsSchema,
 
     async execute(_toolCallId, params: MemoParams, _signal, _onUpdate, ctx) {

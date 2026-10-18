@@ -47,39 +47,39 @@ const ACTIONS = [
 
 const AutomationParams = Type.Object({
 	action: StringEnum(ACTIONS, { description: "操作类型", default: "list" }),
-	id: Type.Optional(Type.String({ description: "任务 id（get/update/cancel/enable/disable/run_now/history 用）" })),
-	runId: Type.Optional(Type.String({ description: "执行记录 id（history/reply 用）" })),
+	id: Type.Optional(Type.String({ description: "任务 id（get/update/cancel/enable/disable/run_now/history）" })),
+	runId: Type.Optional(Type.String({ description: "执行记录 id（history/reply）" })),
 	name: Type.Optional(Type.String({ description: "任务名（create/update）" })),
-	prompt: Type.Optional(Type.String({ description: "任务内容（create/update）：自包含的指令，会作为全新会话的任务书；与 command 互斥" })),
-	command: Type.Optional(Type.String({ description: "命令型任务（create/update）：直接执行的 shell 命令（可跑 python/node/git 等），不经模型、无会话；与 prompt 互斥" })),
-	cwd: Type.Optional(Type.String({ description: "工作区绝对路径（create/update），默认当前目录" })),
+	prompt: Type.Optional(Type.String({ description: "任务指令（create/update，自包含；与 command 互斥）" })),
+	command: Type.Optional(Type.String({ description: "直接执行的 shell 命令，不经模型（与 prompt 互斥）" })),
+	cwd: Type.Optional(Type.String({ description: "工作区绝对路径，默认当前目录" })),
 	trigger: Type.Optional(
 		StringEnum(["manual", "once", "interval", "cron"] as const, {
-			description: "触发方式：manual=仅手动；once=定时一次；interval=周期；cron=表达式",
+			description: "manual|once|interval|cron",
 		}),
 	),
-	every: Type.Optional(Type.String({ description: "trigger=interval 时的周期，如 30m / 2h / 1d" })),
-	cron: Type.Optional(Type.String({ description: "trigger=cron 时的 5 段表达式，如 0 9 * * 1-5" })),
-	at: Type.Optional(Type.String({ description: "trigger=once 时的绝对时间（ISO，如 2026-01-01T09:00:00+08:00）" })),
-	timezone: Type.Optional(Type.String({ description: "cron 的时区，如 Asia/Shanghai；缺省用系统时区" })),
+	every: Type.Optional(Type.String({ description: "interval 周期，如 30m / 2h / 1d" })),
+	cron: Type.Optional(Type.String({ description: "5 段表达式，如 0 9 * * 1-5" })),
+	at: Type.Optional(Type.String({ description: "once 的绝对时间（ISO）" })),
+	timezone: Type.Optional(Type.String({ description: "cron 时区，缺省系统时区" })),
 	permission: Type.Optional(
 		StringEnum(["read_only", "write", "full"] as const, {
-			description: "权限：read_only=只读；write=可改文件不可跑命令；full=全权（含 bash）",
+			description: "read_only=只读；write=可改文件不可跑命令；full=全权（跑命令必须 full）",
 		}),
 	),
-	model: Type.Optional(Type.String({ description: "模型，格式 provider/id，可选 :thinking，如 5/deepseek-v4.1-flash:medium" })),
+	model: Type.Optional(Type.String({ description: "provider/id，可带 :thinking" })),
 	missedWindow: Type.Optional(
-		StringEnum(["catch_up_one", "skip"] as const, { description: "错过窗口策略，默认 catch_up_one" }),
+		StringEnum(["catch_up_one", "skip"] as const, { description: "错过窗口：catch_up_one（默认）/ skip" }),
 	),
-	timeoutMs: Type.Optional(Type.Number({ description: "单次执行超时（毫秒），默认 1800000" })),
-	maxRuns: Type.Optional(Type.Number({ description: "投递次数上限，到达后自动停用" })),
+	timeoutMs: Type.Optional(Type.Number({ description: "单次超时（毫秒），默认 1800000" })),
+	maxRuns: Type.Optional(Type.Number({ description: "投递次数上限，到顶自动停用" })),
 	loadExtensions: Type.Optional(Type.Boolean({ description: "执行会话是否加载扩展/技能，默认 false" })),
 	tags: Type.Optional(Type.Array(Type.String(), { description: "标签" })),
 	enabled: Type.Optional(Type.Boolean({ description: "是否启用（update）" })),
-	wait: Type.Optional(Type.Boolean({ description: "run_now 是否等待执行完成，默认 true" })),
+	wait: Type.Optional(Type.Boolean({ description: "run_now 是否等完成，默认 true" })),
 	waitMs: Type.Optional(Type.Number({ description: "run_now 等待上限（毫秒），默认 120000" })),
 	limit: Type.Optional(Type.Number({ description: "history 返回条数，默认 10" })),
-	text: Type.Optional(Type.String({ description: "reply 时的追问内容" })),
+	text: Type.Optional(Type.String({ description: "reply 的追问内容" })),
 });
 
 type AutomationParamsT = Static<typeof AutomationParams>;
@@ -145,13 +145,10 @@ export function registerAutomationTool(pi: ExtensionAPI, scheduler: Scheduler): 
 		name: "automation",
 		label: "自动化",
 		description:
-			"创建/查看/控制自动化（cron / 周期 / 一次性 / 仅手动）。每次执行都在**独立会话**里跑，历史可查、可续聊。",
-		promptSnippet: "automation — create/list/run scheduled tasks (cron, interval, once, manual)",
+			"创建/查看/控制自动化（cron / 周期 / 一次性 / 仅手动）。每次执行都在**独立会话**里跑，历史可查、可续聊。跑命令（git/npm/脚本）必须 permission=full；要「直接跑命令、不走模型」用 command 参数。",
+		promptSnippet: "创建/管理定时任务（cron/周期/一次性）",
 		promptGuidelines: [
-			"用户说「每天/每小时/定时/cron/提醒我/定期检查」时用 automation 工具建任务。",
-			"任务 prompt 必须自包含：执行时是全新会话，没有当前对话上下文。",
-			"用户明确要「直接跑命令、不要走模型」时用 command 参数建命令型任务（与 prompt 互斥）；输出会直接进通知。",
-			"需要跑命令（git/npm/gh/脚本）的任务必须 permission=full；只读检索用 read_only（默认）；要改文件但不用命令用 write。",
+			"用户说「每天/每小时/定时/提醒我/定期检查」时用 automation 建任务；prompt 必须自包含（执行时是全新会话，没有当前对话上下文）。",
 		],
 		parameters: AutomationParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {

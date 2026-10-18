@@ -156,22 +156,22 @@ async function main(): Promise<void> {
 	check("B 发起的 run 通知送达会话 B", bNotified2);
 	check("B 发起的 run 通知不投给会话 A", !aNotified2);
 
-	// ── 核心 4：subagent_wait(all) 只等本会话发起的 run（历史孤儿除外）──
+	// ── 核心 4：subagent(action:"wait", all) 只等本会话发起的 run（历史孤儿除外）──
 	const waitId = "test_fix_route_wait";
 	ensureRunDir(waitId);
 	writeTask(makeRunRecord(waitId, "session-A").task);
 	// pid 不存在：A 会话等待时会走僵尸兑底定 interrupted 并返回；
 	// B 会话等待时 targets 过滤后为空，应直接返回“没有需要等待的 run”
 	writeStatus(waitId, { status: "running", notified: false, resumeCount: 0, retryLeft: 0, operator: "agent", pid: 999998, startedAt: Date.now() });
-	const waitToolB = sessionB.tools.find((t) => t.name === "subagent_wait");
-	const waitToolA = sessionA.tools.find((t) => t.name === "subagent_wait");
+	const waitToolB = sessionB.tools.find((t) => t.name === "subagent");
+	const waitToolA = sessionA.tools.find((t) => t.name === "subagent");
 	const waitText = (result: unknown): string => {
 		const content = (result as { content?: Array<{ type: string; text?: string }> }).content ?? [];
 		return content.map((c) => c.text ?? "").join("\n");
 	};
-	const bWaitResult = await waitToolB?.execute("t", { all: true, timeoutMs: 3000 }, undefined, undefined);
+	const bWaitResult = await waitToolB?.execute("t", { action: "wait", all: true, timeoutMs: 3000 }, undefined, undefined);
 	check("B 会话 wait(all) 看不到 A 发起的运行中 run", waitText(bWaitResult).includes("没有需要等待的 run"));
-	const aWaitResult = await waitToolA?.execute("t", { all: true, timeoutMs: 10_000 }, undefined, undefined);
+	const aWaitResult = await waitToolA?.execute("t", { action: "wait", all: true, timeoutMs: 10_000 }, undefined, undefined);
 	check("A 会话 wait(all) 能等到自己发起的 run（僵尸兑底后返回）", !waitText(aWaitResult).includes("没有需要等待的 run"));
 
 	// ── 核心 3：发起会话离线后的通知不唤醒其他会话 ──

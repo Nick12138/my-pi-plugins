@@ -58,23 +58,21 @@ const ParamsSchema = Type.Object({
   month: Type.Optional(Type.String({ description: "list 按发生月过滤，格式 YYYY-MM" })),
   invoiceImagePath: Type.Optional(
     Type.String({
-      description:
-        "发票/车票图片的本地绝对路径（add 登记时直接关联；update 传入=替换，传 null=清除）",
+      description: "发票/车票图片绝对路径（直票模式；add 直接关联，update 传 null 清除）",
     }),
   ),
   transactionImagePath: Type.Optional(
     Type.String({
-      description:
-        "交易截图的本地绝对路径，与替票配套（add 登记时直接关联；update 传入=替换，传 null=清除）",
+      description: "交易截图绝对路径（替票模式：截图+替票；add 直接关联，update 传 null 清除）",
     }),
   ),
   substituteReceiptId: Type.Optional(
     Type.Number({
-      description: "关联的替票 id（update 传入=改关联，传 null=解除；替票须已用 receipt_add 登记）",
+      description: "替票 id（须先 receipt_add 登记；update 传 null 解除）",
     }),
   ),
   imagePath: Type.Optional(
-    Type.String({ description: "替票图片的本地绝对路径（receipt_add/receipt_update 用；receipt_update 传 null=清除）" }),
+    Type.String({ description: "替票图片绝对路径（receipt_add/receipt_update 用）" }),
   ),
 });
 
@@ -139,16 +137,11 @@ export default function (pi: ExtensionAPI) {
     name: REIMBURSE_TOOL_NAME,
     label: "报销",
     description:
-      "管理用户的个人报销单与替票。报销单字段：类别（差旅/交通/餐饮/办公用品/招待/其他）、日期、项目名称、事宜、费用、票据、备注。票据两种模式：直票（invoiceImagePath=发票/车票图片）或替票组合（transactionImagePath=交易截图 + substituteReceiptId=共享替票）。替票用 receipt_add 登记、可被多条报销单共享（同一张替票+各自不同的交易截图）。list 支持按状态/月份/类别/项目过滤，末尾附未到账汇总。图片会复制进 ~/.pi/reimburse/images/ 托管，原图可删。数据跨会话保留；变更后自动防抖云同步。",
-    promptSnippet: "Manage the user's personal reimbursement claims and shared substitute receipts",
+      "管理个人报销单与替票：add 登记、list/get 查询、update 改状态、delete 删除，替票走 receipt_* 系列（receipt_add 可被多条报销单复用）。金额单位为元；图片复制进 ~/.pi/reimburse/images/ 托管，原图可删。不确定金额、类别、日期先问用户，不要编造。",
+    promptSnippet: "个人报销单与替票管理",
     promptGuidelines: [
-      "用户提到报销、垫付、垫了多少钱、报销到账没有时，用 reimburse 工具登记或查询。",
-      "add 必填 category、subject（事宜）、amount（费用）；date 缺省为今天，不要替用户猜历史日期。",
-      "票据模式二选一：有发票/车票图片用 invoiceImagePath；用替票报销时先 receipt_add 登记替票（可复用），再传 transactionImagePath + substituteReceiptId。",
-      "查询未到账的报销用 list status=pending；确认到账后用 update 把 status 改为 reimbursed。",
-      "金额以元为单位；不确定金额、类别或日期时先问用户，不要编造。",
-      "替票删除前必须先解除所有报销单的引用（update substituteReceiptId=null）；替票被引用时删除会报错。",
-      "登记/修改后把单据关键信息（id、类别、事宜、费用、状态、票据）复述给用户确认。",
+      "用户提到报销/垫付/到账时先 list 查重再 add；确认到账后 update status=reimbursed。",
+      "替票被报销单引用时不能删：先 update substituteReceiptId=null 解除引用。",
     ],
     parameters: ParamsSchema,
     // 写操作都读改写整个文件，串行执行避免并发覆盖。

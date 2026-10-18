@@ -218,276 +218,221 @@ function boolFlag(v: boolean | undefined, name: string): string[] {
 	return v ? [name, "true"] : [];
 }
 
+/** 合并后的 9 个子能力的参数定义（并集，字段名与旧单工具保持一致）。 */
+const WPS_ACTIONS = [
+	"pdfinfo",
+	"pdf2word",
+	"to_pdf",
+	"pdfcompress",
+	"pdfwatermark",
+	"photo2pdf",
+	"pdf2imgpdf",
+	"pdf2photo",
+	"pdf2md",
+] as const;
+
+type WpsAction = (typeof WPS_ACTIONS)[number];
+
+// office/txt → pdf 的子命令映射
+const TO_PDF: Array<{ exts: string[]; cmd: string }> = [
+	{ exts: [".doc", ".docx", ".wps"], cmd: "word2pdf" },
+	{ exts: [".xls", ".xlsx", ".et"], cmd: "excel2pdf" },
+	{ exts: [".ppt", ".pptx", ".dps"], cmd: "ppt2pdf" },
+	{ exts: [".txt"], cmd: "txt2pdf" },
+];
+
 export default function (pi: ExtensionAPI) {
-	// ── pdfinfo ──────────────────────────────────────────────────────────────
 	pi.registerTool({
-		name: "wps_pdfinfo",
-		label: "WPS PDF Info",
+		name: "wps",
+		label: "WPS 转换",
 		description:
-			"Inspect a PDF with the local WPS CLI: metadata, page count, and whether it looks scanned. " +
-			"Call this BEFORE wps_pdf2word when the PDF type is unknown, so scanned mode and page ranges can be chosen correctly.",
-		promptSnippet: "Inspect PDF metadata/page count/scanned-hint via local WPS CLI",
-		promptGuidelines: ["Run wps_pdfinfo before wps_pdf2word on unknown PDFs to decide scanned mode and --range."],
-		parameters: Type.Object({
-			file: Type.String({ description: "PDF file path" }),
-		}),
-		async execute(_id, params, signal) {
-			const res = await runWps(["pdfinfo", params.file], { signal });
-			const text = res.ok
-				? `pdfinfo ok: ${params.file}\n${typeof res.raw === "string" ? res.raw : JSON.stringify(res.raw, null, 2)}`
-				: `pdfinfo failed: ${res.raw}`;
-			return toolResult(text, { file: params.file, ok: res.ok });
-		},
-	});
-
-	// ── pdf2word ─────────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdf2word",
-		label: "WPS PDF→Word",
-		description:
-			"Convert a PDF to an editable Word .docx using WPS CLI. For scanned PDFs / photos / certificates, enable " +
-			"scanned=true: WPS OCR produces selectable, copyable text (never fall back to inserting page images). " +
-			"Scanned mode requires an explicit page range. Requires WPS login (exit 100) and possibly membership (exit 101).",
-		promptSnippet: "Convert PDF to editable Word via WPS CLI (scanned=true → OCR, needs range)",
+			"本地 WPS CLI 封装，按 action 选能力：pdfinfo（元信息/页数/扫描判别）、pdf2word（PDF→可编辑 Word，扫描件必须 scanned=true 且给 range）、to_pdf（Office/TXT→PDF，版式保真）、pdfcompress、pdfwatermark、photo2pdf（图片→PDF）、pdf2imgpdf（图片版 PDF）、pdf2photo（页面转图片）、pdf2md。需要 WPS 登录，部分能力需会员。",
+		promptSnippet: "WPS 文档转换（PDF/Word/压缩/水印）",
 		promptGuidelines: [
-			"For image-like/scanned PDFs always use scanned=true and pass a page range; call wps_pdfinfo first if the page count is unknown.",
-			"Use aiFix=true when page orientation or scan quality may be bad (sideways certificates, tilted scans).",
-			"Never replace this tool with rendering PDF pages to images and inserting them into Word — that yields copy-proof image-only docx.",
+			"未知 PDF 先 wps(action:\"pdfinfo\")，再决定 pdf2word 是否 scanned 与 range。",
+			"图片/证书变可编辑 Word：wps(action:\"photo2pdf\") → wps(action:\"pdf2word\", scanned=true, range=\"1\")，绝不要把页面渲染成图片插进 Word 冒充。",
 		],
 		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			output: Type.Optional(Type.String({ description: "Output .docx path (default: <name>_WPS转换.docx next to input)" })),
-			scanned: Type.Optional(Type.Boolean({ description: "true = WPS OCR mode for scanned/image PDFs (requires range)" })),
-			range: Type.Optional(Type.String({ description: "Page range like '1-2' or '1' (required when scanned=true)" })),
-			aiFix: Type.Optional(Type.Boolean({ description: "true = AI layout/orientation fix" })),
-			overwrite: Type.Optional(Type.Boolean({ description: "true = overwrite existing output" })),
-			timeoutSec: Type.Optional(Type.Number({ description: `CLI timeout seconds (default ${DEFAULT_CLI_TIMEOUT_SEC})` })),
+			action: StringEnum(WPS_ACTIONS, {
+				description:
+					"pdfinfo|pdf2word|to_pdf|pdfcompress|pdfwatermark|photo2pdf|pdf2imgpdf|pdf2photo|pdf2md",
+			}),
+			file: Type.Optional(
+				Type.String({ description: "输入文件路径（PDF/Office/TXT；除 photo2pdf 外的 action 都用它）" }),
+			),
+			image: Type.Optional(Type.String({ description: "图片路径（photo2pdf 用）" })),
+			output: Type.Optional(Type.String({ description: "输出文件路径（省略时按 action 用默认命名）" })),
+			outputDir: Type.Optional(Type.String({ description: "输出目录（pdf2photo 用，默认 <名>_pages/，自动创建）" })),
+			text: Type.Optional(Type.String({ description: "水印文字（pdfwatermark 必填）" })),
+			scanned: Type.Optional(Type.Boolean({ description: "true=OCR 模式（扫描件/图片 PDF，必须配 range）" })),
+			range: Type.Optional(Type.String({ description: "页码范围，如 \"1-2\"（scanned 时必填）" })),
+			aiFix: Type.Optional(Type.Boolean({ description: "true=AI 纠正版式/方向" })),
+			overwrite: Type.Optional(Type.Boolean({ description: "true=覆盖已有输出" })),
+			quality: Type.Optional(StringEnum(["low", "medium", "high"] as const, { description: "压缩档位，默认 medium" })),
+			opacity: Type.Optional(Type.Number({ description: "水印不透明度 0-100，默认 50" })),
+			rotateAngle: Type.Optional(Type.Number({ description: "水印旋转角度，默认 45" })),
+			suffix: Type.Optional(StringEnum(["png", "jpg"] as const, { description: "图片格式，默认 png" })),
+			imageQuality: Type.Optional(StringEnum(["low", "medium", "high"] as const, { description: "画质，默认 high" })),
+			timeoutSec: Type.Optional(Type.Number({ description: `CLI 超时秒数，默认 ${DEFAULT_CLI_TIMEOUT_SEC}` })),
 		}),
-		async execute(_id, params, signal) {
-			if (params.scanned && !params.range?.trim()) {
-				return toolResult(
-					"scanned=true 必须显式指定页码范围（range，如 '1-2'）。页数未知时先用 wps_pdfinfo 查看。",
-					{ ok: false, error: "missing-range" },
-				);
-			}
-			const out = ensureParent(params.output ?? path.join(path.dirname(params.file), `${path.basename(params.file, path.extname(params.file))}_WPS转换.docx`));
-			const args = [
-				"pdf2word",
-				params.file,
-				"--output",
-				out,
-				...(params.scanned ? ["--scanned", "true"] : []),
-				...(params.range?.trim() ? ["--range", params.range.trim()] : []),
-				...boolFlag(params.aiFix, "--ai-fix"),
-			];
-			const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
-			return toolResult(
-				res.ok
-					? `OK: ${out}\n${typeof res.raw === "string" ? res.raw : JSON.stringify(res.raw, null, 2)}\n提示：OCR 可能识别错相近汉字/数字/编号，正式使用前请人工核对关键字段。`
-					: `wps_pdf2word failed: ${res.raw}`,
-				{ file: params.file, output: out, scanned: !!params.scanned, ok: res.ok },
-			);
-		},
-	});
 
-	// ── office/txt → pdf ─────────────────────────────────────────────────────
-	const TO_PDF: Array<{ exts: string[]; cmd: string }> = [
-		{ exts: [".doc", ".docx", ".wps"], cmd: "word2pdf" },
-		{ exts: [".xls", ".xlsx", ".et"], cmd: "excel2pdf" },
-		{ exts: [".ppt", ".pptx", ".dps"], cmd: "ppt2pdf" },
-		{ exts: [".txt"], cmd: "txt2pdf" },
-	];
-	pi.registerTool({
-		name: "wps_to_pdf",
-		label: "WPS Office→PDF",
-		description:
-			"Convert Word/Excel/PPT/TXT to PDF with WPS CLI (subcommand auto-selected by file extension: word2pdf/excel2pdf/ppt2pdf/txt2pdf).",
-		promptSnippet: "Convert Word/Excel/PPT/TXT to PDF via WPS CLI",
-		promptGuidelines: ["Use wps_to_pdf for final-deliverable PDF conversion; WPS keeps layout fidelity better than generic converters."],
-		parameters: Type.Object({
-			file: Type.String({ description: "Input .doc/.docx/.wps/.xls/.xlsx/.et/.ppt/.pptx/.dps/.txt path" }),
-			output: Type.Optional(Type.String({ description: "Output .pdf path (default: same folder, same name, .pdf)" })),
-			timeoutSec: Type.Optional(Type.Number({ description: `CLI timeout seconds (default ${DEFAULT_CLI_TIMEOUT_SEC})` })),
-		}),
 		async execute(_id, params, signal) {
-			const ext = path.extname(params.file).toLowerCase();
-			const hit = TO_PDF.find((t) => t.exts.includes(ext));
-			if (!hit) {
-				return toolResult(`不支持的格式 ${ext || "(无扩展名)"}；支持：${TO_PDF.flatMap((t) => t.exts).join(", ")}`, {
-					ok: false,
-					error: "unsupported-ext",
-				});
-			}
-			const out = ensureParent(defaultOutput(params.file, ".pdf"));
-			const res = await runWps([hit.cmd, params.file, "--output", params.output ?? out], { timeoutSec: params.timeoutSec, signal });
-			return toolResult(
-				res.ok ? `OK: ${params.output ?? out}` : `wps_to_pdf(${hit.cmd}) failed: ${res.raw}`,
-				{ file: params.file, output: params.output ?? out, command: hit.cmd, ok: res.ok },
-			);
-		},
-	});
+			const action = params.action as WpsAction;
+			const file = params.file ?? "";
+			const image = params.image ?? "";
 
-	// ── pdfcompress ──────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdfcompress",
-		label: "WPS PDF 压缩",
-		description: "Compress a PDF with WPS CLI (--press-quality low|medium|high).",
-		promptSnippet: "Compress a PDF via WPS CLI",
-		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			output: Type.Optional(Type.String({ description: "Output PDF path (default: <name>_压缩.pdf)" })),
-			quality: Type.Optional(StringEnum(["low", "medium", "high"] as const, { description: "press-quality (default medium)" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const out = ensureParent(params.output ?? defaultOutput(params.file, "_压缩.pdf"));
-			const res = await runWps(["pdfcompress", params.file, "--output", out, "--press-quality", params.quality ?? "medium"], { timeoutSec: params.timeoutSec, signal });
-			return toolResult(res.ok ? `OK: ${out}` : `wps_pdfcompress failed: ${res.raw}`, { file: params.file, output: out, ok: res.ok });
-		},
-	});
+			switch (action) {
+				// ── pdfinfo ────────────────────────────────────────────────────────
+				case "pdfinfo": {
+					if (!file) return toolResult("pdfinfo 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					const res = await runWps(["pdfinfo", file], { signal });
+					const text = res.ok
+						? `pdfinfo ok: ${file}\n${typeof res.raw === "string" ? res.raw : JSON.stringify(res.raw, null, 2)}`
+						: `pdfinfo failed: ${res.raw}`;
+					return toolResult(text, { action, file, ok: res.ok });
+				}
 
-	// ── pdfwatermark ─────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdfwatermark",
-		label: "WPS PDF 加水印",
-		description: "Add a text watermark to a PDF with WPS CLI.",
-		promptSnippet: "Add text watermark to a PDF via WPS CLI",
-		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			text: Type.String({ description: "Watermark text" }),
-			output: Type.Optional(Type.String({ description: "Output PDF path (default: <name>_水印.pdf)" })),
-			opacity: Type.Optional(Type.Number({ description: "Opacity 0-100 (default 50)" })),
-			rotateAngle: Type.Optional(Type.Number({ description: "Rotation angle degrees (default 45)" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const out = ensureParent(params.output ?? defaultOutput(params.file, "_水印.pdf"));
-			const args = [
-				"pdfwatermark",
-				params.file,
-				"--output",
-				out,
-				"--text",
-				params.text,
-				"--opacity",
-				String(params.opacity ?? 50),
-				"--rotate-angle",
-				String(params.rotateAngle ?? 45),
-			];
-			const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
-			return toolResult(res.ok ? `OK: ${out}` : `wps_pdfwatermark failed: ${res.raw}`, { file: params.file, output: out, ok: res.ok });
-		},
-	});
+				// ── pdf2word ───────────────────────────────────────────────────────
+				case "pdf2word": {
+					if (!file) return toolResult("pdf2word 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					if (params.scanned && !params.range?.trim()) {
+						return toolResult(
+							"scanned=true 必须显式指定页码范围（range，如 '1-2'）。页数未知时先 wps(action:\"pdfinfo\") 查看。",
+							{ ok: false, error: "missing-range" },
+						);
+					}
+					const out = ensureParent(params.output ?? path.join(path.dirname(file), `${path.basename(file, path.extname(file))}_WPS转换.docx`));
+					const args = [
+						"pdf2word",
+						file,
+						"--output",
+						out,
+						...(params.scanned ? ["--scanned", "true"] : []),
+						...(params.range?.trim() ? ["--range", params.range.trim()] : []),
+						...boolFlag(params.aiFix, "--ai-fix"),
+					];
+					const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
+					return toolResult(
+						res.ok
+							? `OK: ${out}\n${typeof res.raw === "string" ? res.raw : JSON.stringify(res.raw, null, 2)}\n提示：OCR 可能识别错相近汉字/数字/编号，正式使用前请人工核对关键字段。`
+							: `pdf2word failed: ${res.raw}`,
+						{ action, file, output: out, scanned: !!params.scanned, ok: res.ok },
+					);
+				}
 
-	// ── photo2pdf ────────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_photo2pdf",
-		label: "WPS 图片转PDF",
-		description:
-			"Convert an image to PDF with WPS CLI. Also the first step of the image→editable-Word pipeline: photo2pdf then wps_pdf2word(scanned=true).",
-		promptSnippet: "Convert image to PDF via WPS CLI (step 1 of image→Word OCR pipeline)",
-		promptGuidelines: [
-			"To turn a photo/certificate INTO an editable Word: wps_photo2pdf first, then wps_pdf2word with scanned=true and range='1'.",
-		],
-		parameters: Type.Object({
-			image: Type.String({ description: "Image path (jpg/png/bmp/...)" }),
-			output: Type.Optional(Type.String({ description: "Output PDF path (default: <name>.pdf next to image)" })),
-			overwrite: Type.Optional(Type.Boolean({ description: "true = overwrite existing output" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const out = ensureParent(params.output ?? defaultOutput(params.image, ".pdf"));
-			const res = await runWps(["photo2pdf", params.image, "--output", out, ...boolFlag(params.overwrite, "--overwrite")], {
-				timeoutSec: params.timeoutSec,
-				signal,
-			});
-			return toolResult(
-				res.ok ? `OK: ${out}\n如需可编辑 Word：再用 wps_pdf2word(file="${out}", scanned=true, range="1")` : `wps_photo2pdf failed: ${res.raw}`,
-				{ image: params.image, output: out, ok: res.ok },
-			);
-		},
-	});
+				// ── to_pdf ─────────────────────────────────────────────────────────
+				case "to_pdf": {
+					if (!file) return toolResult("to_pdf 需要 file（.doc/.docx/.wps/.xls/.xlsx/.et/.ppt/.pptx/.dps/.txt）", { ok: false, error: "missing-file" });
+					const ext = path.extname(file).toLowerCase();
+					const hit = TO_PDF.find((t) => t.exts.includes(ext));
+					if (!hit) {
+						return toolResult(`不支持的格式 ${ext || "(无扩展名)"}；支持：${TO_PDF.flatMap((t) => t.exts).join(", ")}`, {
+							ok: false,
+							error: "unsupported-ext",
+						});
+					}
+					const out = ensureParent(params.output ?? defaultOutput(file, ".pdf"));
+					const res = await runWps([hit.cmd, file, "--output", out], { timeoutSec: params.timeoutSec, signal });
+					return toolResult(
+						res.ok ? `OK: ${out}` : `to_pdf(${hit.cmd}) failed: ${res.raw}`,
+						{ action, file, output: out, command: hit.cmd, ok: res.ok },
+					);
+				}
 
-	// ── pdf2imgpdf ───────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdf2imgpdf",
-		label: "WPS PDF转图片版PDF",
-		description: "Convert a PDF into an image-only PDF with WPS CLI (no selectable text).",
-		promptSnippet: "Convert PDF to image-only PDF via WPS CLI",
-		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			output: Type.Optional(Type.String({ description: "Output PDF path (default: <name>_图片版.pdf)" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const out = ensureParent(params.output ?? defaultOutput(params.file, "_图片版.pdf"));
-			const res = await runWps(["pdf2imgpdf", params.file, "--output", out], { timeoutSec: params.timeoutSec, signal });
-			return toolResult(res.ok ? `OK: ${out}` : `wps_pdf2imgpdf failed: ${res.raw}`, { file: params.file, output: out, ok: res.ok });
-		},
-	});
+				// ── pdfcompress ────────────────────────────────────────────────────
+				case "pdfcompress": {
+					if (!file) return toolResult("pdfcompress 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					const out = ensureParent(params.output ?? defaultOutput(file, "_压缩.pdf"));
+					const res = await runWps(["pdfcompress", file, "--output", out, "--press-quality", params.quality ?? "medium"], { timeoutSec: params.timeoutSec, signal });
+					return toolResult(res.ok ? `OK: ${out}` : `pdfcompress failed: ${res.raw}`, { action, file, output: out, ok: res.ok });
+				}
 
-	// ── pdf2photo ────────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdf2photo",
-		label: "WPS PDF页面转图片",
-		description: "Render PDF pages to image files with WPS CLI. Output directory is created automatically.",
-		promptSnippet: "Render PDF pages to images via WPS CLI",
-		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			outputDir: Type.Optional(Type.String({ description: "Output directory (default: <name>_pages/ next to input)" })),
-			range: Type.Optional(Type.String({ description: "Page range like '1-3' (default: all pages)" })),
-			suffix: Type.Optional(StringEnum(["png", "jpg"] as const, { description: "Image format (default png)" })),
-			imageQuality: Type.Optional(StringEnum(["low", "medium", "high"] as const, { description: "Image quality (default high)" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const dir = params.outputDir ?? path.join(path.dirname(params.file), `${path.basename(params.file, path.extname(params.file))}_pages`);
-			mkdirSync(dir, { recursive: true });
-			const args = [
-				"pdf2photo",
-				params.file,
-				"--output",
-				dir + path.sep,
-				"--suffix",
-				params.suffix ?? "png",
-				"--image-quality",
-				params.imageQuality ?? "high",
-				...(params.range?.trim() ? ["--range", params.range.trim()] : []),
-			];
-			const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
-			let files: string[] = [];
-			if (res.ok) {
-				try {
-					files = readdirSync(dir).map((f) => path.join(dir, f));
-				} catch {
-					// ignore
+				// ── pdfwatermark ───────────────────────────────────────────────────
+				case "pdfwatermark": {
+					if (!file) return toolResult("pdfwatermark 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					if (!params.text?.trim()) return toolResult("pdfwatermark 需要 text（水印文字）", { ok: false, error: "missing-text" });
+					const out = ensureParent(params.output ?? defaultOutput(file, "_水印.pdf"));
+					const args = [
+						"pdfwatermark",
+						file,
+						"--output",
+						out,
+						"--text",
+						params.text,
+						"--opacity",
+						String(params.opacity ?? 50),
+						"--rotate-angle",
+						String(params.rotateAngle ?? 45),
+					];
+					const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
+					return toolResult(res.ok ? `OK: ${out}` : `pdfwatermark failed: ${res.raw}`, { action, file, output: out, ok: res.ok });
+				}
+
+				// ── photo2pdf ──────────────────────────────────────────────────────
+				case "photo2pdf": {
+					if (!image) return toolResult("photo2pdf 需要 image（图片路径）", { ok: false, error: "missing-image" });
+					const out = ensureParent(params.output ?? defaultOutput(image, ".pdf"));
+					const res = await runWps(["photo2pdf", image, "--output", out, ...boolFlag(params.overwrite, "--overwrite")], {
+						timeoutSec: params.timeoutSec,
+						signal,
+					});
+					return toolResult(
+						res.ok
+							? `OK: ${out}\n如需可编辑 Word：再调 wps(action:"pdf2word", file="${out}", scanned=true, range="1")`
+							: `photo2pdf failed: ${res.raw}`,
+						{ action, image, output: out, ok: res.ok },
+					);
+				}
+
+				// ── pdf2imgpdf ─────────────────────────────────────────────────────
+				case "pdf2imgpdf": {
+					if (!file) return toolResult("pdf2imgpdf 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					const out = ensureParent(params.output ?? defaultOutput(file, "_图片版.pdf"));
+					const res = await runWps(["pdf2imgpdf", file, "--output", out], { timeoutSec: params.timeoutSec, signal });
+					return toolResult(res.ok ? `OK: ${out}` : `pdf2imgpdf failed: ${res.raw}`, { action, file, output: out, ok: res.ok });
+				}
+
+				// ── pdf2photo ──────────────────────────────────────────────────────
+				case "pdf2photo": {
+					if (!file) return toolResult("pdf2photo 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					const dir = params.outputDir ?? path.join(path.dirname(file), `${path.basename(file, path.extname(file))}_pages`);
+					mkdirSync(dir, { recursive: true });
+					const args = [
+						"pdf2photo",
+						file,
+						"--output",
+						dir + path.sep,
+						"--suffix",
+						params.suffix ?? "png",
+						"--image-quality",
+						params.imageQuality ?? "high",
+						...(params.range?.trim() ? ["--range", params.range.trim()] : []),
+					];
+					const res = await runWps(args, { timeoutSec: params.timeoutSec, signal });
+					let files: string[] = [];
+					if (res.ok) {
+						try {
+							files = readdirSync(dir).map((f) => path.join(dir, f));
+						} catch {
+							// ignore
+						}
+					}
+					return toolResult(
+						res.ok
+							? `OK: ${dir}${files.length ? `\n生成 ${files.length} 个文件：\n${files.slice(0, 50).join("\n")}` : ""}`
+							: `pdf2photo failed: ${res.raw}`,
+						{ action, file, outputDir: dir, files, ok: res.ok },
+					);
+				}
+
+				// ── pdf2md ─────────────────────────────────────────────────────────
+				case "pdf2md": {
+					if (!file) return toolResult("pdf2md 需要 file（PDF 路径）", { ok: false, error: "missing-file" });
+					const out = ensureParent(params.output ?? defaultOutput(file, ".md"));
+					const res = await runWps(["pdf2md", file, "--output", out], { timeoutSec: params.timeoutSec, signal });
+					return toolResult(res.ok ? `OK: ${out}` : `pdf2md failed: ${res.raw}`, { action, file, output: out, ok: res.ok });
 				}
 			}
-			return toolResult(
-				res.ok
-					? `OK: ${dir}${files.length ? `\n生成 ${files.length} 个文件：\n${files.slice(0, 50).join("\n")}` : ""}`
-					: `wps_pdf2photo failed: ${res.raw}`,
-				{ file: params.file, outputDir: dir, files, ok: res.ok },
-			);
 		},
 	});
-
-	// ── pdf2md ───────────────────────────────────────────────────────────────
-	pi.registerTool({
-		name: "wps_pdf2md",
-		label: "WPS PDF转Markdown",
-		description: "Convert a PDF to Markdown with WPS CLI.",
-		promptSnippet: "Convert PDF to Markdown via WPS CLI",
-		parameters: Type.Object({
-			file: Type.String({ description: "Input PDF path" }),
-			output: Type.Optional(Type.String({ description: "Output .md path (default: same name, .md)" })),
-			timeoutSec: Type.Optional(Type.Number()),
-		}),
-		async execute(_id, params, signal) {
-			const out = ensureParent(params.output ?? defaultOutput(params.file, ".md"));
-			const res = await runWps(["pdf2md", params.file, "--output", out], { timeoutSec: params.timeoutSec, signal });
-			return toolResult(res.ok ? `OK: ${out}` : `wps_pdf2md failed: ${res.raw}`, { file: params.file, output: out, ok: res.ok });
-		},
-	});
-
 }

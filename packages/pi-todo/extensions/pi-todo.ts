@@ -34,38 +34,41 @@ const TodoParamsSchema = Type.Object({
     Type.Literal("delete"),
     Type.Literal("clear"),
   ]),
-  subject: Type.Optional(Type.String({ description: "Task subject (required for create)" })),
+  subject: Type.Optional(Type.String({ description: "任务标题（create 必填）" })),
   tasks: Type.Optional(
     Type.Array(
       Type.Object({
-        subject: Type.String({ description: "Task subject (required)" }),
-        description: Type.Optional(Type.String({ description: "Optional details describing the task" })),
+        subject: Type.String({ description: "任务标题" }),
+        description: Type.Optional(Type.String({ description: "可选细节" })),
         activeForm: Type.Optional(
-          Type.String({ description: "Present-continuous label shown while the task is in_progress" }),
+          Type.String({ description: "进行中显示名（present-continuous）" }),
         ),
         status: Type.Optional(
           Type.Union(
             [Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
-            { description: "Initial status, default pending" },
+            { description: "初始状态，默认 pending" },
           ),
         ),
       }),
-      { description: "Full task list written by one plan call (required for plan; empty array clears the list)" },
+      {
+        description:
+          "一次写全的任务表（plan 必填；空数组=清空）。改计划时整表重发并保留各任务当前 status，别逐条 update。",
+      },
     ),
   ),
-  description: Type.Optional(Type.String({ description: "Optional details describing the task" })),
+  description: Type.Optional(Type.String({ description: "可选细节" })),
   activeForm: Type.Optional(
-    Type.String({ description: "Present-continuous label shown while the task is in_progress" }),
+    Type.String({ description: "进行中显示名（present-continuous）" }),
   ),
   status: Type.Optional(
     Type.Union(
       [Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
-      { description: "Task status for update" },
+      { description: "任务状态（update 用）" },
     ),
   ),
-  id: Type.Optional(Type.Number({ description: "Task id (required for update, get, or delete)" })),
+  id: Type.Optional(Type.Number({ description: "任务 id（update/get/delete 必填）" })),
   includeDeleted: Type.Optional(
-    Type.Boolean({ description: "For list, include deleted task records (default false)" }),
+    Type.Boolean({ description: "含已删除记录（默认 false）" }),
   ),
 });
 
@@ -184,16 +187,11 @@ export default function (pi: ExtensionAPI) {
     name: TODO_TOOL_NAME,
     label: "Todo",
     description:
-      "Manage the agent's task list for multi-step work (3+ distinct steps). Actions: plan (write the whole list in one call — preferred way to start), create, update, list, get, delete, clear. The task list is persisted in the session and shown by PiDeck.",
-    promptSnippet: "Track multi-step work with the todo task list",
+      "维护多步任务清单（≥3 步）。plan 一次写完整表（推荐起点），另有 create/update/list/get/delete/clear；清单存进会话并由 PiDeck 显示。",
+    promptSnippet: "多步任务清单（plan/update/list）",
     promptGuidelines: [
-      "Use todo for work with 3 or more distinct steps; for one- or two-step requests, skip todo and just do the work.",
-      "Start multi-step work by calling plan once with the full list: one task per concrete, verifiable step, typically 3-7 tasks. Never collapse the work into a single umbrella task.",
-      "When revising the plan, resend the whole list with plan (keeping each task's current status); use update/delete only for small in-flight changes.",
-      "Mark the task currently being worked on as in_progress, and mark it completed immediately after the work and its verification finish.",
-      "At most one task should be in_progress at any time; do not mark incomplete or failing work as completed.",
-      "Use todo list to refresh the current task list when you are unsure of task ids or status.",
-      "Use todo update with id and status to change a task; use activeForm to describe the current activity while in_progress.",
+      "≥3 步的活开工时用 todo plan 一次写全表（每步具体可验证，通常 3-7 条，别合成一个大任务）；1-2 步的活不用 todo。",
+      "同一时刻只留一个 in_progress，做完且验证通过后立刻标 completed；未完成或失败的不要标完成。",
     ],
     parameters: TodoParamsSchema,
     // Mutations must not run concurrently: each call consumes the previous

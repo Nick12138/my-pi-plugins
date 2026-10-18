@@ -24,8 +24,7 @@ const CONFIG_FORM_HINT =
 
 const ParamsSchema = Type.Object({
   action: Type.Union([Type.Literal("test"), Type.Literal("sync_now"), Type.Literal("status")], {
-    description:
-      "test = 用当前配置测一次 R2 连通性；sync_now = 立即双向同步；status = 查看配置与最近同步状态",
+    description: "test=测连通；sync_now=立即同步；status=看状态",
   }),
 });
 
@@ -52,10 +51,9 @@ export default function (pi: ExtensionAPI) {
     name: SYNC_TOOL_NAME,
     label: "报销同步",
     description:
-      "pi-reimburse 的 R2 云同步控制：test 用当前配置测连通性；sync_now 立即双向同步（LWW 合并+删除墓碑传播+图片补齐/上传）；status 查看配置与最近同步状态。R2 密钥（accountId/accessKeyId/secretAccessKey/bucket）与 autoSync 在插件设置的配置表单里管理，不在对话中传递。同步策略与备忘录一致：逐条最后写入者胜，删除靠 30 天墓碑传播。",
-    promptSnippet: "Test and run pi-reimburse cloud sync (Cloudflare R2)",
+      "报销数据的 R2 云同步：test 测连通；sync_now 立即双向同步；status 看配置与状态。密钥与 autoSync 在插件配置表单里填，不要向用户索要或复述密钥。",
+    promptSnippet: "报销云同步：test / sync_now / status",
     promptGuidelines: [
-      "密钥与 autoSync 属于插件配置（设置 → 报销管家的配置表单），不要向用户索要或复述密钥；status/test 显示未配置时引导用户去配置表单里填写。",
       "sync_now 失败时把错误原样告诉用户（通常是密钥错误或网络问题），不要重试超过一次。",
     ],
     parameters: ParamsSchema,

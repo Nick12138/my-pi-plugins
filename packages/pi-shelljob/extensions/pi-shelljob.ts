@@ -362,17 +362,11 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "shelljob",
 		label: "后台 Shell",
-		description: [
-			"后台 shell 任务：提交后立即返回、不阻塞会话，完成/失败自动通知主 agent。",
-			"适用长任务：构建打包、依赖安装、dev server/监听进程、批量转换、大文件下载、全量测试等。短任务（1-2 分钟内）请直接用同步 bash。",
-			"操作：submit（默认，command 提交）/ list（列表）/ log（看输出尾部）/ kill（终止，杀整棵进程树）。",
-			"任务落盘 ~/.pi/shelljob/，跨会话可查；宿主退出任务继续跑。",
-		].join("\n"),
-		promptSnippet: "后台 shell 任务：长任务提交后台立即返回，完成自动通知；短任务仍用同步 bash",
+		description:
+			"后台 shell：提交即返回，完成/失败自动通知。适用构建、装依赖、dev server、批量转换、大下载、全量测试；1-2 分钟的短命令直接用 bash。操作 submit/list/log/kill（杀整棵进程树），任务落盘 ~/.pi/shelljob/ 跨会话可查。",
+		promptSnippet: "后台跑长命令（构建/装依赖/dev server）",
 		promptGuidelines: [
-			"先估时长再选工具：1-2 分钟内能结束的任务（查文件、git 操作、装个小包、单测）直接用同步 bash，不要提交后台。",
-			"可能跑很久的任务（构建打包、完整依赖安装、dev server/文件监听、批量转换、大下载、全量测试）用 shelljob 提交后台，不阻塞会话。",
-			"判断不了时长时宁可用后台：提交后立即返回，可继续其他工作，完成自动通知；需要结果才能继续时才用 shell_wait 阻塞等待。",
+			"1-2 分钟内能结束的命令用同步 bash；可能跑很久或时长不确定的用 shelljob 后台。",
 			"shell_wait 超时或被中止后任务仍在后台继续：稍后再等，或 shelljob(action:\"log\") 查看进度。",
 		],
 		parameters: ShelljobParams,
@@ -395,22 +389,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "shell_wait",
 		label: "Shell Wait",
-		description: [
-			"阻塞等待后台 shell 任务完成：",
-			"- shell_wait({jobId})：等单个任务",
-			"- shell_wait({all:true})：等本会话所有运行中的任务",
-			"- timeoutMs：超时后返回当前进度（默认 30 分钟）；任务在后台继续不受影响",
-			"返回每个任务的最终状态与输出预览。",
-		].join("\n"),
-		promptSnippet: "阻塞等待后台 shell 任务结束；超时返回进度，任务继续不受影响",
-		promptGuidelines: [
-			"只等真正需要结果才能继续的任务；能并行推进的工作先做，等自动通知即可。",
-			"超时或中止后任务仍在后台继续：稍后可再 shell_wait，或 shelljob(action:\"log\") 查看进度。",
-		],
+		description:
+			"等待后台任务结束：jobId 等单个、all 等本会话全部；超时返回进度，任务在后台继续不受影响。",
+		promptSnippet: "等待后台任务结束",
+		promptGuidelines: [],
 		parameters: Type.Object({
 			jobId: Type.Optional(Type.String({ description: "目标任务 id（缺省且 all=false 时等本会话全部）" })),
 			all: Type.Optional(Type.Boolean({ description: "等本会话所有运行中的任务" })),
-			timeoutMs: Type.Optional(Type.Number({ description: "超时（毫秒），默认 1800000（30 分钟）" })),
+			timeoutMs: Type.Optional(Type.Number({ description: "超时（毫秒），默认 30 分钟" })),
 		}),
 		async execute(_id, params, signal) {
 			const timeoutMs = params.timeoutMs ?? DEFAULT_WAIT_MS;

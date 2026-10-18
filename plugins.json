@@ -479,7 +479,7 @@
     {
       "id": "pi-anytomd",
       "name": "AnyToMD",
-      "description": "本地任意文档转 Markdown（同步转换 + 跨会话异步任务队列）：覆盖 PDF（文字/扫描件 OCR）、Office（docx/xlsx/pptx/doc/xls/ppt/wps/et/dps）、OpenDocument（odt）、EPUB、RTF、CSV、图片多图合并，支持加密文档密码解密、百度 OCR 质量降级门。包含同步工具 anytomd 与异步队列工具 anyjob。",
+      "description": "本地任意文档转 Markdown（单工具按 action 分发：convert 同步转换 + submit/status/wait/cancel/list 异步任务队列 + setup 依赖体检）：覆盖 PDF（文字/扫描件 OCR）、Office（docx/xlsx/pptx/doc/xls/ppt/wps/et/dps）、OpenDocument（odt）、EPUB、RTF、CSV、图片多图合并，支持加密文档密码解密、百度 OCR 质量降级门。",
       "icon": "📄",
       "version": "0.2.0",
       "author": "Nick12138",

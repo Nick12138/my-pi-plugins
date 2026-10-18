@@ -14,38 +14,35 @@ import {
 const OptionSchema = Type.Object({
   label: Type.String({
     maxLength: MAX_LABEL_LENGTH,
-    description: `MAX ${MAX_LABEL_LENGTH} CHARACTERS. Concise (1-5 words) display text for this choice.`,
+    description: `≤${MAX_LABEL_LENGTH} 字符的选项标题（1-5 个词）。`,
   }),
   description: Type.String({
-    description:
-      "One-line explanation of what this option means or its trade-offs. Shown under the label.",
+    description: "一句话说明该选项含义/取舍。",
   }),
   preview: Type.Optional(
     Type.String({
-      description:
-        "Optional markdown preview for this option: mockups, ASCII layouts, code snippets, diagrams. Rendered in a monospace panel beside the options. Prefer fenced code blocks for ASCII art so alignment is preserved.",
+      description: "可选：markdown 预览（线框、ASCII 图、代码），并排等宽面板显示。",
     }),
   ),
 });
 
 const QuestionSchema = Type.Object({
   question: Type.String({
-    description:
-      "The complete question to ask. Clear, specific, ending with a question mark. If multiSelect is true, phrase it accordingly.",
+    description: "完整问句，以问号结尾；多选时措辞相应调整。",
   }),
   header: Type.String({
     maxLength: MAX_HEADER_LENGTH,
-    description: `MAX ${MAX_HEADER_LENGTH} CHARACTERS. Very short chip shown next to the question, e.g. "Auth method", "Layout".`,
+    description: `≤${MAX_HEADER_LENGTH} 字符的短标签（如「方案」「范围」）。`,
   }),
   options: Type.Array(OptionSchema, {
     minItems: MIN_OPTIONS,
     maxItems: MAX_OPTIONS,
-    description: `The available choices (${MIN_OPTIONS}-${MAX_OPTIONS}). Mutually exclusive unless multiSelect is set. A "${CUSTOM_ROW_LABEL}" row is appended automatically — do NOT author it.`,
+    description: `选项 ${MIN_OPTIONS}-${MAX_OPTIONS} 个；未开多选时互斥。「${CUSTOM_ROW_LABEL}」行自动追加，不要自己写。`,
   }),
   multiSelect: Type.Optional(
     Type.Boolean({
       default: false,
-      description: "Allow selecting several options instead of one.",
+      description: "允许多选。",
     }),
   ),
 });
@@ -54,21 +51,13 @@ export const QuestionParamsSchema = Type.Object({
   questions: Type.Array(QuestionSchema, {
     minItems: 1,
     maxItems: MAX_QUESTIONS,
-    description: `Questions to ask the user (1-${MAX_QUESTIONS}).`,
+    description: `要问的问题（1-${MAX_QUESTIONS}）。`,
   }),
 });
 
 export type AskUserQuestion = Static<typeof QuestionSchema>;
 export type AskUserParams = Static<typeof QuestionParamsSchema>;
 
-/** 模型可见的工具说明：保留 rpiv 的关键引导，但更短。 */
-export const TOOL_DESCRIPTION = [
-  "Ask the user a structured question when you would otherwise have to guess.",
-  "",
-  `- Provide 1-${MAX_QUESTIONS} questions, each with ${MIN_OPTIONS}-${MAX_OPTIONS} options.`,
-  "- Each option needs a concise label (1-5 words) and a one-line description.",
-  "- Use multiSelect: true when several answers may apply.",
-  "- Use options[].preview for mockups, ASCII layouts, code snippets or diagrams that help compare choices. Prefer fenced code blocks for ASCII art.",
-  `- A "${CUSTOM_ROW_LABEL}" row is appended to every question automatically; do NOT author "Other" or "${CUSTOM_ROW_LABEL}" yourself.`,
-  "- Do not use this tool to ask for confirmation of an action you are about to take; just take it.",
-].join("\n");
+/** 模型可见的工具说明：只讲何时用/何时别用。 */
+export const TOOL_DESCRIPTION =
+  "需要用户在几个方案里做选择、否则只能猜时，一次性问结构化问题（1-4 题，每题 2-4 个选项）。不要用它确认你马上要执行的动作。";

@@ -65,53 +65,44 @@ function formatRecallFailureText(error: string): string {
 
 const DispatchParams = Type.Object({
 	cwd: Type.String({
-		description:
-			"目标工作区的绝对路径（用户提到哪个项目就填哪个项目的 cwd；必须是 <pixie-context> 已知工作区列表中的路径或用户当前打开的工作区）。",
+		description: "目标工作区绝对路径（须在 <pixie-context> 已知工作区列表或用户当前工作区内）。",
 	}),
 	task: Type.String({
-		description:
-			"委派提示词：包含任务目标、必要的上下文、完成后的回调要求（调用 pixie_report 报告「已完成 + 结果摘要」；需要用户决策时调用 pixie_ask）。若任务源自某条备忘录，还应要求被委派 Agent 完成后用 piabyss_memo complete 回填。",
+		description: "委派提示词：目标+必要上下文+完成后用 pixie_report 回调（需用户决定用 pixie_ask）。源自便签的任务要求完成后用 piabyss_memo complete 回填。",
 	}),
 	taskName: Type.Optional(
 		Type.String({
-			description:
-				"任务名（几个词，≤20 字，如「门店数据对账」）：前端的委派列表只显示它 + 状态，不显示完整提示词。每派一条新任务都传——复用既有会话也算一条新任务。往进行中的任务追加消息不算新任务，用 pixie_interject（不带任务名）。省略则由 Host 截取任务前缀兜底。",
+			description: "任务名（≤20 字，UI 委派列表只显示它+状态）。每条新任务都传（复用会话也算新任务）；往进行中任务追加消息不算新任务，用 pixie_interject。",
 		}),
 	),
 	sessionName: Type.Optional(
 		Type.String({
-			description:
-				"会话名（几个词，≤20 字，如「门店数据整理」）：【本次会新开会话】时才传，成为新会话的名字兼前端委派列表的分组标题——即填了 newSession: true，或该工作区里还没有小精灵自己创建的会话。复用既有会话（包括用 sessionId 指定时）不要传，会话沿用原名。不确定会不会新开就照常传：Host 只在真正新建会话时采用它，复用既有会话时忽略。省略且确实新开会话时由 Host 截取任务前缀兜底（不会留下「新会话」这种无名字）。",
+			description: "会话名（≤20 字，兼前端分组标题）。仅本次会新开会话时传（newSession=true，或该工作区还没有小精灵自建会话）；复用既有会话别传；不确定就照常传，Host 只在真正新建时采用。",
 		}),
 	),
 	sessionId: Type.Optional(
 		Type.String({
-			description:
-				"⚠️ 仅在用户在对话中明确给出了会话 id 时才传（用户自己的会话不能被自动复用）。填了就以该会话为落点——哪怕它是用户在 UI 里创建的会话；找不到会直接报错，绝不会改落到别的会话上。",
+			description: "⚠️ 仅用户明确给出会话 id 时才传（用户自建会话不会被自动复用）；填了就以它为落点，找不到直接报错。",
 		}),
 	),
 	newSession: Type.Optional(
 		Type.Boolean({
-			description:
-				"true = 强制新开一个干净会话。默认 false：复用目标工作区里【小精灵自己创建的】既有会话（用户自己创建的会话永远不会被自动复用），没有可复用的就自动新开一个。查询/一次性任务建议传 true。",
+			description: "true=强制新开干净会话。默认复用目标工作区里小精灵自建的既有会话，没有才新开。查询/一次性任务建议 true。",
 		}),
 	),
 	batchId: Type.Optional(
 		Type.String({
-			description:
-				"批次标记：一次向多个工作区并行派发一组相关任务时，给同批任务填同一个自定义批次号（如 batch-20260101-a），回调与查岗会带出该标记便于聚合转述。单个任务省略。",
+			description: "批次标记：并行派发一组相关任务时同批填同一个自定义批次号，回调与查岗会带出便于聚合。单任务省略。",
 		}),
 	),
 	model: Type.Optional(
 		Type.String({
-			description:
-				"指定执行模型（provider/id，如 anthropic/claude-sonnet-4-5）。⚠️ 仅当用户在对话中明确指定了模型时才传此参数；用户没说就用默认（省略本参数，跟随目标会话当前模型）——未经用户明确授权不得主动更换模型。",
+			description: "⚠️ 仅用户明确指定模型时才传（provider/id）；没说就省略，跟随目标会话模型。",
 		}),
 	),
 	thinkingLevel: Type.Optional(
 		Type.String({
-			description:
-				"指定推理深度（off|minimal|low|medium|high|xhigh|max）。⚠️ 仅当用户在对话中明确指定了推理深度时才传；用户没说就省略（跟随会话默认）——未经用户明确授权不得主动更换。",
+			description: "⚠️ 仅用户明确指定推理深度时才传（off|minimal|low|medium|high|xhigh|max）；没说就省略。",
 		}),
 	),
 });
@@ -189,8 +180,8 @@ export function buildPixieDispatchTool(
 		name: PIXIE_DISPATCH_NAME,
 		label: "Pixie dispatch",
 		description:
-			"委派任务到某个工作区的正式会话执行（重活专用）。落点规则：默认复用该工作区里【小精灵自己创建的】会话，没有就新开一个；用户自己在 UI 里创建的会话不会被自动复用，除非用户在对话中明确给出该会话 id（那时用 sessionId 参数）。委派后立即返回受理结果；目标会话完成后会通过 pixie_report 回调，你收到回调后再向用户转述。每条新任务都用 taskName 起个短名，本次要新开会话时再用 sessionName 给会话起名——用户在界面上看的是这两个名字，不是完整提示词。",
-		promptSnippet: "Delegate a task to a workspace session and wait for its callback",
+			"把任务委派到某个工作区的正式会话执行（重活专用）。默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会自动复用，除非用户明确给出会话 id（sessionId）。委派后立即返回，目标会话完成后经 pixie_report 回调，你收到回调后再转述给用户。每条新任务都给 taskName 短名，新开会话再给 sessionName——UI 上显示的是这两个名字。",
+		promptSnippet: "委派任务到工作区会话（重活）",
 		parameters: DispatchParams,
 		async execute(_toolCallId, params: DispatchParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();

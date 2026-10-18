@@ -29,16 +29,14 @@ const ParamsSchema = Type.Object({
   files: Type.Array(
     Type.Object({
       path: Type.String({
-        description:
-          "Path of the delivered file, relative to the workspace root (e.g. `reports/spec.docx`). Never an absolute path and never a file:// URL.",
+        description: "相对工作区根的路径（如 reports/spec.docx），不要绝对路径或 file://。",
       }),
       label: Type.Optional(
-        Type.String({ description: "Optional short caption shown on the file chip." }),
+        Type.String({ description: "可选短标签。" }),
       ),
     }),
     {
-      description:
-        "The files this turn delivers to the user. Never include intermediate, scratch, cache or log files.",
+      description: "本轮交付的文件清单（≥1），只放真实交付物。",
       minItems: 1,
     },
   ),
@@ -46,12 +44,8 @@ const ParamsSchema = Type.Object({
 
 type PresentFilesParams = Static<typeof ParamsSchema>;
 
-const TOOL_DESCRIPTION = [
-  "Declare the files this turn delivers to the user so PiAbyss can render them as clickable chips under your final report.",
-  "Call it once, at the very end of the turn, just before your closing summary.",
-  "Only real deliverables belong here — a finished report, a generated document, a PDF or Word file you edited. Never declare intermediate, scratch, cache, temp or log files.",
-  "PDF and Office documents open with the system default app when clicked; markdown and code files open in the PiAbyss right dock preview.",
-].join(" ");
+const TOOL_DESCRIPTION =
+  "把本轮交付给用户的文件登记成 PiAbyss 报告下方的文件芯片（一轮一次，放在收尾前）。只登记真实交付物，不登记中间文件、临时文件或日志。PDF/Office 点击后用系统默认应用打开，md/代码在右侧预览打开。";
 
 export function buildPresentFilesTool(
   getCwd?: (ctx?: { sessionManager?: { getCwd(): string } }) => string | null,
@@ -60,8 +54,7 @@ export function buildPresentFilesTool(
     name: TOOL_NAME,
     label: "PiAbyss delivered files",
     description: TOOL_DESCRIPTION,
-    promptSnippet:
-      "Declare the files you deliver so PiAbyss shows them as chips under your final report",
+    promptSnippet: "登记本轮交付文件（PiAbyss 芯片）",
     parameters: ParamsSchema,
     async execute(_toolCallId, params: PresentFilesParams, _signal, _onUpdate, ctx) {
       try {

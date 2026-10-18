@@ -18,7 +18,7 @@ import { isProcessAlive } from "../src/runner.ts";
 import { loadRun, loadAllRuns, readResult, readStatus, writeStatus, writeTask } from "../src/store.ts";
 import { mergeWorktree, worktreeExists } from "../src/worktree.ts";
 import { startHttpServer } from "../src/http.ts";
-import { registerSupervisorTool, startSupervisorPolling } from "../src/supervisor-channel.ts";
+import { runSupervisorAction, startSupervisorPolling } from "../src/supervisor-channel.ts";
 import { channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson, type SteerRequest } from "../src/supervisor-protocol.ts";
 import { Notifier, enqueueUnnotified, type NotifyMessage } from "../src/notifier.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
@@ -50,10 +50,28 @@ let initialized = false;
 
 // ── 工具参数 schema ──────────────────────────────────────────
 
-const Action = StringEnum(["spawn", "list", "stop", "pause", "continue", "resume", "result", "merge", "steer"] as const, {
-	description: "操作类型，默认 spawn",
-	default: "spawn",
-});
+const Action = StringEnum(
+	[
+		"spawn",
+		"list",
+		"wait",
+		"stop",
+		"pause",
+		"continue",
+		"resume",
+		"result",
+		"merge",
+		"steer",
+		"supervisor_pending",
+		"supervisor_reply",
+		"supervisor_status",
+	] as const,
+	{
+		description:
+			"spawn=委托任务（默认）；list=列表；wait=阻塞等待 run 完成；stop/pause/continue/resume/result/merge/steer=控制；supervisor_pending/reply/status=子代理请求通道（回复子代理的待处理请求）",
+		default: "spawn",
+	},
+);
 
 const SpawnItem = Type.Object({
 	agent: Type.String({ description: "角色：scout / worker / reviewer" }),
@@ -65,20 +83,23 @@ const SpawnItem = Type.Object({
 
 const SubagentParams = Type.Object({
 	action: Type.Optional(Action),
-	runId: Type.Optional(Type.String({ description: "目标 run id（stop/pause/continue/resume/result/merge/steer 用）" })),
-	agent: Type.Optional(Type.String({ description: "角色（spawn 单任务用）" })),
-	task: Type.Optional(Type.String({ description: "任务（spawn 单任务用）" })),
+	runId: Type.Optional(Type.String({ description: "目标 run id（stop/pause/continue/resume/result/merge/steer/wait 用）" })),
+	all: Type.Optional(Type.Boolean({ description: "wait：等本会话所有运行中的 run（缺省且 runId 未填时同此）" })),
+	timeoutMs: Type.Optional(Type.Number({ description: "wait 超时（毫秒），默认 30 分钟；超时返回进度，run 在后台继续" })),
+	replyTo: Type.Optional(Type.String({ description: "supervisor_reply：要回复的请求 id（或前缀/agent 名）" })),
+	agent: Type.Optional(Type.String({ description: "角色（spawn 单任务）" })),
+	task: Type.Optional(Type.String({ description: "任务（spawn 单任务）" })),
 	title: Type.Optional(Type.String({ description: "会话标题" })),
 	model: Type.Optional(Type.String({ description: "模型覆盖" })),
 	thinking: Type.Optional(Type.String({ description: "thinking 级别覆盖" })),
 	cwd: Type.Optional(Type.String({ description: "子代理工作目录，默认主 agent 目录" })),
-	worktree: Type.Optional(Type.Boolean({ description: "在 git worktree 隔离目录运行（并行写文件安全），完成后用 merge 合并" })),
+	worktree: Type.Optional(Type.Boolean({ description: "git worktree 隔离（并行写文件安全），完成后 merge" })),
 	retry: Type.Optional(Type.Number({ description: "失败自动重试次数（0-3），默认取配置" })),
 	fallbackModels: Type.Optional(Type.Array(Type.String(), { description: "模型回退列表：主模型失败时依次尝试" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "运行总超时（毫秒），超时自动 kill" })),
-	turnBudget: Type.Optional(Type.Number({ description: "回合数上限，超出自动 stop；不传 = 不限回合，传了则最低 60（低于 60 会自动抬到 60）" })),
+	turnBudget: Type.Optional(Type.Number({ description: "回合数上限（最低 60），超出自动 stop" })),
 	toolTimeoutMs: Type.Optional(Type.Number({ description: "单工具调用超时（毫秒），0=不限制" })),
-	message: Type.Optional(Type.String({ description: "steer 时发送给运行中子代理的引导消息" })),
+	message: Type.Optional(Type.String({ description: "steer 的引导消息；supervisor_reply 的回复内容" })),
 	mode: Type.Optional(StringEnum(["steer", "follow_up", "auto"] as const, { description: "steer 投递模式：steer=中断当前执行投递；follow_up=回合边界投递；auto=自动", default: "steer" })),
 	tasks: Type.Optional(Type.Array(SpawnItem, { description: "一次提交多个任务（自动排队，≤并发上限同时运行）" })),
 });
@@ -354,126 +375,114 @@ export default function (pi: ExtensionAPI) {
 	// 引用它拿到“正在调用的会话”。
 	let mySessionId: string | null = null;
 
-	// supervisor 工具必须在扩展加载阶段注册（与 subagent 同时机），
-	// 否则会话工具列表快照不会包含它（session_start 里注册无法同步到已建会话）。
-	// 待回复请求按归属会话过滤：本会话只能看到/回复自己发起的请求。
-	registerSupervisorTool(pi, () => mySessionId ?? undefined);
+	// supervisor 动作已并入 subagent 工具（action:"supervisor_*"），随本工具
+	// 同时机注册；轮询器单独在 session_start 启动。
 
-	// subagent_wait：阻塞等待子代理完成（与 subagent 工具同时机注册）
-	pi.registerTool({
-		name: "subagent_wait",
-		label: "Subagent Wait",
-		description: [
-			"阻塞等待子代理任务完成：",
-			"- subagent_wait({runId:<id>})：等单个 run 完成",
-			"- subagent_wait({all:true})：等当前所有运行中的 run 完成",
-			"- timeoutMs：超时后返回当前进度（默认 30 分钟）；run 在后台继续不受影响",
-			"返回每个目标 run 的最终状态与输出预览。",
-		].join("\n"),
-		promptSnippet: "阻塞等待子代理 run 结束；超时返回进度，后台继续不受影响",
-		parameters: Type.Object({
-			runId: Type.Optional(Type.String({ description: "目标 run id（缺省且 all=false 时等全部）" })),
-			all: Type.Optional(Type.Boolean({ description: "等所有运行中的 run 完成" })),
-			timeoutMs: Type.Optional(Type.Number({ description: "超时（毫秒），默认 1800000（30 分钟）" })),
-		}),
-		async execute(_id, params, signal) {
-			const timeoutMs = params.timeoutMs ?? 30 * 60 * 1000;
-			const deadline = Date.now() + Math.max(1000, timeoutMs);
-			const runs = loadAllRuns();
-			// all 模式只等本会话发起的 run（无 sessionId 的历史孤儿也算进来，
-			// 避免多会话宿主下等到其他会话的任务）；显式 runId 不限（跨会话接管语义）。
-			const ownOrOrphan = (r: RunRecord): boolean => !r.task.sessionId || r.task.sessionId === mySessionId;
-			const targets = params.runId
-				? runs.filter((r) => r.task.id === params.runId || r.task.id.startsWith(params.runId!))
-				: runs.filter((r) => ownOrOrphan(r) && (r.status.status === "running" || r.status.status === "pending" || r.status.status === "paused"));
-			if (targets.length === 0) return text("没有需要等待的 run。");
+	// subagent_wait 已并入 subagent 工具（action:"wait"）。
+	/** 阻塞等待 run 完成（原 subagent_wait 工具的 execute 逻辑）。 */
+	async function executeWait(params: SubagentParamsT, signal: AbortSignal | undefined): Promise<AgentToolResult<unknown>> {
+		const timeoutMs = params.timeoutMs ?? 30 * 60 * 1000;
+		const deadline = Date.now() + Math.max(1000, timeoutMs);
+		const runs = loadAllRuns();
+		// all 模式只等本会话发起的 run（无 sessionId 的历史孤儿也算进来，
+		// 避免多会话宿主下等到其他会话的任务）；显式 runId 不限（跨会话接管语义）。
+		const ownOrOrphan = (r: RunRecord): boolean => !r.task.sessionId || r.task.sessionId === mySessionId;
+		const targets = params.runId
+			? runs.filter((r) => r.task.id === params.runId || r.task.id.startsWith(params.runId!))
+			: runs.filter((r) => ownOrOrphan(r) && (r.status.status === "running" || r.status.status === "pending" || r.status.status === "paused"));
+		if (targets.length === 0) return text("没有需要等待的 run。");
 
-			const isTerminal = (s: { status: string }): boolean =>
-				s.status === "completed" || s.status === "failed" || s.status === "stopped" || s.status === "interrupted";
+		const isTerminal = (s: { status: string }): boolean =>
+			s.status === "completed" || s.status === "failed" || s.status === "stopped" || s.status === "interrupted";
 
-			// 僵尸兜底：status 仍 running 但子进程已消失的 run 视为中断（exit 回调可能因
-			// 宿主进程崩溃/重启而丢失）。每轮最多探测一次，避免频繁拉起 tasklist。
-			const zombieCheckedAt = new Map<string, number>();
-			const markZombieInterrupted = async (): Promise<void> => {
-				for (const r of targets) {
-					const st = readStatus(r.task.id);
-					if (!st || isTerminal(st) || st.status !== "running" || !st.pid) continue;
-					const last = zombieCheckedAt.get(r.task.id) ?? 0;
-					if (Date.now() - last < 3000) continue;
-					zombieCheckedAt.set(r.task.id, Date.now());
-					if (!(await isProcessAlive(st.pid))) {
-						writeStatus(r.task.id, {
-							...st,
-							status: "interrupted",
-							finishedAt: Date.now(),
-							pid: undefined,
-							stopReason: "zombie",
-						});
-					}
-				}
-			};
-
-			while (Date.now() < deadline) {
-				// 用户中止（abort）：立即返回当前进度，避免阻塞主 agent 无法停止
-				if (signal?.aborted) {
-					const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
-					return text(
-						`等待已中断。仍有 ${running.length} 个 run 未完成（${running.map((r) => r.task.title).join("、")}），可稍后用 subagent_wait 再等，或 subagent(action:"list") 查看。`,
-					);
-				}
-				await markZombieInterrupted();
-				const done = targets.filter((r) => isTerminal(readStatus(r.task.id) ?? r.status));
-				if (done.length === targets.length) {
-					const lines = targets.map((r) => {
-						const st = readStatus(r.task.id) ?? r.status;
-						const res = readResult(r.task.id);
-						const preview = res?.output?.split("\n")[0]?.slice(0, 100) ?? "";
-						const who = operatorLabel(st.operator);
-						return `- 「${r.task.title}」[${STATUS_LABEL[st.status]}${who}]${preview ? `：${preview}` : ""}`;
+		// 僵尸兜底：status 仍 running 但子进程已消失的 run 视为中断（exit 回调可能因
+		// 宿主进程崩溃/重启而丢失）。每轮最多探测一次，避免频繁拉起 tasklist。
+		const zombieCheckedAt = new Map<string, number>();
+		const markZombieInterrupted = async (): Promise<void> => {
+			for (const r of targets) {
+				const st = readStatus(r.task.id);
+				if (!st || isTerminal(st) || st.status !== "running" || !st.pid) continue;
+				const last = zombieCheckedAt.get(r.task.id) ?? 0;
+				if (Date.now() - last < 3000) continue;
+				zombieCheckedAt.set(r.task.id, Date.now());
+				if (!(await isProcessAlive(st.pid))) {
+					writeStatus(r.task.id, {
+						...st,
+						status: "interrupted",
+						finishedAt: Date.now(),
+						pid: undefined,
+						stopReason: "zombie",
 					});
-					const hint = targets
-						.map((r) => {
-							const st = readStatus(r.task.id) ?? r.status;
-							return userIntervenedHint({ task: r.task, status: st, result: readResult(r.task.id) ?? undefined });
-						})
-						.filter(Boolean)
-						.join("");
-					return text(`等待完成（${targets.length} 个）：\n${lines.join("\n")}${hint}`);
 				}
-				await new Promise((resolve) => setTimeout(resolve, 1000));
 			}
-			const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
-			return text(
-				`等待超时（${Math.round(timeoutMs / 1000)}s），仍有 ${running.length} 个 run 运行中。\n可用 subagent(action:"list") 查看，或稍后 subagent_wait 再等。`,
-			);
-		},
-	});
+		};
+
+		while (Date.now() < deadline) {
+			// 用户中止（abort）：立即返回当前进度，避免阻塞主 agent 无法停止
+			if (signal?.aborted) {
+				const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
+				return text(
+					`等待已中断。仍有 ${running.length} 个 run 未完成（${running.map((r) => r.task.title).join("、")}），可稍后用 subagent(action:"wait") 再等，或 subagent(action:"list") 查看。`,
+				);
+			}
+			await markZombieInterrupted();
+			const done = targets.filter((r) => isTerminal(readStatus(r.task.id) ?? r.status));
+			if (done.length === targets.length) {
+				const lines = targets.map((r) => {
+					const st = readStatus(r.task.id) ?? r.status;
+					const res = readResult(r.task.id);
+					const preview = res?.output?.split("\n")[0]?.slice(0, 100) ?? "";
+					const who = operatorLabel(st.operator);
+					return `- 「${r.task.title}」[${STATUS_LABEL[st.status]}${who}]${preview ? `：${preview}` : ""}`;
+				});
+				const hint = targets
+					.map((r) => {
+						const st = readStatus(r.task.id) ?? r.status;
+						return userIntervenedHint({ task: r.task, status: st, result: readResult(r.task.id) ?? undefined });
+					})
+					.filter(Boolean)
+					.join("");
+				return text(`等待完成（${targets.length} 个）：\n${lines.join("\n")}${hint}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+		const running = targets.filter((r) => !isTerminal(readStatus(r.task.id) ?? r.status));
+		return text(
+			`等待超时（${Math.round(timeoutMs / 1000)}s），仍有 ${running.length} 个 run 运行中。\n可用 subagent(action:"list") 查看，或稍后 subagent(action:"wait") 再等。`,
+		);
+	}
 
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"把任务委托给独立子代理（scout 探索 / worker 执行 / reviewer 审查），子代理在独立 pi 进程、独立上下文中运行。",
-			"支持后台运行：提交后不阻塞主 agent，完成/失败会自动通知。支持队列排队（并发上限可配）、失败自动重试、worktree 隔离、手动控制（stop/pause/continue/resume）。",
-			"角色：",
-			...AGENTS.map((a) => `- ${a}：${AGENT_DESC[a]}`),
-			"用法：subagent(agent, task) 单任务；subagent(tasks:[...]) 多任务；subagent(action, runId) 控制/查看。",
+			"把任务委托给独立子代理（独立 pi 进程与上下文），后台运行、完成自动通知。",
+			"角色：scout=只读探索代码库/问题范围，worker=实现并跑验证，reviewer=只读审查改动。",
+			"action：spawn 委托（单任务 agent+task，或 tasks[] 批量排队）；wait 阻塞等待；list/result 查看；stop/pause/continue/resume/merge/steer 控制；supervisor_pending/supervisor_reply/supervisor_status 处理子代理发来的请示。",
+			"角色差异、worktree 与队列细则见 action:\"list\" 返回与错误提示。",
 		].join("\n"),
-		promptSnippet: "委托独立子代理（scout/worker/reviewer）：后台运行、队列排队、worktree 隔离、完成自动通知",
+		promptSnippet: "委托子代理（scout/worker/reviewer，后台）",
 		promptGuidelines: [
-			"会撑爆主上下文的自包含工作交给子代理：scout = 只读探索代码库/问题范围，worker = 实现并跑验证，reviewer = 只读审查改动。",
-			"并行 worker 会写同一仓库的文件时设 worktree:true，完成后用 subagent(action:\"merge\", runId) 合并回主分支。",
-			"任务描述必须自包含（目标 + 约束 + 预期输出）：子代理看不到你的会话内容。",
+			"会撑爆主上下文的自包含工作交给子代理；任务描述必须自包含（目标+约束+预期输出），子代理看不到你的会话。",
+			"并行 worker 会写同一仓库文件时设 worktree:true，完成后 subagent(action:\"merge\", runId) 合并。",
 		],
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const action = params.action ?? "spawn";
 			switch (action) {
 				case "spawn":
 					return await executeSpawn(params, ctx);
 				case "list":
 					return executeList();
+				case "wait":
+					return await executeWait(params, signal);
+				case "supervisor_pending":
+				case "supervisor_reply":
+				case "supervisor_status": {
+					const r = runSupervisorAction(action, params.replyTo, params.message, mySessionId ?? undefined);
+					return text(r.text, r.details);
+				}
 				default:
 					return await executeControl(action, params.runId, params);
 			}

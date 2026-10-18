@@ -209,19 +209,15 @@ export default function (pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the web and return a numbered list of results (title, URL, snippet). " +
-			"Auto mode uses Tavily when the TAVILY_API_KEY environment variable is set, " +
-			"otherwise the free Exa MCP endpoint. No configuration is required.",
-		promptSnippet: "Search the web (Tavily when TAVILY_API_KEY is set, otherwise free Exa MCP)",
+			"联网搜索，返回编号结果（标题/URL/摘要）。默认 auto：有 TAVILY_API_KEY 用 Tavily，否则免费 Exa。",
+		promptSnippet: "联网搜索（Tavily / Exa）",
 		promptGuidelines: [
-			"Use web_search when the user asks to look something up on the web or asks about current events.",
-			"Pass provider=\"tavily\" or provider=\"exa\" to web_search to force a specific engine; the default is auto.",
-			"If web_search returns an error, try rewording the query or forcing the other provider once instead of giving up.",
+			"要查资料或时事的用 web_search；报错先换措辞或换 provider 各试一次，别直接放弃。",
 		],
 		parameters: Type.Object({
-			query: Type.String({ description: "Search query" }),
-			numResults: Type.Optional(Type.Number({ description: "Number of results, 1–10 (default 5)" })),
-			provider: Type.Optional(StringEnum(["auto", "tavily", "exa"] as const)),
+			query: Type.String({ description: "搜索词" }),
+			numResults: Type.Optional(Type.Number({ description: "返回条数 1-10，默认 5" })),
+			provider: Type.Optional(StringEnum(["auto", "tavily", "exa"] as const, { description: "auto|tavily|exa" })),
 		}),
 
 		async execute(_toolCallId, params, signal) {

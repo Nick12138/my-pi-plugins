@@ -1,6 +1,7 @@
 /**
- * 主代理侧 supervisor 服务端：轮询扫描通道目录，把子代理的请求转交给其发起会话，
- * 并提供 subagent_supervisor 工具让主 agent 回复（写入 replies/，子代理随即解除阻塞）。
+ * 主代理侧 supervisor 服务端：轮询扫描通道目录，把子代理的请求转交给其发起会话；
+ * 主 agent 通过合并后的 subagent 工具回复（action:"supervisor_reply"，写入 replies/，
+ * 子代理随即解除阻塞）。
  *
  * 多会话宿主（如 PiDeck：active + background + 热缓存同进程）下的归属规则：
  * - 轮询器是进程级单例：一个扫描线程服务所有会话，与单个会话的生命周期解耦；
@@ -8,36 +9,22 @@
  *   绝不投给“最后一次 session_start 的会话”；
  * - 发起会话离线时：期望回复的请求保留在目录中等待（会话重开后继续处理），
  *   进度通知（不期望回复）直接丢弃；
- * - subagent_supervisor 工具只看到本会话的待回复请求，跨会话不可代答。
+ * - supervisor_reply 只能看到本会话的待回复请求，跨会话不可代答。
  *
- * 注意：工具注册（registerSupervisorTool）必须在扩展加载阶段调用（与 subagent 工具
- * 同时机），否则会话工具列表快照不会包含它。
+ * 注意：supervisor 动作随 subagent 工具在扩展加载阶段注册（同一工具），
+ * 保证会话工具列表快照包含它。
  * Windows 上 fs.watch 对 %TEMP% 目录不可靠，统一用轮询（500ms）。
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { StringEnum, type Static } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
-import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	REQUESTS_DIR,
 	SERVER_POLL_MS,
 	SUPERVISOR_CHANNEL_ROOT,
-	SUPERVISOR_TOOL_SERVER,
 	parseRequestFile,
 	replyPath,
 	type SupervisorRequest,
 } from "./supervisor-protocol.ts";
-
-const ServerParams = Type.Object(
-	{
-		action: StringEnum(["reply", "pending", "list", "status"] as const, { description: "操作：reply=回复子代理请求；pending/list=列出待回复请求；status=通道状态", default: "status" }),
-		replyTo: Type.Optional(Type.String({ description: "reply 时指定请求 id（或前缀/agent 名）" })),
-		message: Type.Optional(Type.String({ description: "reply 时的回复内容（必填）" })),
-	},
-	{ additionalProperties: false },
-);
-type ServerParamsT = Static<typeof ServerParams>;
 
 export interface SupervisorPollingDeps {
 	/** 把请求投递给其发起会话。返回 false 表示该会话当前不可投递（离线/不活跃）。
@@ -248,60 +235,49 @@ function scanPendingRequests(sessionId?: string): PendingEntry[] {
 	return entries;
 }
 
-function buildServerTool(getSessionId: () => string | undefined): ToolDefinition<typeof ServerParams, Record<string, unknown>> {
-	return {
-		name: SUPERVISOR_TOOL_SERVER,
-		label: "Subagent Supervisor",
-		description: "子代理 supervisor 通道：回复子代理的待处理请求（action: reply），或查看待回复列表（pending/list）与通道状态（status）。",
-		parameters: ServerParams,
-		async execute(_id, params) {
-			const input = params as ServerParamsT;
-			const sessionId = getSessionId();
-			if (input.action === "status") {
-				return {
-					content: [{ type: "text", text: `Supervisor channel active. Pending replies: ${scanPendingRequests(sessionId).length}.` }],
-					details: { active: true, pending: scanPendingRequests(sessionId).length, root: SUPERVISOR_CHANNEL_ROOT },
-				};
-			}
-			if (input.action === "pending" || input.action === "list") {
-				const entries = scanPendingRequests(sessionId);
-				if (entries.length === 0) return { content: [{ type: "text", text: "No pending supervisor requests." }], details: { pending: [] } };
-				const lines = entries.map((e) => {
-					const replyHint = ` Reply: ${SUPERVISOR_TOOL_SERVER}({ action: "reply", replyTo: "${e.request.id}", message: "..." })`;
-					return `- ${e.request.id}: ${e.request.agent} [${e.request.runId}] ${e.request.reason}.${replyHint}`;
-				});
-				return {
-					content: [{ type: "text", text: `Pending supervisor requests (${entries.length}):\n${lines.join("\n")}` }],
-					details: { pending: entries.map((e) => ({ id: e.request.id, runId: e.request.runId, agent: e.request.agent, reason: e.request.reason })) },
-				};
-			}
-			if (input.action === "reply") {
-				const target = resolvePending(input.replyTo, sessionId);
-				writeReply(target, input.message ?? "");
-				return { content: [{ type: "text", text: `Replied to supervisor request ${target.request.id}.` }], details: { replyTo: target.request.id, runId: target.request.runId, agent: target.request.agent } };
-			}
-			throw new Error(`Unsupported supervisor action: ${input.action}`);
-		},
-	};
+/** supervisor 动作结果：供合并后的 subagent 工具（action="supervisor_*"）使用。 */
+export interface SupervisorActionResult {
+	text: string;
+	details: Record<string, unknown>;
 }
 
 /**
- * 注册 subagent_supervisor 工具。必须在扩展加载阶段调用（与 subagent 工具
- * 同时机），否则会话工具列表快照不会包含它。幂等：同名工具已存在时跳过。
- * getSessionId 提供当前扩展实例绑定的会话 id，用于把工具可见/可回复的
- * 请求限定在本会话发起的范围内。
+ * 执行 supervisor 通道动作（原 subagent_supervisor 工具的 execute 逻辑）。
+ * getSessionId 提供当前扩展实例绑定的会话 id，用于把可见/可回复的
+ * 请求限定在本会话发起的范围内（跨会话不可代答）。
  */
-export function registerSupervisorTool(pi: ExtensionAPI, getSessionId: () => string | undefined): void {
-	try {
-		if (pi.getAllTools?.().some((tool: { name?: unknown }) => tool.name === SUPERVISOR_TOOL_SERVER) === true) return;
-	} catch {
-		/* 拿不到工具列表则直接注册 */
+export function runSupervisorAction(
+	action: "supervisor_pending" | "supervisor_reply" | "supervisor_status",
+	replyTo: string | undefined,
+	message: string | undefined,
+	sessionId: string | undefined,
+): SupervisorActionResult {
+	if (action === "supervisor_status") {
+		const count = scanPendingRequests(sessionId).length;
+		return {
+			text: `Supervisor channel active. Pending replies: ${count}.`,
+			details: { active: true, pending: count, root: SUPERVISOR_CHANNEL_ROOT },
+		};
 	}
-	try {
-		pi.registerTool(buildServerTool(getSessionId));
-	} catch (error) {
-		console.error(`[pi-subagent] registerSupervisorTool failed: ${error instanceof Error ? error.message : String(error)}`);
+	if (action === "supervisor_pending") {
+		const entries = scanPendingRequests(sessionId);
+		if (entries.length === 0) return { text: "No pending supervisor requests.", details: { pending: [] } };
+		const lines = entries.map((e) => {
+			const replyHint = ` Reply: subagent({ action: "supervisor_reply", replyTo: "${e.request.id}", message: "..." })`;
+			return `- ${e.request.id}: ${e.request.agent} [${e.request.runId}] ${e.request.reason}.${replyHint}`;
+		});
+		return {
+			text: `Pending supervisor requests (${entries.length}):\n${lines.join("\n")}`,
+			details: { pending: entries.map((e) => ({ id: e.request.id, runId: e.request.runId, agent: e.request.agent, reason: e.request.reason })) },
+		};
 	}
+	// supervisor_reply
+	const target = resolvePending(replyTo, sessionId);
+	writeReply(target, message ?? "");
+	return {
+		text: `Replied to supervisor request ${target.request.id}.`,
+		details: { replyTo: target.request.id, runId: target.request.runId, agent: target.request.agent },
+	};
 }
 
 /** 诊断信息（HTTP API 用） */
@@ -329,7 +305,7 @@ export function visibleRequestText(request: SupervisorRequest): string {
 		request.message,
 	];
 	if (request.expectsReply) {
-		lines.push("", `回复方式：调用 ${SUPERVISOR_TOOL_SERVER}({ action: "reply", replyTo: "${request.id}", message: "..." })`);
+		lines.push("", `回复方式：调用 subagent({ action: "supervisor_reply", replyTo: "${request.id}", message: "..." })`);
 	}
 	return lines.join("\n");
 }

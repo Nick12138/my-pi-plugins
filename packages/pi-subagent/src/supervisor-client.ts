@@ -3,7 +3,7 @@
  *
  * 注册 contact_supervisor 工具：子代理需要主代理决策/结构化输入/进度通知时，
  * 写入 requests/<uuid>.json；需要回复时阻塞轮询 replies/ 直到主代理用
- * subagent_supervisor 工具回复（默认 10 分钟超时），然后继续任务。
+ * subagent 工具 supervisor_reply 动作回复（默认 10 分钟超时），然后继续任务。
  *
  * 非子代理进程（无通道环境变量）加载本扩展时直接跳过，不注册任何东西。
  */

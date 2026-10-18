@@ -83,8 +83,7 @@ const ParamsSchema = Type.Object({
   action: Type.Union(
     [Type.Literal("test"), Type.Literal("sync_now"), Type.Literal("status")],
     {
-      description:
-        "test = 用当前配置测一次 R2 连通性；sync_now = 立即双向同步；status = 查看配置与最近同步状态",
+      description: "test=测连通；sync_now=立即同步；status=看状态",
     },
   ),
 });
@@ -129,8 +128,8 @@ export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
     name: SYNC_TOOL_NAME,
     label: "待办 · 速记同步",
     description:
-      "piabyss-memo 的 R2 云同步控制：test 用当前配置测连通性；sync_now 立即双向同步（LWW 合并+删除墓碑传播+图片补齐/上传）；status 查看配置与最近同步状态。R2 密钥（accountId/accessKeyId/secretAccessKey/bucket）与 autoSync 在 PiAbyss 设置的插件配置里管理，不在对话中传递。",
-    promptSnippet: "Test and run piabyss-memo cloud sync (Cloudflare R2)",
+      "PiAbyss 速记的 R2 云同步：test 测连通；sync_now 立即双向同步；status 看配置与最近状态。密钥在插件配置里填，不在对话中传。",
+    promptSnippet: "速记云同步：test / sync_now / status",
     promptGuidelines: [
       "sync_now 失败时把错误原样告诉用户（通常是密钥错误或网络问题），不要重试超过一次。",
     ],
