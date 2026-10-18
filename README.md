@@ -32,7 +32,7 @@ my-pi-plugins/
 | **🤖 [pi-subagent](packages/pi-subagent)** | Windows 子代理运行时：3 角色（探索/执行/审查）并行后台运行、队列排队、失败断点恢复+自动重试、完成自动回调主 agent、worktree 隔离、HTTP API 供 PiDeck 面板查看 |
 | **🖥️ [pi-computer-control](packages/pi-computer-control)** | 电脑控制：截图看屏幕、点击/拖拽鼠标、输入文字（含中文）、组合键、滚动；零原生依赖，仅 Windows |
 | **⚡ [pi-shelljob](packages/pi-shelljob)** | 后台 Shell：长任务（构建/装依赖/dev server/批量转换）提交后台立即返回，完成自动通知主 agent；短任务仍用同步 bash，进程树终止、跨会话任务落盘 |
-| **⏰ [pi-schedule](packages/pi-schedule)** | 定时任务：cron / 周期 / 一次性 / 仅手动；每次执行在**独立新会话**里跑（不污染对话），历史可查可 fork 续聊；按工作区、选模型、三档权限白名单、超时与 maxRuns 有界执行；文件即真相源 + 本地 HTTP 控制面供面板对接 |
+| **⏰ [pi-automation](packages/pi-automation)** | 自动化：cron / 周期 / 一次性 / 仅手动；每次执行在**独立新会话**里跑（不污染对话），历史可查可 fork 续聊；按工作区、选模型、三档权限白名单、超时与 maxRuns 有界执行；文件即真相源 + 本地 HTTP 控制面供面板对接 |
 | **❓ [pi-ask-user-question](packages/pi-ask-user-question)** | 提问问卷：ask_user_question 工具（最多 4 题、每题 2-4 选项、多选/自由文本），源自 PiAbyss 内置工具外移，details 信封与桌面端兼容；设置页“提问工具”开关可整体启停 |
 | **📌 [piabyss-memo](packages/piabyss-memo)** | PiAbyss 方寸间（原备忘录）：piabyss_memo 工具（list/complete/reopen/update）+ piabyss_memo_sync 云同步（R2 自持），磁盘格式/软删除墓碑/原子写与 PiAbyss Host 完全一致，桌面方寸间页面共用同一份 notes.json；v0.3.0 起取消记录类别 |
 | **📎 [piabyss-present-files](packages/piabyss-present-files)** | PiAbyss 文件交付：piabyss_present_files 工具声明交付文件清单，桌面端按工具名从会话历史还原文件胶囊（纯声明式，不落盘） |
@@ -100,7 +100,7 @@ pi install git:github.com/Nick12138/my-pi-plugins
 - 启用/禁用 = 在 `settings.json` 中增删/调过滤条目（或调 `pi config` 等价逻辑）。
 - 作用域：默认插件在两处都能开关——「全局」写用户级偏好（所有工作区继承），
   「工作区」写该工作区的 `.pi/settings.json` 覆盖。声明 `"toggleScopes": ["user"]`
-  的插件不提供工作区开关（如 `piabyss-memo` / `pi-pixie` / `pi-schedule` 这类
+  的插件不提供工作区开关（如 `piabyss-memo` / `pi-pixie` / `pi-automation` 这类
   与桌面端全局状态耦合的插件）；该字段由前端消费，登记后无需改插件代码。
 
 ### 配置规范（config）

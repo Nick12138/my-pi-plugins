@@ -554,9 +554,9 @@
       ]
     },
     {
-      "id": "pi-schedule",
-      "name": "定时任务",
-      "description": "给 agent 的定时任务：cron / 周期 / 一次性 / 仅手动触发。每次执行都在独立新会话里跑（不污染当前对话），历史独立保存且可在任意一次基础上 fork 续聊；支持按工作区启动、选模型、三档权限（只读/可写/全权 = 结构性工具白名单）、超时中止、maxRuns 有界执行、错过窗口策略、单飞锁与并发上限。文件即真相源（~/.pi/schedule/）+ 本地 HTTP 控制面（127.0.0.1:18766），供面板对接。",
+      "id": "pi-automation",
+      "name": "自动化",
+      "description": "给 agent 的自动化：cron / 周期 / 一次性 / 仅手动触发。每次执行都在独立新会话里跑（不污染当前对话），历史独立保存且可在任意一次基础上 fork 续聊；支持按工作区启动、选模型、三档权限（只读/可写/全权 = 结构性工具白名单）、超时中止、maxRuns 有界执行、错过窗口策略、单飞锁与并发上限。文件即真相源（~/.pi/automation/）+ 本地 HTTP 控制面（127.0.0.1:18766），供面板对接。",
       "icon": "⏰",
       "version": "0.1.0",
       "author": "Nick12138",
@@ -569,7 +569,7 @@
       ],
       "install": {
         "type": "repo",
-        "path": "packages/pi-schedule"
+        "path": "packages/pi-automation"
       },
       "toggleScopes": [
         "user"
@@ -579,7 +579,7 @@
           "key": "tickMs",
           "type": "text",
           "label": "扫描间隔（毫秒）",
-          "env": "PI_SCHEDULE_TICK_MS",
+          "env": "PI_AUTOMATION_TICK_MS",
           "required": false,
           "placeholder": "30000",
           "default": "30000",
@@ -589,7 +589,7 @@
           "key": "httpPort",
           "type": "text",
           "label": "HTTP 控制面端口",
-          "env": "PI_SCHEDULE_PORT",
+          "env": "PI_AUTOMATION_PORT",
           "required": false,
           "placeholder": "18766",
           "default": "18766",
@@ -599,17 +599,17 @@
           "key": "dir",
           "type": "text",
           "label": "数据目录",
-          "env": "PI_SCHEDULE_DIR",
+          "env": "PI_AUTOMATION_DIR",
           "required": false,
-          "placeholder": "~/.pi/schedule",
+          "placeholder": "~/.pi/automation",
           "default": "",
-          "description": "任务定义 / 执行记录 / 会话文件的存放根目录；留空用默认 ~/.pi/schedule。"
+          "description": "任务定义 / 执行记录 / 会话文件的存放根目录；留空用默认 ~/.pi/automation。"
         },
         {
           "key": "tz",
           "type": "text",
           "label": "默认时区",
-          "env": "PI_SCHEDULE_TZ",
+          "env": "PI_AUTOMATION_TZ",
           "required": false,
           "placeholder": "Asia/Shanghai",
           "default": "",

@@ -3,7 +3,7 @@
  *
  * 为什么用 HTTP：PiAbyss 桌面端（备忘录页的「测试连接 / 立即同步」）需要即时
  * 触发插件内的同步引擎，而协议层（memo.* RPC）由 Host 代理到这里 —— 与
- * pi-schedule 的既有模式一致（Host 的 schedule-api.ts ↔ 插件的 http.ts）。
+ * pi-automation 的既有模式一致（Host 的 automation-api.ts ↔ 插件的 http.ts）。
  * 数据面仍然是文件：notes.json / 图片目录由引擎直接读写，控制面只做
  * 触发与状态查询。
  *
@@ -32,7 +32,7 @@ const TOKEN_FILE_NAME = "sync-token";
 const MAX_BODY_BYTES = 64 * 1024;
 
 /** 运行时单例挂 globalThis：pi 用 jiti(moduleCache:false) 加载扩展，模块级
- * 变量会随模块实例分裂（见 pi-schedule 的同类注释）。 */
+ * 变量会随模块实例分裂（见 pi-automation 的同类注释）。 */
 const SERVER_KEY = Symbol.for("piabyss-memo-sync.http");
 
 interface HttpRuntime {

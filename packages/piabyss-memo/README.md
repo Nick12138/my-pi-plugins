@@ -85,7 +85,7 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 方寸
 ### 本地控制面（127.0.0.1）
 
 桌面方寸间页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
-`memo.syncNow` 协议代理到插件的环回 HTTP 控制面（与 pi-schedule 同一模式）：
+`memo.syncNow` 协议代理到插件的环回 HTTP 控制面（与 pi-automation 同一模式）：
 
 - 端口：`PIABYSS_MEMO_SYNC_PORT`（缺省 **18768**）；
 - 鉴权：`X-Piabyss-Memo-Sync-Token` 头，token 在
