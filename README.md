@@ -34,7 +34,7 @@ my-pi-plugins/
 | **⚡ [pi-shelljob](packages/pi-shelljob)** | 后台 Shell：长任务（构建/装依赖/dev server/批量转换）提交后台立即返回，完成自动通知主 agent；短任务仍用同步 bash，进程树终止、跨会话任务落盘 |
 | **⏰ [pi-automation](packages/pi-automation)** | 自动化：cron / 周期 / 一次性 / 仅手动；每次执行在**独立新会话**里跑（不污染对话），历史可查可 fork 续聊；按工作区、选模型、三档权限白名单、超时与 maxRuns 有界执行；文件即真相源 + 本地 HTTP 控制面供面板对接 |
 | **❓ [pi-ask-user-question](packages/pi-ask-user-question)** | 提问问卷：ask_user_question 工具（最多 4 题、每题 2-4 选项、多选/自由文本），源自 PiAbyss 内置工具外移，details 信封与桌面端兼容；设置页“提问工具”开关可整体启停 |
-| **📌 [piabyss-memo](packages/piabyss-memo)** | PiAbyss 方寸间（原备忘录）：piabyss_memo 工具（list/complete/reopen/update）+ piabyss_memo_sync 云同步（R2 自持），磁盘格式/软删除墓碑/原子写与 PiAbyss Host 完全一致，桌面方寸间页面共用同一份 notes.json；v0.3.0 起取消记录类别 |
+| **📌 [piabyss-memo](packages/piabyss-memo)** | PiAbyss 待办 · 速记（原备忘录）：piabyss_memo 工具（list/complete/reopen/update）+ piabyss_memo_sync 云同步（R2 自持），磁盘格式/软删除墓碑/原子写与 PiAbyss Host 完全一致，桌面待办 · 速记页面共用同一份 notes.json；v0.3.0 起取消记录类别 |
 | **📎 [piabyss-present-files](packages/piabyss-present-files)** | PiAbyss 文件交付：piabyss_present_files 工具声明交付文件清单，桌面端按工具名从会话历史还原文件胶囊（纯声明式，不落盘） |
 | **🧚 [pi-pixie](packages/pi-pixie)** | Pixie 小精灵：pixie_dispatch / pixie_report 工具壳，经环回 HTTP 控制面调用 PiAbyss Host 委派引擎；dispatch 仅常驻小精灵会话可见，report 仅已派发（armed）会话可见 |
 

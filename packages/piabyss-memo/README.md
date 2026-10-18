@@ -1,8 +1,8 @@
 # piabyss-memo
 
 把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件：让 agent 直接操作用户的
-方寸间（原「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
-（list / create / complete / reopen / update），与 PiAbyss 桌面端方寸间页面
+待办 · 速记（原名「方寸间」「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
+（list / create / complete / reopen / update），与 PiAbyss 桌面端待办 · 速记页面
 共用同一份磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
 （`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss Host 内置的
 同步引擎。v0.3.0 起取消记录类别（备忘 / 想法 / 任务），旧数据的 type 字段
@@ -66,7 +66,7 @@
 
 ### 配置（密钥不进对话）
 
-R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 方寸间」的配置
+R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 待办 · 速记」的配置
 表单**里填写，经 `pluginLibrary.setEnv` 注入环境变量（扩展与 Host 同进程，
 保存即生效）：
 
@@ -84,7 +84,7 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 方寸
 
 ### 本地控制面（127.0.0.1）
 
-桌面方寸间页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
+桌面待办 · 速记页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
 `memo.syncNow` 协议代理到插件的环回 HTTP 控制面（与 pi-automation 同一模式）：
 
 - 端口：`PIABYSS_MEMO_SYNC_PORT`（缺省 **18768**）；
@@ -151,7 +151,7 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 方寸
 
 **格式权威是 PiAbyss 原实现** `packages/pi-host/src/memo-store.ts`
 （本插件的 `src/memo-store.ts` 逐行照搬其读写逻辑，v0.4.0 的计划字段与
-状态迁移需桌面端同步适配，见 `HOST-ADAPTATION.md`）。桌面方寸间页面与本
+状态迁移需桌面端同步适配，见 `HOST-ADAPTATION.md`）。桌面待办 · 速记页面与本
 插件的同步引擎共用该文件，任何字段写错都会让整个页面异常，因此：
 
 - 写入始终走「临时文件 + rename」原子替换；

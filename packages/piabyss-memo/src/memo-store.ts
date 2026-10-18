@@ -26,7 +26,7 @@
  * `<agentDir>/piabyss/memo/images/<noteId>/<fileName>` 与 Host 端共用，
  * 读写逻辑与 Host 侧逐行一致。
  *
- * v3（方寸间 v0.3.0）：取消记录类别（type 字段）：旧数据读盘时经
+ * v3（方寸间 v0.3.0，现名「待办 · 速记」）：取消记录类别（type 字段）：旧数据读盘时经
  *   normalizeNoteDefaults 剔除，下次写盘不再落盘。
  *
  * v4（计划功能）：

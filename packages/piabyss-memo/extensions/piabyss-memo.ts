@@ -128,7 +128,7 @@ type MemoSessionInfo = {
 };
 
 const TOOL_DESCRIPTION = [
-  "Access the user's PiAbyss 方寸间 board (待办 · 速记 · 备忘 · 收集).",
+  "Access the user's PiAbyss 待办 · 速记 board (待办 · 速记 · 备忘 · 收集).",
   "Use it to list pending notes, to add a new note (create) when the user asks to write something down or set a reminder/todo, or to mark a note as complete (complete) once the task described in it has been handled.",
   "create takes a required title plus optional contentMd / tags, and optionally a plan: a one-shot dueAt or a recurring rule.",
   "Before calling complete, self-check: has the task produced a final result? Are you still waiting for user input or a user decision? If anything is still awaited (e.g. you asked the user to pick an option), do NOT call complete — reply and wait instead.",
@@ -243,7 +243,7 @@ function toStoreRecurrence(param: RecurrenceParam): Record<string, unknown> {
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: MEMO_TOOL_NAME,
-    label: "方寸间",
+    label: "待办 · 速记",
     description: TOOL_DESCRIPTION,
     promptSnippet: "Create, list and update the user's memo notes (mark done after handling)",
     parameters: ParamsSchema,

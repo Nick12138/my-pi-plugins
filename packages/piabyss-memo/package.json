@@ -1,7 +1,7 @@
 {
   "name": "piabyss-memo",
   "version": "0.5.0",
-  "description": "PiAbyss 方寸间 board tool for Pi: create/list/complete/reopen/update the user's notes (待办 · 速记 · 备忘 · 收集) with plan support (one-shot due dates + recurring rules that roll to the next occurrence on completion), plus a self-contained Cloudflare R2 cloud sync (engine + loopback control plane), sharing the exact same on-disk format as PiAbyss.",
+  "description": "PiAbyss 待办 · 速记 board tool for Pi: create/list/complete/reopen/update the user's notes (待办 · 速记 · 备忘 · 收集) with plan support (one-shot due dates + recurring rules that roll to the next occurrence on completion), plus a self-contained Cloudflare R2 cloud sync (engine + loopback control plane), sharing the exact same on-disk format as PiAbyss.",
   "keywords": ["pi-package", "memo", "piabyss", "sync"],
   "license": "MIT",
   "author": "Nick12138",

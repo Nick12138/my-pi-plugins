@@ -165,13 +165,14 @@
     },
     {
       "id": "piabyss-memo",
-      "name": "PiAbyss 方寸间",
-      "description": "piabyss_memo + piabyss_memo_sync 双工具：PiAbyss 方寸间（原备忘录；待办 · 速记 · 备忘 · 收集）板的 Agent 侧读写（create/list/complete/reopen/update，create 直接往看板写一条新记录，complete 覆盖式写入结果并记录会话信息），以及内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss Host）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、变更后 5 秒防抖 autoSync；桌面方寸间页的「测试/立即同步」经插件本地控制面（127.0.0.1:18768）触达本引擎。R2 密钥与 autoSync 在下方的配置表单里填写。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面方寸间页面共用同一文件）。v0.3.0 起取消记录类别，旧数据 type 字段自动剔除。",
+      "name": "PiAbyss 待办 · 速记",
+      "description": "piabyss_memo + piabyss_memo_sync 双工具：PiAbyss 待办 · 速记（原名「备忘录」「方寸间」；定位待办 · 速记 · 备忘 · 收集）看板的 Agent 侧读写（create/list/complete/reopen/update，create 直接往看板写一条新记录，complete 覆盖式写入结果并记录会话信息），以及内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss Host）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、变更后 5 秒防抖 autoSync；桌面待办 · 速记页的「测试/立即同步」经插件本地控制面（127.0.0.1:18768）触达本引擎。R2 密钥与 autoSync 在下方的配置表单里填写。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面待办 · 速记页面共用同一文件）。v0.3.0 起取消记录类别，旧数据 type 字段自动剔除。",
       "icon": "📌",
       "version": "0.3.0",
       "author": "Nick12138",
       "tags": [
-        "方寸间",
+        "待办",
+        "速记",
         "memo",
         "云同步",
         "PiAbyss"
