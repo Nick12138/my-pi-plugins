@@ -9,7 +9,9 @@
 | `shelljob` | `submit`（默认）提交后台命令；`list` 列表；`log` 看输出尾部；`kill` 终止（杀整棵进程树） |
 | `shell_wait` | 阻塞等待任务完成（单任务 / 本会话全部），支持超时与中止；超时后任务在后台继续 |
 
-命令以 POSIX shell 语法执行：Unix 为 `sh -c`；Windows 下自动探测 Git Bash（优先 `SHELL` 环境变量，探测不到时回退 cmd）并以 `bash -lc` 启动——与同步 bash 工具同一 shell，无需区分两套语法，中文输出也不再因 cmd 的 GBK 代码页而乱码。支持管道、重定向等一切 shell 语法。
+命令以 POSIX shell 语法执行：Unix 为 `sh -c`；Windows 下自动探测可用的 Git Bash 并以 `bash -lc` 启动——与同步 bash 工具同一 shell，无需区分两套语法，中文输出也不再因 cmd 的 GBK 代码页而乱码。支持管道、重定向等一切 shell 语法。
+
+Windows 的 bash 探测（v2）：候选依次为 `SHELL`/`MSYS_BASH` 环境变量 → Git for Windows 固定路径（`C:\Program Files\Git\bin\bash.exe` 等）→ PiAbyss 自带 `resources\git\bin\bash.exe` → `where bash` 结果；`System32\bash.exe` 与 `WindowsApps\bash.exe` 这类 WSL 壳别名一律排除，且每个候选必须真实跑通 `bash -c "echo ok"`（带短超时）才被采用——文件存在或 where 命中都不算数，坏候选（如无发行版时 execvpe 直接失败的 WSL 启动器）会被验证淘汰。全部不可用时回退 cmd.exe，保证命令照常执行而不是静默 exit 1。
 
 ## 使用边界（写进 promptGuidelines）
 
@@ -22,7 +24,7 @@
 - **后台运行**：提交后立即返回，不阻塞会话；宿主正常退出任务继续跑（Windows 与终端窗口同生命周期，直接关窗口会终止任务，与 VS Code 任务行为一致）
 - **完成自动通知**：终态按发起会话精准路由（多会话宿主安全），投递确认 + 批量合并 + 重启补发
 - **全量落盘**：`~/.pi/shelljob/jobs/<id>/`（job.json / status.json / output.log），跨会话可查日志
-- **实时落日志**：stdio 直接重定向到 output.log 文件句柄（非管道），长任务输出不会丢
+- **实时落日志**：stdio 直接重定向到 output.log 文件句柄（非管道），长任务输出不会丢；spawn 失败 / 零输出的非零退出也会把诊断写进日志，不再是「exit 1 无日志」盲区
 - **进程树终止**：Windows `taskkill /T /F`；Unix 杀 detached 进程组（npm run 等派生的孙进程一并杀掉）
 - **单任务超时**：`timeoutMs` 参数或全局默认，超时自动 kill 并标记 `failed/timedOut`
 - **僵尸接管**：宿主重启后监控循环自动探测遗留任务，进程已消失的定 `interrupted`，超限的补杀

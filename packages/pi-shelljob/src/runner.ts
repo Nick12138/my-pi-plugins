@@ -3,6 +3,7 @@
  * （子进程继承文件句柄直接写盘，宿主退出后照样落日志）。 */
 import * as fs from "node:fs";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import * as path from "node:path";
 import {
 	isTerminal,
 	loadAllJobs,
@@ -39,40 +40,118 @@ let deps: SpawnDeps | null = null;
 
 export function initRunner(d: SpawnDeps): void {
 	deps = d;
+	// 预热 Windows bash 探测（含候选可用性验证，首次约数百毫秒）：避免首次提交任务时
+	// 「写 running 状态 → spawn 完成」之间的无 pid 窗口被监控循环误判为僵尸接管。
+	if (process.platform === "win32") resolveWindowsBash();
+}
+
+/** 追加诊断到任务日志（spawn 失败 / 异常退出且零输出时兑底，保证日志不再是排查盲区）。 */
+function appendLog(jobId: string, text: string): void {
+	try {
+		fs.appendFileSync(outputPath(jobId), text, "utf-8");
+	} catch {
+		/* 日志写不进不能影响终态落盘 */
+	}
 }
 
 /** Windows 下的 bash 路径（与同步 bash 工具同为 Git Bash，模型无需区分两套 shell 语法）；
- * 探测不到时为 null，回退 cmd.exe（shell: true）。探测只在进程生命周期内做一次。 */
+ * 探测不到可用 bash 时为 null，回退 cmd.exe（shell: true）。探测只在进程生命周期内做一次。
+ *
+ * 探测策略（v2，修复「所有命令 ~110ms exit 1、零输出」故障）：
+ * 候选 = 环境变量（SHELL/MSYS_BASH）→ Git for Windows 固定路径 → PiAbyss 自带 bash
+ * → where bash 结果（剔除 WSL 壳）。每个候选必须真实跑通 `bash -c "echo ok"`（带超时）
+ * 才被采用——文件存在 / where 命中一律不算数。曾有缺陷：where 输出里只排除了
+ * System32\bash.exe，漏掉同为 WSL 壳别名的 WindowsApps\bash.exe，导致命中一个
+ * execvpe(/bin/bash) 直接失败的 WSL 启动器（本机无发行版）：exit 1、零输出、无日志。 */
 let windowsBash: string | null | undefined;
+
+/** WSL 壳特征：System32\bash.exe 与 WindowsApps\bash.exe（应用执行别名）都只是
+ * WSL 启动器，不是可直接 spawn 的 Windows bash；system32\linux 是 where 对
+ * System32 下 Linux 子目录的另一种展示形态。 */
+const WSL_BASH_RE = /\\windows\\system32\\|\\windowsapps\\|system32\\linux/i;
+
+/** where bash 的原始输出 → 候选列表（剔除 WSL 壳后按原顺序返回） */
+export function parseWhereBash(raw: string): string[] {
+	return raw
+		.split(/\r?\n/)
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.filter((p) => !WSL_BASH_RE.test(p));
+}
+
+/** 收集 Windows bash 候选（按优先级，已去重、不验证）：
+ * 环境变量 SHELL / MSYS_BASH → Git for Windows 固定路径 → PiAbyss 自带 bash。 */
+export function collectBashCandidates(env: NodeJS.ProcessEnv): string[] {
+	const candidates: string[] = [];
+	for (const v of [env.SHELL, env.MSYS_BASH]) {
+		const p = typeof v === "string" ? v.trim() : "";
+		if (p) candidates.push(p);
+	}
+	const fixed = [
+		"C:\\Program Files\\Git\\bin\\bash.exe",
+		"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+		"C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+	];
+	const local = typeof env.LOCALAPPDATA === "string" ? env.LOCALAPPDATA.trim() : "";
+	if (local) fixed.push(path.join(local, "PiAbyss", "resources", "git", "bin", "bash.exe"));
+	candidates.push(...fixed);
+	return [...new Set(candidates)];
+}
+
+/** 验证候选 bash 真的能执行命令（带短超时）：跑 `bash -c "echo <marker>"` 且 stdout
+ * 含标记才算可用。WSL 壳（execvpe 失败 exit 1）、损坏的可执行文件、不存在的路径
+ * 都会被这里淘汰——绝不能只凭文件存在或 where 命中就采用。 */
+export function isUsableBash(candidate: string, timeoutMs = 5000): boolean {
+	const MARKER = "__pi_shelljob_bash_ok__";
+	try {
+		const out = execFileSync(candidate, ["-c", `echo ${MARKER}`], {
+			timeout: timeoutMs,
+			windowsHide: true,
+			encoding: "utf-8",
+		});
+		return out.includes(MARKER);
+	} catch {
+		return false; // 启动失败 / 非零退出 / 超时 → 不可用
+	}
+}
+
+/** 按顺序取第一个「验证可用」的 bash；全不可用返回 null（调用方回退 cmd.exe）。
+ * probe 可注入，便于测试用假候选覆盖「坏候选跳过 / 全坏回退」路径。 */
+export function pickUsableBash(candidates: string[], probe: (candidate: string) => boolean = isUsableBash): string | null {
+	for (const candidate of candidates) {
+		if (probe(candidate)) return candidate;
+	}
+	return null;
+}
 
 function resolveWindowsBash(): string | null {
 	if (windowsBash !== undefined) return windowsBash;
 	windowsBash = null;
 	if (process.platform === "win32") {
-		// 优先 SHELL（pi 同步 bash 工具即由它指定 Git Bash），再退 where bash
-		const candidates = [process.env.SHELL, process.env.MSYS_BASH].filter((v) => typeof v === "string" && v !== "");
-		for (const candidate of candidates) {
-			const p = (candidate as string).trim();
-			if (p && fs.existsSync(p)) {
-				windowsBash = p;
-				break;
-			}
+		const candidates = collectBashCandidates(process.env);
+		try {
+			candidates.push(...parseWhereBash(execFileSync("where", ["bash"], { windowsHide: true, encoding: "utf-8" })));
+		} catch {
+			/* where 不可用就只用固定路径候选 */
 		}
-		if (!windowsBash) {
-			try {
-				const found = execFileSync("where", ["bash"], { windowsHide: true, encoding: "utf-8" })
-					.split("\n")
-					.map((l) => l.trim())
-					.filter(Boolean);
-				// where 可能同时命中 Git Bash 与 WSL bash；WSL 的 bash 不是 Windows 进程，不能直接 spawn
-				const gitBash = found.find((p) => !/\\Windows\\System32\\|system32\\linux/i.test(p));
-				if (gitBash) windowsBash = gitBash;
-			} catch {
-				/* where bash 不可用，回退 cmd */
-			}
-		}
+		windowsBash = pickUsableBash([...new Set(candidates)]);
 	}
 	return windowsBash;
+}
+
+/** 测试专用：真实执行一次探测并返回结果（预热缓存 / 断言选中目标用） */
+export function resolveWindowsBashForTest(): string | null {
+	return resolveWindowsBash();
+}
+
+/** 测试专用：重置探测缓存（隔离用例） */
+export function resetWindowsBashForTest(): void {
+	windowsBash = undefined;
+}
+
+/** 测试专用：注入探测结果（验证 cmd 回退等路径无需真实探测） */
+export function setWindowsBashForTest(value: string | null): void {
+	windowsBash = value;
 }
 
 /** 后台启动命令：windowsHide，stdout/stderr 通过文件描述符重定向到 output.log（追加）。
@@ -93,6 +172,7 @@ function resolveWindowsBash(): string | null {
 export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 	if (!deps) throw new Error("runner 未初始化");
 	const bash = process.platform === "win32" ? resolveWindowsBash() : null;
+	const shellName = bash ?? (process.platform === "win32" ? "cmd.exe" : "/bin/sh");
 	let logFd: number | undefined;
 	let argv: string[] | null = null;
 	if (!bash) {
@@ -145,6 +225,8 @@ export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 		// liveChildren.has() 为真而跳过本次任务，僵尸永远不会被接管定终态。
 		liveChildren.delete(job.id);
 		if (live.timer) clearTimeout(live.timer);
+		// spawn 失败同样要写日志：否则任务零输出无从排查（如 shell 本身启动失败）
+		appendLog(job.id, `[pi-shelljob] 启动失败（shell: ${shellName}）：${message}\n`);
 		deps?.settle(job.id, {
 			status: "failed",
 			finishedAt: Date.now(),
@@ -165,8 +247,17 @@ export function spawnShellJob(job: ShellJob, timeoutMs: number): number {
 		// kill/超时已先行定终态（killed/failed），exit 只兜底正常退出
 		if (st && isTerminal(st)) return;
 		if (signal) {
+			appendLog(job.id, `[pi-shelljob] shell（${shellName}）被信号 ${signal} 终止。\n`);
 			deps?.settle(job.id, { status: "killed", finishedAt: Date.now(), errorMessage: `被信号 ${signal} 终止` });
 			return;
+		}
+		if (code !== 0 && outputLogSize(job.id) === 0) {
+			// 零输出的非零退出：子进程没能产生任何输出就死了（如 shell 本身启动失败、
+			// 或命令静默失败），把退出码兑底写进日志，避免「exit 1 无日志」盲区
+			appendLog(
+				job.id,
+				`[pi-shelljob] shell（${shellName}）退出码 ${code ?? "未知"}，进程未产生任何输出。\n[pi-shelljob] 若命令本身应有输出，请检查 shell 环境是否可用（Windows 下可能命中了不可用的 bash）。\n`,
+			);
 		}
 		deps?.settle(job.id, {
 			status: code === 0 ? "succeeded" : "failed",

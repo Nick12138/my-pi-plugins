@@ -1,3 +1,4 @@
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { createStopHandler, resolveControlToken, startControlServer, stopControlServer } from "../src/control.ts";
 

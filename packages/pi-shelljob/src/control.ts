@@ -33,7 +33,7 @@ export function createStopHandler(deps: {
 	};
 }
 
-const ROOT = path.join(os.homedir(), ".pi", "shelljob");
+const ROOT = process.env.SHELLJOB_CONTROL_ROOT?.trim() || path.join(os.homedir(), ".pi", "shelljob");
 const TOKEN_ENV = "SHELLJOB_CONTROL_TOKEN";
 const PORT_ENV = "SHELLJOB_CONTROL_PORT";
 let server: http.Server | null = null;

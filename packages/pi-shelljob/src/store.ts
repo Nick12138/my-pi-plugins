@@ -1,10 +1,12 @@
 /** 磁盘持久化：~/.pi/shelljob/jobs/<id>/ 下 job.json / status.json / output.log。
- * 主 pi 退出后这些文件是唯一真相，重启后据此接管遗留任务、补发通知。 */
+ * 主 pi 退出后这些文件是唯一真相，重启后据此接管遗留任务、补发通知。
+ * 测试可用 SHELLJOB_JOBS_ROOT 重定向到临时目录：与运行中的宿主共享同一目录时，
+ * 宿主的监控循环会把测试任务误判为僵尸接管、通知路由也会串台。 */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-export const JOBS_ROOT = path.join(os.homedir(), ".pi", "shelljob", "jobs");
+export const JOBS_ROOT = process.env.SHELLJOB_JOBS_ROOT?.trim() || path.join(os.homedir(), ".pi", "shelljob", "jobs");
 
 /** 默认单任务日志保护上限（超过后保护性 kill，防失控输出塞满磁盘） */
 export const DEFAULT_MAX_LOG_BYTES = 5 * 1024 * 1024;

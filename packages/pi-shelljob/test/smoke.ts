@@ -1,5 +1,7 @@
 /** 冒烟测试：直接驱动 store + runner，验证 后台运行/日志/kill/超时/正常退出 全链路。
- * 运行：node test/smoke.ts（Node 24+，原生 TS 类型剥离） */
+ * 运行：node test/smoke.ts（Node 24+，原生 TS 类型剥离）
+ * 首行 import "./test-env.ts" 把任务目录隔离到临时目录，勿删/勿挪到后面。 */
+import "./test-env.ts";
 import assert from "node:assert";
 import * as fs from "node:fs";
 import { spawnShellJob, killShellJob, initRunner } from "../src/runner.ts";

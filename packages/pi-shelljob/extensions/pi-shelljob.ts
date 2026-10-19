@@ -251,7 +251,7 @@ const Action = StringEnum(["submit", "list", "log", "kill"] as const, {
 
 const ShelljobParams = Type.Object({
 	action: Type.Optional(Action),
-	command: Type.Optional(Type.String({ description: "submit 用：要执行的命令（POSIX/bash 语法；Windows 下自动探测 Git Bash 执行，探测不到时为 cmd）" })),
+	command: Type.Optional(Type.String({ description: "submit 用：要执行的命令（POSIX/bash 语法；Windows 下自动探测可用的 Git Bash 执行，探测不到时回退 cmd.exe）" })),
 	cwd: Type.Optional(Type.String({ description: "submit 用：工作目录，默认当前会话目录" })),
 	title: Type.Optional(Type.String({ description: "submit 用：任务标题（显示用），默认取命令前 40 字符" })),
 	timeoutMs: Type.Optional(Type.Number({ description: "submit 用：单任务超时毫秒，超时自动终止；0 = 不限。默认取全局配置" })),
