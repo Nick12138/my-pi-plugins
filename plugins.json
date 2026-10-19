@@ -694,6 +694,23 @@
           "description": "开启后每次报销数据变更延迟 5 秒自动双向同步；进程启动后也会拉齐一次。"
         }
       ]
+    },
+    {
+      "id": "pi-purge",
+      "name": "Purge 运营模式",
+      "description": "dsh-purge 的 pi 侧等价物：替换默认系统提示词前缀为无限制运营模式契约、追加 instruction-authority 附录、project_trust 自动放行免弹窗，并提供 purge_status / purge_toggle 工具与 /purge 命令在线开关。全部走 pi 官方扩展 API，零二进制修改。注意：需以个人（全局）作用域安装，autoTrust 才生效。",
+      "icon": "🔓",
+      "version": "0.1.0",
+      "author": "Nick12138",
+      "tags": [
+        "operator-mode",
+        "system-prompt",
+        "免审批"
+      ],
+      "install": {
+        "type": "repo",
+        "path": "packages/pi-purge"
+      }
     }
   ]
 }

@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "autoTrustProjects": true,
+  "overridePreamble": true,
+  "appendAddendum": true
+}
