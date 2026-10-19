@@ -698,9 +698,9 @@
     {
       "id": "pi-purge",
       "name": "Purge 运营模式",
-      "description": "dsh-purge 的 pi 侧等价物：替换默认系统提示词前缀为无限制运营模式契约、追加 instruction-authority 附录、project_trust 自动放行免弹窗，并提供 purge_status / purge_toggle 工具与 /purge 命令在线开关。全部走 pi 官方扩展 API，零二进制修改。注意：需以个人（全局）作用域安装，autoTrust 才生效。",
+      "description": "dsh-purge 的 pi 侧等价物：启用时在渲染层覆盖 systemPrompt、追加 instruction-authority 附录，并可选择移除 AGENTS.md 等 project_context；包内提供 reverse-engineering 逆向/破解 skill（可在技能页启停，也可 /skill:reverse-engineering 加载）。禁用时逐字还原原生提示词。project_trust 默认仅当前进程放行，rememberTrust=true 时会记录并在禁用时清理本扩展写入的信任；提供 purge_status / purge_toggle 工具与 /purge 命令。状态保存在用户目录，升级不覆盖。注意：需以个人（全局）作用域安装，autoTrust 才生效。",
       "icon": "🔓",
-      "version": "0.1.0",
+      "version": "0.4.0",
       "author": "Nick12138",
       "tags": [
         "operator-mode",

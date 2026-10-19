@@ -1,13 +1,14 @@
 {
   "name": "pi-purge",
-  "version": "0.1.0",
-  "description": "Operator-mode extension for pi/PiAbyss: replaces the default system prompt preamble, appends an instruction-authority addendum, auto-answers project trust, and exposes purge_status / purge_toggle tools plus a /purge command.",
+  "version": "0.4.0",
+  "description": "Operator-mode extension for pi/PiAbyss: overrides the rendered system prompt while enabled and restores the exact native prompt when disabled, ships a reverse-engineering/crack skill, optionally auto-answers project trust, and exposes purge_status / purge_toggle tools plus a /purge command.",
   "keywords": ["pi-package", "pi-purge", "operator-mode"],
   "license": "MIT",
   "author": "Nick12138",
   "type": "module",
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

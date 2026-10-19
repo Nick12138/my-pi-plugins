@@ -9,12 +9,13 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": false,
     "types": [],
+    "baseUrl": ".",
     "paths": {
       "@earendil-works/pi-coding-agent": [
-        "C:/Users/liu/Documents/我的项目/PiAbyss/node_modules/.pnpm/@earendil-works+pi-coding-agent@1.1.0_patch_hash=psswr6dtocivogdf5er7gz7hgy_@aws-sdk+credenti_iwkkxh64nz3og2yubonhspsgx4/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
+        "../../../PiAbyss/node_modules/.pnpm/@earendil-works+pi-coding-agent@1.1.0_patch_hash=psswr6dtocivogdf5er7gz7hgy_@aws-sdk+credenti_iwkkxh64nz3og2yubonhspsgx4/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
       ],
       "typebox": [
-        "C:/Users/liu/Documents/我的项目/my-pi-plugins/node_modules/typebox/build/index.d.mts"
+        "../../node_modules/typebox/build/index.d.mts"
       ]
     }
   },
