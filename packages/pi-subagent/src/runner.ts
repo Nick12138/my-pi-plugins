@@ -26,20 +26,31 @@ export interface SpawnOptions {
 	message?: string;
 }
 
-/** PATH 上是否有 pi 命令（agent CLI）。探测一次并缓存。 */
-let piOnPath: boolean | null = null;
+/**
+ * PATH 上的 pi 是否**真的能 spawn**。探测一次并缓存。
+ *
+ * 不能用 `where`/`which` 命中就算数：npm 在 Windows 装的 `pi` 是一个**无扩展名的
+ * POSIX shell shim**（`%APPDATA%\npm\pi`），`where pi` 命中它，但 CreateProcess
+ * （`spawn(..., {shell:false})`）起不来 → ENOENT，子进程 3ms 即退出、0 turn，
+ * 表现成「spawn pi ENOENT / 退出码 undefined」。`pi.cmd` 也 spawn 不了（EINVAL）。
+ * 与 pi-shelljob 的 Windows bash 探测同一个坑（见仓提交 293e63f）：**验证式探测，
+ * 不是存在式探测**。这里直接跑一次 `pi --version`，成功才认。
+ */
+let piSpawnable: boolean | null = null;
 function hasPiCommand(): boolean {
-	if (piOnPath !== null) return piOnPath;
+	if (piSpawnable !== null) return piSpawnable;
 	try {
-		const res = spawnSync(process.platform === "win32" ? "where" : "which", ["pi"], {
+		const res = spawnSync("pi", ["--version"], {
+			shell: false,
 			windowsHide: true,
 			encoding: "utf8",
+			timeout: 60_000,
 		});
-		piOnPath = res.status === 0;
+		piSpawnable = res.error === undefined && res.status === 0;
 	} catch {
-		piOnPath = false;
+		piSpawnable = false;
 	}
-	return piOnPath;
+	return piSpawnable;
 }
 
 /** 定位包内 agent CLI（cli.js），作为 PATH 无 pi 时的兜底。 */
@@ -54,7 +65,29 @@ function resolveAgentCli(): string | undefined {
 		/* 插件以 repo 方式加载（node_modules 不在仓库内）时此处不可用，继续探测 */
 	}
 
-	// 2) 常见 host 安装位置：PiDeck pi-host/<hash>/node_modules（repo 加载插件时唯一可用来源）
+	// 2) npm 全局安装：`npm i -g @earendil-works/pi-coding-agent` 落地的包体。
+	// PATH 上那个无扩展名 shim 不可 spawn（见 hasPiCommand），但包体里的 ES 入口用
+	// node 跑就行。**先试 dist/bundle/cli.js**（npm 自带的 `pi.cmd` 跑的就是它）：
+	// 裸 `dist/cli.js` 在 npm 平铺的 node_modules 里会拿到版本不匹配的
+	// @earendil-works/pi-codemode，import 时直接 SyntaxError（本仓实测）。
+	// 放在 PiDeck 探测之前：bundle 与宿主同版本，而 PiDeck 目录下可能堆着
+	// 多个历史 hash（mtime 最新 ≠ 当前宿主在用）；拿错版本比拿不到更糟。
+	for (const root of [process.env.APPDATA]) {
+		if (!root) continue;
+		const pkgRoot = path.join(root, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist");
+		for (const entry of [path.join(pkgRoot, "bundle", "cli.js"), path.join(pkgRoot, "cli.js")]) {
+			try {
+				if (fs.existsSync(entry)) {
+					candidates.push(entry);
+					break;
+				}
+			} catch {
+				/* 不可读则跳过 */
+			}
+		}
+	}
+
+	// 3) 常见 host 安装位置：PiDeck pi-host/<hash>/node_modules（repo 加载插件时可用来源）
 	const piHostCandidates = [process.env.LOCALAPPDATA, process.env.APPDATA]
 		.filter((d): d is string => !!d)
 		.map((d) => path.join(d, "com.nick12138.pideck", "pi-host"));
@@ -108,11 +141,13 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 		// 原生可执行（pi.exe 等）
 		return { command: process.execPath, args };
 	}
-	// 解释器环境但入口不是 CLI（如 PiDeck host main.js）：优先 PATH 上的 pi
+	// 解释器环境但入口不是 CLI（如 PiAbyss/PiDeck 的 host main.js）：优先 PATH 上
+	// 真实可 spawn 的 pi（Linux/macOS 的正常形态；Windows 下通常命不中，见上）
 	if (hasPiCommand()) return { command: "pi", args };
-	// 兜底：包内 cli.js
+	// 兜底：包内 cli.js，用当前解释器跑（Windows 上这是唯一可靠路径）
 	const cli = resolveAgentCli();
 	if (cli) return { command: process.execPath, args: [cli, ...args] };
+	// 连 cli.js 都找不到：最后仍试 PATH（并把 ENOENT 原样交给 spawn error 落盘）
 	return { command: "pi", args };
 }
 

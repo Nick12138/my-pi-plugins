@@ -11,6 +11,7 @@ export default defineConfig({
       "packages/piabyss-present-files/**/*.test.ts",
       "packages/pi-pixie/**/*.test.ts",
       "packages/pi-reimburse/**/*.test.ts",
+      "packages/pi-subagent/**/*.test.ts",
     ],
     environment: "node",
   },
