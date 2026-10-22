@@ -679,3 +679,71 @@ describe("extension registration", () => {
     expect(events).toEqual(["before_agent_start"]);
   });
 });
+
+describe("AA multi-select marker", () => {
+  const multi: AskUserQuestion = { ...QUESTION, multiSelect: true };
+
+  function markerContext(mode: "rpc" | "tui") {
+    const inputs: Array<{ title: string; placeholder?: string }> = [];
+    return {
+      inputs,
+      ctx: {
+        mode,
+        ui: {
+          select: async () => undefined,
+          input: async (title: string, placeholder?: string) => {
+            inputs.push({ title, placeholder });
+            return "1,3";
+          },
+        },
+      },
+    };
+  }
+
+  function parseMarker(placeholder: string): Record<string, unknown> {
+    const line = placeholder.split("\n").find((item) => item.startsWith("#aa-ask:"));
+    expect(line).toBeDefined();
+    return JSON.parse(line!.slice("#aa-ask:".length)) as Record<string, unknown>;
+  }
+
+  it("appends a machine-readable marker for RPC hosts", async () => {
+    const { ctx, inputs } = markerContext("rpc");
+    await runQuestionnaire(ctx as never, { questions: [multi, { ...multi, header: undefined }] });
+
+    expect(inputs).toHaveLength(2);
+    const first = inputs[0]!.placeholder!;
+    // 人读的清单照旧在前，标记是最后一行
+    expect(first.split("\n")[0]).toBe("1. Right drawer — Slide the tree in from the right.");
+    expect(first.trimEnd().split("\n").at(-1)!.startsWith("#aa-ask:")).toBe(true);
+
+    expect(parseMarker(first)).toMatchObject({
+      v: 1,
+      kind: "multiSelect",
+      prompt: QUESTION.question,
+      header: "Layout",
+      questionIndex: 1,
+      questionCount: 2,
+      allowCustom: true,
+      // 第一题没有上一题可回退
+      allowBack: false,
+      options: [
+        { label: "Right drawer", description: "Slide the tree in from the right." },
+        { label: "Centered modal", description: "Keep the modal, polish it." },
+        { label: "Top strip", description: "Collapse into a strip above the chat." },
+      ],
+    });
+
+    // 第二题可以回退上一题，AA 据此渲染「上一题」按钮
+    expect(parseMarker(inputs[1]!.placeholder!)).toMatchObject({
+      questionIndex: 2,
+      allowBack: true,
+      backValue: "↩ 修改上一题",
+    });
+  });
+
+  it("keeps the placeholder human-only in TUI mode", async () => {
+    const { ctx, inputs } = markerContext("tui");
+    await runQuestionnaire(ctx as never, { questions: [multi] });
+    expect(inputs[0]!.placeholder).not.toContain("#aa-ask:");
+  });
+});

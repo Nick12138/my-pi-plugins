@@ -11,6 +11,7 @@
  * 模型了，所以回滚只能在答案尚未交出的地方发生 —— 也就是这个循环里。
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildAaMultiSelectMarker } from "./aa-marker.js";
 import type { QuestionAnswer, QuestionnaireResult } from "./answers.js";
 import { parseMultiSelection, resolveSelection } from "./answers.js";
 import { BACK_ROW_LABEL, BACK_ROW_PREFIX } from "./constants.js";
@@ -81,9 +82,30 @@ export async function askMultiSelect(
   const backHint = step.allowBack
     ? `\n\n${BACK_ROW_LABEL} = go back and change the previous answer`
     : "";
+  // 只有 RPC 宿主（Agents-Anywhere / PiAbyss）需要这行结构化标记：它们拿不到
+  // `ui.input` 的第三个参数，否则多选只能退化成空文本框。pi 自己的 TUI 走不到
+  // 这里（ctx.mode === "tui"），placeholder 保持纯人读文本不变。
+  const marker =
+    ctx.mode === "rpc"
+      ? `\n${buildAaMultiSelectMarker({
+          v: 1,
+          kind: "multiSelect",
+          prompt: question.question,
+          ...(question.header ? { header: question.header } : {}),
+          questionIndex: step.questionIndex + 1,
+          questionCount: step.questionCount,
+          allowCustom: true,
+          allowBack: step.allowBack,
+          ...(step.allowBack ? { backValue: BACK_ROW_LABEL } : {}),
+          options: question.options.map((option) => ({
+            label: option.label,
+            ...(option.description ? { description: option.description } : {}),
+          })),
+        })}`
+      : "";
   const value = await ctx.ui.input(
     `${header}${question.question}`,
-    `${list}\n\n${MULTI_SELECT_INSTRUCTIONS}${backHint}`,
+    `${list}\n\n${MULTI_SELECT_INSTRUCTIONS}${backHint}${marker}`,
     piabyssMeta(step, {
       optionDetails: plan.optionDetails,
       multiSelect: true,
