@@ -263,9 +263,9 @@
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "小精灵工作区化工具壳 v0.9：pixie_dispatch（委派，支持批次/排队/会话归属，可带短名 taskName/sessionName，并携带派发方会话自己的 sourceSessionId 供 Host 把回报送回正确会话）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_name（改当前会话段的名字）/ pixie_recall（回读历史会话段正文）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。会话段语义：段由用户在界面里点「新会话」产生，小精灵工作区里创建时间最新的会话就是当前段——没有打盹、没有交接摘要、没有自动换段。记忆在插件侧：新段首轮自动注入「历史段索引 + 上一段收尾」（直接读 Pi 会话目录里的 jsonl，不经 Host，按创建时间新→旧排序），更早的段用 pixie_recall 按需回读；Host 按首条用户消息给新段起名，小精灵可用 pixie_name 改成更贴切的短名。配置项含失联超时。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
+      "description": "小精灵工作区化工具壳 v0.10：pixie_dispatch（委派，支持批次/排队/会话归属，可带短名 taskName/sessionName，并携带派发方会话自己的 sourceSessionId 供 Host 把回报送回正确会话）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_name（改当前会话段的名字）/ pixie_recall（回读历史会话段正文）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。会话段语义：段由用户在界面里点「新会话」产生，小精灵工作区里创建时间最新的会话就是当前段——没有打盹、没有交接摘要、没有自动换段。记忆在插件侧：新段首轮自动注入运行契约（<pixie-context>：时间锚点 / 委派落点 / 排队与回调三分法 / 模型与推理深度默认不传 / automation 只读与草案字段规范）+ 历史段索引 + 上一段收尾；契约此前由 Host 注入，现归插件，不依赖 PiAbyss 入口（裸 pi CLI 打开小精灵工作区同样生效），没有历史段也照发；段索引与收尾直接读 Pi 会话目录里的 jsonl，不经 Host，按创建时间新→旧排序，更早的段用 pixie_recall 按需回读；Host 按首条用户消息给新段起名，小精灵可用 pixie_name 改成更贴切的短名。配置项含失联超时。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
       "icon": "🧚",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "author": "Nick12138",
       "tags": [
         "pixie",

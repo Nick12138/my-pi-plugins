@@ -29,6 +29,7 @@ import {
 	PIXIE_STOP_NAME,
 } from "./pixie-tools.js";
 import { readPixiePort, pixieRequest } from "./http-client.js";
+import { resolveAgentDir } from "./pixie-context.js";
 import { PIXIE_DISPATCH_STATE_PATH, mapDispatchStateResponse } from "./protocol.js";
 
 /** 小精灵工作区路径环境变量（与 plugins.json config[].env 对应）。 */
@@ -38,7 +39,7 @@ export const PIXIE_WORKSPACE_ENV = "PIABYSS_PIXIE_WORKSPACE";
 export function resolvePixieWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
-	const agentDir = env.PI_CODING_AGENT_DIR?.trim() || join(env.HOME ?? env.USERPROFILE ?? ".", ".pi", "agent");
+	const agentDir = resolveAgentDir(env);
 	const configured = env[PIXIE_WORKSPACE_ENV]?.trim();
 	if (!configured) return join(agentDir, "workspace", "pixie");
 	return join(configured.replaceAll("{agentDir}", agentDir));

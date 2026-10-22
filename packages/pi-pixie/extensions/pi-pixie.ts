@@ -47,6 +47,6 @@ export default function (pi: ExtensionAPI) {
 
 	// 每轮开始时统一评估角色（cwd 匹配 / 旧 env 标记）与 armed 门控。
 	createPixieReportActivationExtension()(pi);
-	// 换段后的记忆：新段首轮注入段索引 + 上一段收尾（只读本地会话目录，不经 Host）。
+	// 换段后的记忆：新段首轮注入运行契约 + 段索引 + 上一段收尾（只读本地会话目录，不经 Host）。
 	createPixieSegmentMemoryExtension()(pi);
 }

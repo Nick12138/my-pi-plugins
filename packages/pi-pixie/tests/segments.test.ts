@@ -204,10 +204,104 @@ describe("listSegments", () => {
 });
 
 describe("buildHandoffCard", () => {
-  it("没有历史段时不注入卡片", () => {
+  // 前端（PiAbyss）剥掉 <pixie-segments> 后按行解析：索引行与收尾标题的格式
+  // 一个字符都不能改。这里把前端的两条正则抄一份当契约用。
+  const SEGMENT_INDEX_LINE = /^\s*(\d+)\.\s+(.+?)\s+·\s+(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})\s+·\s+(\d+)\s*条\s*$/;
+  const TAIL_TITLE = /的收尾[：:]\s*$/;
+
+  it("没有历史段也出卡片：契约在、段索引渲染成「没有找到历史会话段」", () => {
     const dir = makeDir();
     const current = writeSession(dir, { id: "cur", messages: [{ role: "user", text: "第一条" }] });
-    expect(buildHandoffCard({ sessionDir: dir, currentFile: current })).toBeNull();
+    const card = buildHandoffCard({
+      sessionDir: dir,
+      currentFile: current,
+      agentDir: makeDir(),
+      now: new Date("2026-10-22T13:14:00Z"),
+    });
+    expect(card.startsWith("<pixie-segments>")).toBe(true);
+    expect(card.endsWith("</pixie-segments>")).toBe(true);
+    expect(card).toContain("<pixie-context>");
+    expect(card).toContain("</pixie-context>");
+    expect(card).toContain("（没有找到历史会话段）");
+    expect(card).toContain("最近 0 段");
+    // 没有上一段就没有收尾区。
+    expect(card).not.toMatch(TAIL_TITLE);
+  });
+
+  it("契约块内嵌在开场两句之前，含时间锚点、落点、回调三分法与 automation 规范", () => {
+    const dir = makeDir();
+    writeSession(dir, {
+      id: "prev",
+      created: "2026-10-14T09:00:00.000Z",
+      modifiedSec: 2000,
+      displayName: "门店对账",
+      messages: [{ role: "assistant", text: "差 12 元，已定位到 B 店" }],
+    });
+    const current = writeSession(dir, { id: "cur", created: "2026-10-15T09:00:00.000Z", modifiedSec: 3000 });
+    const card = buildHandoffCard({
+      sessionDir: dir,
+      currentFile: current,
+      agentDir: makeDir(),
+      now: new Date("2026-10-22T13:14:00Z"),
+    });
+
+    // 顺序：整卡标签 → 契约块 → 开场两句 → 段索引 → 收尾。
+    const contract = card.indexOf("<pixie-context>");
+    const intro = card.indexOf("你在小精灵工作区开启了一个新的会话段");
+    const recallHint = card.indexOf("要回看细节就调用 pixie_recall");
+    const indexTitle = card.indexOf("最近 1 段");
+    const tail = card.indexOf("的收尾：");
+    expect(contract).toBeGreaterThan(0);
+    expect(contract).toBeLessThan(intro);
+    expect(intro).toBeLessThan(recallHint);
+    expect(recallHint).toBeLessThan(indexTitle);
+    expect(indexTitle).toBeLessThan(tail);
+
+    // 时间锚点（格式与 Host 一致）+ 「以现跑 date 为准」这句必须在。
+    expect(card).toMatch(/本段开始时间：\d{4}-\d{2}-\d{2}（周.）\d{2}:\d{2}，UTC[+−]\d+。/);
+    expect(card).toContain("判断今天/周几/是否逾期，一律以现跑 date 为准，不要凭记忆推");
+    // 委派契约的几个必备条款。
+    expect(card).toContain("只复用【你自己创建的】会话");
+    expect(card).toContain("排队");
+    expect(card).toContain("完成：只转述、不代写总结");
+    expect(card).toContain("连败 3 次");
+    expect(card).toContain("询问：立刻转述给用户、不要代答");
+    expect(card).toContain("默认不传 model / thinkingLevel");
+    expect(card).toContain("委派 cwd：必须来自下方已知工作区列表");
+    // automation 契约（pi-automation 没有自己的注入通道，必须搬进这里）。
+    expect(card).toContain("只读不写");
+    expect(card).toContain("```automation-plan");
+    expect(card).toContain("missedWindow");
+    expect(card).toContain("maxRuns");
+    expect(card).toContain("jobId");
+  });
+
+  it("段索引行仍匹配前端正则，收尾标题仍以「的收尾：」结尾", () => {
+    const dir = makeDir();
+    writeSession(dir, {
+      id: "older",
+      created: "2026-10-13T09:00:00.000Z",
+      modifiedSec: 1000,
+      displayName: "报销整理",
+      messages: [{ role: "user", text: "把上月的报销单整理一下" }],
+    });
+    writeSession(dir, {
+      id: "prev",
+      created: "2026-10-14T09:00:00.000Z",
+      modifiedSec: 2000,
+      displayName: "门店对账",
+      messages: [{ role: "assistant", text: "差 12 元，已定位到 B 店" }],
+    });
+    const current = writeSession(dir, { id: "cur", created: "2026-10-15T09:00:00.000Z", modifiedSec: 3000 });
+    const card = buildHandoffCard({ sessionDir: dir, currentFile: current, agentDir: makeDir() });
+    expect(card).not.toBeNull();
+
+    const body = card.slice("<pixie-segments>".length, -"</pixie-segments>".length);
+    const indexLines = body.split("\n").filter((line) => SEGMENT_INDEX_LINE.test(line));
+    expect(indexLines.map((line) => SEGMENT_INDEX_LINE.exec(line)?.[2])).toEqual(["门店对账", "报销整理"]);
+    expect(body.split("\n").some((line) => TAIL_TITLE.test(line))).toBe(true);
+    // 段索引与收尾的既有格式没变：序号. 段名 · MM-DD HH:MM · N 条。
+    expect(card).toContain("0. 门店对账 · 10-14 09:00 · 1 条");
   });
 
   it("卡片含段索引与上一段收尾，并过滤本插件自己注入的条目", () => {
@@ -242,7 +336,7 @@ describe("buildHandoffCard", () => {
     });
     const current = writeSession(dir, { id: "cur", created: "2026-10-15T09:00:00.000Z", modifiedSec: 3000 });
 
-    const card = buildHandoffCard({ sessionDir: dir, currentFile: current });
+    const card = buildHandoffCard({ sessionDir: dir, currentFile: current, agentDir: makeDir() });
     expect(card).not.toBeNull();
     expect(card).toContain("<pixie-segments>");
     expect(card).toContain("pixie_recall");
@@ -272,7 +366,7 @@ describe("buildHandoffCard", () => {
     const current = join(dir, fileName({ id: "cur", created: "2026-10-15T09:00:00.000Z" }));
     writeSession(dir, { id: "cur", created: "2026-10-15T09:00:00.000Z", modifiedSec: 10000, parentSession: outside });
 
-    const card = buildHandoffCard({ sessionDir: dir, currentFile: current });
+    const card = buildHandoffCard({ sessionDir: dir, currentFile: current, agentDir: makeDir() });
     expect(card).toContain("从别处接手");
     expect(card).toContain("0. 别处的段");
     expect(card).toContain("1. 同目录更近的段");
@@ -353,7 +447,7 @@ describe("recallSegmentsText", () => {
     });
     const current = writeSession(dir, { id: "cur", created: "2026-10-15T09:00:00.000Z", modifiedSec: 10000, parentSession: parent });
 
-    const card = buildHandoffCard({ sessionDir: dir, currentFile: current }) ?? "";
+    const card = buildHandoffCard({ sessionDir: dir, currentFile: current, agentDir: makeDir() });
     expect(card).toContain("0. 被接手的段");
     expect(card).toContain("接手点：等用户拍板");
     const tail = recallSegmentsText({ sessionDir: dir, currentFile: current });

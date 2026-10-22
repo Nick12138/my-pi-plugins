@@ -11,14 +11,20 @@
  *
  * 分工：
  * - listSegments()：目录里的历史段索引（新→旧，排除当前会话文件）。
- * - buildHandoffCard()：新段首轮注入的「段索引 + 上一段收尾」。
+ * - buildHandoffCard()：新段首轮注入的「运行契约 + 段索引 + 上一段收尾」。
  * - recallSegmentsText()：pixie_recall 工具的主体（index/tail/search）。
+ *
+ * 运行契约（`<pixie-context>` 块，见 pixie-context.ts）自 v0.10 起内嵌在卡片里：
+ * 此前它由 PiAbyss Host 在 prompt 前导注入，裸 `pi` CLI 打开小精灵工作区时拿不到。
+ * 因此卡片**不再**要求「至少有一个历史段」——全新工作区一个历史段都没有时，
+ * 契约正是模型最先需要的东西。
  *
  * 只读；历史段取自当前会话目录，唯一可能越出目录的是 header.parentSession 明确
  * 指向的那个文件。正文渲染剔除工具噪声与本插件自己注入的条目。
  */
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { buildPixieContextPreamble, resolveAgentDir } from "./pixie-context.js";
 
 /** 本插件注入的交接卡片的 customType（回读时过滤，避免自我复读）。 */
 export const PIXIE_SEGMENT_CUSTOM_TYPE = "pixie-segments";
@@ -418,29 +424,47 @@ export function formatSegmentIndex(history: SegmentRecord[]): string {
 }
 
 /**
- * 新段首轮注入的交接卡片：段索引 + 上一段收尾。
- * 没有任何历史段时返回 null（首段/目录缺失，绝不注入空卡片）。
+ * 新段首轮注入的交接卡片：运行契约 + 段索引 + 上一段收尾。
+ *
+ * 没有历史段也要注入——契约是卡片的第一目的（裸 CLI 开的新工作区往往一段历史都
+ * 没有），此时段索引区渲染成「（没有找到历史会话段）」，收尾区整段省略。
+ * 是否注入仍由 segment-memory 的门控决定（小精灵工作区 + 本段未注入过）。
  */
 export function buildHandoffCard(input: {
 	sessionDir: string;
 	currentFile?: string | null;
 	currentName?: string | null;
 	maxSegments?: number;
-}): string | null {
+	/** agentDir（已知工作区来源）；默认按 env 解析。 */
+	agentDir?: string;
+	/** 时间锚点；默认现跑的 new Date()。 */
+	now?: Date;
+	/** 显式传入的契约块（测试或不带契约时用）；不传则内部装配。 */
+	context?: string;
+}): string {
 	const { previous, history } = previousSegment({
 		sessionDir: input.sessionDir,
 		currentFile: input.currentFile,
 		maxSegments: input.maxSegments ?? DEFAULT_INDEX_SEGMENTS,
 	});
-	if (!previous && history.length === 0) return null;
-	const lines: string[] = [
-		`<${PIXIE_SEGMENT_CUSTOM_TYPE}>`,
+	// 契约装配内部已 best-effort；这里再兜一层，契约没了也要留下段索引。
+	let context = input.context;
+	if (context === undefined) {
+		try {
+			context = buildPixieContextPreamble(input.agentDir ?? resolveAgentDir(), input.now ?? new Date());
+		} catch {
+			context = "";
+		}
+	}
+	const lines: string[] = [`<${PIXIE_SEGMENT_CUSTOM_TYPE}>`];
+	if (context) lines.push(context, "");
+	lines.push(
 		"你在小精灵工作区开启了一个新的会话段。上一段并没有丢：正文都存在本机 Pi 会话目录里。",
 		"要回看细节就调用 pixie_recall（segment 省略 = 上一段；mode=search 可按关键词找）。",
 		"",
 		`最近 ${history.length} 段（新→旧，序号即 pixie_recall 的 segment 参数，0 = 上一段）：`,
 		formatSegmentIndex(history),
-	];
+	);
 	if (previous) {
 		const tail = previous.messages.slice(-HANDOFF_TAIL_MESSAGES);
 		const rendered: string[] = [];
