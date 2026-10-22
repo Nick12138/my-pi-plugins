@@ -27,10 +27,10 @@ function createMockPi(): { pi: never; emit: (ctx: unknown) => Promise<{ message?
   };
   return {
     pi: pi as never,
-    async emit(ctx: unknown) {
+    async emit(ctx: unknown, prompt?: string) {
       let result: { message?: { customType: string; content: string; display: boolean } } | undefined;
       for (const handler of handlers) {
-        result = (await handler({ type: "before_agent_start" }, ctx)) as typeof result;
+        result = (await handler({ type: "before_agent_start", prompt }, ctx)) as typeof result;
       }
       return result;
     },
@@ -131,6 +131,35 @@ describe("pixie segment memory injection", () => {
     expect(content).toContain("委派 cwd：必须来自下方已知工作区列表");
     expect(content).toContain("```automation-plan");
     expect(content).toContain("（没有找到历史会话段）");
+  });
+
+  it("旧 Host 已包上契约时，卡片只补回顾、不重复契约", async () => {
+    const { dir, current } = makeSessionDirWithPrevious();
+    const mock = createMockPi();
+    createPixieSegmentMemoryExtension({ isResident: () => true, agentDir: makeAgentDir() })(mock.pi);
+
+    const hosted = `<pixie-context>
+本段开始时间：2026-10-21（周三）09:00，UTC+8。
+</pixie-context>
+嗨`;
+    const result = await mock.emit(pixieCtx(dir, current), hosted);
+    expect(result?.message?.customType).toBe(PIXIE_SEGMENT_CUSTOM_TYPE);
+    const content = result?.message?.content ?? "";
+    // 不重复：整张卡片只允许出现一次开标签——这里是零次。
+    expect(content).not.toContain("<pixie-context>");
+    expect(content).not.toContain("本段开始时间");
+    // 但回顾部分不能丢。
+    expect(content).toContain("0. 门店对账");
+    expect(content).toContain("B 店差 12 元，已改好");
+  });
+
+  it("prompt 里没有契约（裸 CLI / 新 Host）时照常内嵌", async () => {
+    const { dir, current } = makeSessionDirWithPrevious();
+    const mock = createMockPi();
+    createPixieSegmentMemoryExtension({ isResident: () => true, agentDir: makeAgentDir() })(mock.pi);
+
+    const result = await mock.emit(pixieCtx(dir, current), "嗨");
+    expect(result?.message?.content).toContain("<pixie-context>");
   });
 
   it("段索引行仍匹配前端正则（intro 之后的固定格式）", async () => {

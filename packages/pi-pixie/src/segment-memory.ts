@@ -11,9 +11,14 @@
  * 也要注入**——全新工作区恰恰是最需要契约的场景。
  *
  * 任何一步失败都退化成「不注入」，绝不抛出——卡片没了不影响 agent 启动。
+ *
+ * 过渡期防双写：未升级的 PiAbyss Host 仍会把同款 `<pixie-context>` 包在首条用户
+ * 消息外层。这里看一眼本轮 prompt：已带契约就只出回顾部分（卡片仍要注入，段索引
+ * 与收尾不能丢），避免段首出现两份契约。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isPixieResidentSession } from "./activation.js";
+import { PIXIE_CONTEXT_TAG } from "./pixie-context.js";
 import {
 	DEFAULT_INDEX_SEGMENTS,
 	PIXIE_SEGMENT_CUSTOM_TYPE,
@@ -21,6 +26,12 @@ import {
 	needsHandoffCard,
 	sessionPathFromCtx,
 } from "./segments.js";
+
+/** 本轮 prompt 是否已被旧 Host 包上契约前导（只认开标签，不做全文比对）。 */
+export function promptCarriesContext(event: unknown): boolean {
+	const prompt = (event as { prompt?: unknown } | undefined)?.prompt;
+	return typeof prompt === "string" && prompt.includes(`<${PIXIE_CONTEXT_TAG}>`);
+}
 
 export function createPixieSegmentMemoryExtension(options: {
 	isResident?: (ctx?: ExtensionContext) => boolean;
@@ -52,6 +63,8 @@ export function createPixieSegmentMemoryExtension(options: {
 					maxSegments,
 					agentDir: options.agentDir,
 					now: options.now?.(),
+					// 旧 Host 已给这一轮包上契约 → 卡片只补回顾，不重复契约。
+					context: promptCarriesContext(_event) ? "" : undefined,
 				});
 				return { message: { customType: PIXIE_SEGMENT_CUSTOM_TYPE, content: card, display: true } };
 			} catch {
