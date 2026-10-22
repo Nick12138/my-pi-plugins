@@ -2,12 +2,13 @@
 
 把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件：让 agent 直接操作用户的
 待办 · 速记（原名「方寸间」「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
-（list / create / complete / reopen / update），与 PiAbyss 桌面端待办 · 速记页面
+（list / create / complete / reopen / update / delete），与 PiAbyss 桌面端待办 · 速记页面
 共用同一份磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
 （`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss Host 内置的
 同步引擎。v0.3.0 起取消记录类别（备忘 / 想法 / 任务），旧数据的 type 字段
 读盘时自动剔除。v0.4.0 新增**计划功能**（一次性截止 + 周期规则）并把状态
 收敛为三种（详见下文）。v0.5.0 新增 **`create` 动作**（agent 侧直接新建记录）。
+v0.6.0 新增 **`delete` 动作**（软删除，打墓碑后由同步引擎传播删除）。
 
 ## 功能
 
@@ -25,6 +26,12 @@
   用户决策时，不得调用 complete；用户会话中的手动指令优先级最高。
 - `reopen`：把已完成的记录重新打开。
 - `update`：修改记录的标题 / 正文 / 标签 / **计划**（dueAt / recurrence）。
+- `delete`：删除记录（v0.6.0）。语义是**软删除**：走 `store.remove` 只打墓碑
+  （`deletedAt` = now），记录体留在 `notes.json` 里供同步引擎把删除传播到
+  其他设备；超过 TTL 的墓碑由同步引擎物理清理，工具层不提供物理删除路径。
+  成功返回带被删记录的标题并说明是软删除。语义区分：作废 / 取消的便签用
+  delete，任务真正做完用 complete + result，两者不要混用。已删除或不存在的
+  id 会返回明确错误（不会重复打墓碑）。
 - 以上任一变更后，云同步引擎会防抖触发 autoSync（开启且已配置时）。
 
 ## 计划功能（v0.4.0）

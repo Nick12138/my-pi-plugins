@@ -123,3 +123,60 @@ describe("piabyss_memo create 动作", () => {
     expect(textOf(created)).toContain(`until ${new Date(until).toISOString()}`);
   });
 });
+
+describe("piabyss_memo delete 动作", () => {
+  /** 新建一条便签并返回 id。 */
+  async function createNote(tool: CapturedTool, title: string): Promise<string> {
+    const created = await tool.execute("c1", { action: "create", title, contentMd: "作废测试" });
+    const id = /id: (\S+)/.exec(textOf(created))?.[1];
+    if (!id) throw new Error("create 没有返回 id");
+    return id;
+  }
+
+  it("软删除：打墓碑、记录体保留、list 不再返回", async () => {
+    const tool = await loadTool();
+    const agentDir = process.env.PI_CODING_AGENT_DIR ?? "";
+    const id = await createNote(tool, "过期活动报名");
+
+    const deleted = await tool.execute("t1", { action: "delete", id });
+    expect(deleted.isError).toBeUndefined();
+    expect(textOf(deleted)).toContain("过期活动报名");
+    expect(textOf(deleted)).toContain("soft delete");
+
+    // 墓碑落盘：listAll 仍能读到记录体，deletedAt 非空。
+    const stored = getMemoStore(agentDir).getAny(id) as MemoNote | null;
+    expect(stored).not.toBeNull();
+    expect(stored?.deletedAt).not.toBeNull();
+    expect(stored?.title).toBe("过期活动报名");
+    // 可见列表不再返回。
+    expect(getMemoStore(agentDir).list()).toHaveLength(0);
+    const listed = await tool.execute("t2", { action: "list" });
+    expect(textOf(listed)).toBe("The memo board is empty.");
+  });
+
+  it("重复 delete 报错（已是墓碑）", async () => {
+    const tool = await loadTool();
+    const id = await createNote(tool, "重复删除");
+    const first = await tool.execute("t1", { action: "delete", id });
+    expect(first.isError).toBeUndefined();
+
+    const again = await tool.execute("t2", { action: "delete", id });
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toContain(`备忘录记录不存在或已删除：${id}`);
+  });
+
+  it("不存在的 id 报错", async () => {
+    const tool = await loadTool();
+    const missing = "00000000-0000-4000-8000-00000000000f";
+    const failed = await tool.execute("t1", { action: "delete", id: missing });
+    expect(failed.isError).toBe(true);
+    expect(textOf(failed)).toContain(`备忘录记录不存在或已删除：${missing}`);
+  });
+
+  it("缺 id 报错", async () => {
+    const tool = await loadTool();
+    const failed = await tool.execute("t1", { action: "delete" });
+    expect(failed.isError).toBe(true);
+    expect(textOf(failed)).toContain("a note id is required");
+  });
+});

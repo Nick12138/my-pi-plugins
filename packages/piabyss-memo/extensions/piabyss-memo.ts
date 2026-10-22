@@ -28,6 +28,12 @@
  *   - 新增 create 动作（title 必填，contentMd / tags / dueAt / recurrence 可选），
  *     直接经 store.create 落盘并返回新记录 id；Host 端新建草稿（draft.json）
  *     仍由桌面 UI/协议层负责，本动作不碰草稿。
+ *
+ * v6（agent 侧删除）：
+ *   - 新增 delete 动作（id 必填）：走 store.remove 打墓碑（软删除），记录体
+ *     保留在 notes.json 里供同步引擎把删除传播到其他设备；超过 TTL 的墓碑
+ *     由同步引擎物理清理，工具层不提供物理删除路径。
+ *     语义区分：作废/取消的便签用 delete；任务真正做完用 complete + result。
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -63,13 +69,16 @@ const ParamsSchema = Type.Object({
       Type.Literal("complete"),
       Type.Literal("reopen"),
       Type.Literal("update"),
+      Type.Literal("delete"),
     ],
     {
       description:
-        "list=列出全部；create=新建（需 title）；complete=完成并写 result；reopen=重开；update=改标题/正文/标签/计划。",
+        "list=列出全部；create=新建（需 title）；complete=完成并写 result；reopen=重开；update=改标题/正文/标签/计划；delete=软删除作废的便签（打墓碑，同步会传播删除）。",
     },
   ),
-  id: Type.Optional(Type.String({ description: "便签 id（complete/reopen/update 必填；不知道就先 list）。" })),
+  id: Type.Optional(
+    Type.String({ description: "便签 id（complete/reopen/update/delete 必填；不知道就先 list）。" }),
+  ),
   title: Type.Optional(Type.String({ description: "标题（create 必填；update 时改标题）。" })),
   contentMd: Type.Optional(Type.String({ description: "Markdown 正文（create/update）。" })),
   tags: Type.Optional(Type.Array(Type.String(), { description: "标签（create 初始；update 整体替换）。" })),
@@ -101,7 +110,7 @@ type MemoSessionInfo = {
 };
 
 const TOOL_DESCRIPTION =
-  "PiAbyss「待办 · 速记」看板（待办/备忘/收集）。记一笔或设提醒用 create；查用 list；任务真的做完、且没有在等用户决定的事时才 complete，必须给 result 摘要。周期便签 complete 只结当前轮，要停掉先清 recurrence。用户口头指令优先于便签字面。";
+  "PiAbyss「待办 · 速记」看板（待办/备忘/收集）。记一笔或设提醒用 create；查用 list；任务真的做完、且没有在等用户决定的事时才 complete，必须给 result 摘要。周期便签 complete 只结当前轮，要停掉先清 recurrence。作废/取消的便签用 delete（软删除，同步会传播），不要拿 delete 代替做完（结项用 complete + result），也不要拿 complete 当删除。用户口头指令优先于便签字面。";
 
 const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -208,7 +217,7 @@ export default function (pi: ExtensionAPI) {
     name: MEMO_TOOL_NAME,
     label: "待办 · 速记",
     description: TOOL_DESCRIPTION,
-    promptSnippet: "待办 · 速记看板：list/create/complete/reopen/update",
+    promptSnippet: "待办 · 速记看板：list/create/complete/reopen/update/delete",
     parameters: ParamsSchema,
 
     async execute(_toolCallId, params: MemoParams, _signal, _onUpdate, ctx) {
@@ -300,6 +309,36 @@ export default function (pi: ExtensionAPI) {
           }
           return {
             content: [{ type: "text" as const, text }],
+            details: undefined,
+          };
+        }
+
+        // delete（软删除：打墓碑，记录体保留供同步传播；工具层不提供物理删除）
+        if (params.action === "delete") {
+          if (!store.get(id)) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Error: 备忘录记录不存在或已删除：${id}`,
+                },
+              ],
+              details: undefined,
+              isError: true,
+            };
+          }
+          const note = store.remove(id);
+          scheduleMemoAutoSync(agentDir);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Memo note ${note.title} deleted (soft delete: a tombstone is written, ` +
+                  `the record body is kept so the deletion propagates through cloud sync; ` +
+                  `expired tombstones are purged automatically later).`,
+              },
+            ],
             details: undefined,
           };
         }
