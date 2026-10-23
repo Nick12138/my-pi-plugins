@@ -53,9 +53,9 @@ see_job({ action, tasks[]?... })                          异步任务队列：s
 图片在调视觉模型之前就会做校验，失败时返回带 `reason` 的 `image_read_error`，并在错误文案里附四行诊断：
 
 ```
-无法读取图片 "D:/proj/../../Users/liu/AppData/.../README.md"：文件不存在（ENOENT）
-  传入: D:/proj/../../Users/liu/AppData/.../README.md
-  解析: D:\Users\liu\AppData\...\README.md   ← ../.. 被 Windows 词法吸收，盘符已变
+无法读取图片 "D:/proj/../../Users/example/AppData/.../README.md"：文件不存在（ENOENT）
+  传入: D:/proj/../../Users/example/AppData/.../README.md
+  解析: D:\Users\example\AppData\...\README.md   ← ../.. 被 Windows 词法吸收，盘符已变
   cwd:  D:\proj
   原因: 文件不存在（ENOENT）
 ```

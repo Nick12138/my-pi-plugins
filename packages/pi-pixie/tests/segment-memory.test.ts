@@ -200,7 +200,7 @@ describe("pixie segment memory injection", () => {
       // 目录里最新会话的时间从文件名读（与 Pi 的落盘命名一致）。
       writeFileSync(join(sessions, name, `${stamp}_id.jsonl`), `${JSON.stringify({ type: "session" })}\n`, "utf8");
     };
-    seed("--C--Users-liu--", "2026-10-01T09-00-00-000Z");
+    seed("--C--Users-example--", "2026-10-01T09-00-00-000Z");
     seed("--D--我的项目--", "2026-10-02T09-00-00-000Z");
     seed("--D--我的项目-PiAbyss--", "2026-10-03T09-00-00-000Z");
     seed("--D--我的项目-PiAbyss-packages--", "2026-10-04T09-00-00-000Z");
@@ -264,7 +264,7 @@ describe("pixie segment memory injection", () => {
   });
 
   it("会话目录名反解：正常形态还原、脏形态丢弃", () => {
-    expect(decodeSessionDirName("--C--Users-liu--")).toBe("C:\\Users\\liu");
+    expect(decodeSessionDirName("--C--Users-example--")).toBe("C:\\Users\\example");
     expect(decodeSessionDirName("--D--我的项目-PiAbyss--")).toBe("D:\\我的项目\\PiAbyss");
     expect(decodeSessionDirName("--C--Users-liu-.pi-agent-sessions---C--Users-liu-.pi-agent-pideck-DefaultProject----")).toBeNull();
     expect(decodeSessionDirName("--D--我的项目-OKXBot--")).toBe("D:\\我的项目\\OKXBot");

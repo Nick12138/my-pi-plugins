@@ -173,7 +173,7 @@ equal(upperRes.details?.error, "all_failed", "uppercase .PNG still treated as an
 const cwdDrive = cwd.slice(0, 2); // 例如 "C:"
 const crossed = await seeImage.execute(
 	"c13",
-	{ image: `${cwdDrive}${cwd.slice(2)}\\..\\..\\Users\\liu\\AppData\\shot.png`, prompt: "p" },
+	{ image: `${cwdDrive}${cwd.slice(2)}\\..\\..\\Users\\example\\AppData\\shot.png`, prompt: "p" },
 	undefined,
 	undefined,
 	ctx,
