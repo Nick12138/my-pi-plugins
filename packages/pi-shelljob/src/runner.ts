@@ -382,13 +382,17 @@ function formatBytes(n: number): string {
 }
 
 /** 日志保护：单任务 output.log 超过 maxLogBytes 的运行中任务保护性 kill
- * （fd 重定向模式下无法截断写入中的文件，只能用 kill 兑现上限语义，防失控刷盘） */
+ * （fd 重定向模式下无法截断写入中的文件，只能用 kill 兑现上限语义，防失控刷盘）
+ *
+ * 只遍历本进程在管的 liveChildren：这些才是"可能正在失控刷盘"的任务，且
+ * 完全不需要读盘（旧实现每 tick 把全部 job 的 job.json/status.json 读一遍，
+ * 99 个 job 时是纯粹的空转；别的进程管理的任务由 takeoverOrphans 兜底）。 */
 export function enforceLogLimits(): void {
 	if (!deps) return;
-	for (const { job, status } of loadAllJobs()) {
-		if (status.status !== "running") continue;
-		if (outputLogSize(job.id) > deps.maxLogBytes) {
-			void killShellJob(job.id, { reason: `输出日志超过保护上限（${formatBytes(deps.maxLogBytes)}），自动终止` });
+	const maxLogBytes = deps.maxLogBytes;
+	for (const jobId of liveChildren.keys()) {
+		if (outputLogSize(jobId) > maxLogBytes) {
+			void killShellJob(jobId, { reason: `输出日志超过保护上限（${formatBytes(maxLogBytes)}），自动终止` });
 		}
 	}
 }
@@ -427,13 +431,22 @@ export async function takeoverOrphans(): Promise<void> {
 	}
 }
 
-/** 进程级监控循环（每次宿主进程只启动一个）：日志保护 + 遗留任务接管。 */
+/** 进程级监控循环（每次宿主进程只启动一个）：日志保护 + 遗留任务接管。
+ *
+ * 日志保护 2s 一跳（只看 liveChildren，纯内存 + 一次 stat）；遗留任务接管是
+ * 冷路径（只对"上一个宿主进程留下的 running 记录"有意义），首个 tick 跑一次，
+ * 之后每 60s 一次就够，没必要每 2s 把整个 jobs 目录读一遍。 */
 export function startMonitorLoop(): void {
 	const TICK = 2000;
+	const ORPHAN_INTERVAL_MS = 60_000;
+	let lastOrphanSweep = 0;
 	setInterval(() => {
 		void (async () => {
 			if (!deps) return;
 			enforceLogLimits();
+			const now = Date.now();
+			if (now - lastOrphanSweep < ORPHAN_INTERVAL_MS) return;
+			lastOrphanSweep = now;
 			await takeoverOrphans();
 		})();
 	}, TICK).unref?.();

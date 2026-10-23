@@ -71,6 +71,9 @@ function writeJson(file: string, data: unknown): void {
 	try {
 		fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
 		fs.renameSync(tmp, file);
+		// 同毫秒同长度重写时 mtime+size 版本戳不会变，写入方必须显式失效。
+		jsonCache.delete(file);
+		versionMemo.delete(file);
 	} catch (err) {
 		try {
 			fs.rmSync(tmp, { force: true });
@@ -81,12 +84,55 @@ function writeJson(file: string, data: unknown): void {
 	}
 }
 
-function readJson<T>(file: string): T | null {
+/**
+ * 读缓存：按 (mtimeMs, size) 失效。
+ *
+ * 监控循环每 2s 把全部 job 的 job.json/status.json 读一遍（loadAllJobs 一次、
+ * enforceLogLimits 与 takeoverOrphans 各一次），宿主侧 shelljob-watcher 还每 2s
+ * 全量 reread 一遍。文件只在状态变化时被原子重写，stat 比 open+parse 便宜得多。
+ */
+type JsonCacheEntry = { version: string; value: unknown };
+const jsonCache = new Map<string, JsonCacheEntry>();
+
+/** 版本戳短 TTL：同一次 loadAllJobs 里 scanJobs 与 loadJobRecord 会重复 stat。 */
+const VERSION_TTL_MS = 1500;
+const versionMemo = new Map<string, { version: string | null; at: number }>();
+
+function jsonFileVersion(file: string): string | null {
+	const now = Date.now();
+	const memo = versionMemo.get(file);
+	if (memo && now - memo.at < VERSION_TTL_MS) return memo.version;
+	let version: string | null = null;
 	try {
-		return JSON.parse(fs.readFileSync(file, "utf-8")) as T;
+		const stat = fs.statSync(file);
+		version = `${stat.mtimeMs}:${stat.size}`;
 	} catch {
-		return null;
+		version = null;
+		jsonCache.delete(file);
 	}
+	versionMemo.set(file, { version, at: now });
+	return version;
+}
+
+function readJson<T>(file: string): T | null {
+	const version = jsonFileVersion(file);
+	if (version === null) return null;
+	const cached = jsonCache.get(file);
+	if (cached && cached.version === version) return cached.value as T | null;
+	let value: T | null = null;
+	try {
+		value = JSON.parse(fs.readFileSync(file, "utf-8")) as T;
+	} catch {
+		value = null;
+	}
+	jsonCache.set(file, { version, value });
+	return value;
+}
+
+/** 测试/外部改写后清空读缓存。 */
+export function resetStoreCache(): void {
+	jsonCache.clear();
+	versionMemo.clear();
 }
 
 export function writeJob(job: ShellJob): void {
@@ -130,12 +176,18 @@ export function outputLogSize(jobId: string): number {
 /** 扫描所有 job 目录，按创建时间倒序 */
 export function scanJobs(): string[] {
 	try {
-		return fs
+		const ids = fs
 			.readdirSync(JOBS_ROOT, { withFileTypes: true })
 			.filter((d) => d.isDirectory())
-			.map((d) => d.name)
-			.filter((id) => fs.existsSync(jobPath(id)))
-			.sort((a, b) => (readJob(b)?.createdAt ?? 0) - (readJob(a)?.createdAt ?? 0));
+			.map((d) => d.name);
+		// createdAt 先读进 Map 再排序：旧实现在 sort 比较器里 readJob()，
+		// 目录越多，额外 I/O 越多（99 个 job ≈ 600 次 job.json 读取/tick）。
+		const created = new Map<string, number>();
+		for (const id of ids) {
+			const job = readJob(id);
+			if (job) created.set(id, typeof job.createdAt === "number" ? job.createdAt : 0);
+		}
+		return [...created.keys()].sort((a, b) => (created.get(b) ?? 0) - (created.get(a) ?? 0));
 	} catch {
 		return [];
 	}

@@ -6,6 +6,9 @@ import { supervisorDiagnostics } from "./supervisor-channel.ts";
 import type { RunRecord } from "./types.ts";
 import { STATUS_LABEL } from "./types.ts";
 
+/** GET /api/runs 单次返回的 run 上限（新的在前）。宿主侧只展示最近 32 条。 */
+const RUN_LIST_LIMIT = 60;
+
 function json(res: http.ServerResponse, code: number, data: unknown): void {
 	const body = JSON.stringify(data);
 	res.writeHead(code, {
@@ -119,7 +122,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 	}
 
 	if (req.method === "GET" && parts[0] === "api" && parts[1] === "runs" && parts.length === 2) {
-		json(res, 200, { runs: loadAllRuns().map(toSummary), runsRoot: RUNS_ROOT });
+		// 面板只需要最近的一批（pi-host 侧 MAX_RUNS=32，超出标记 omitted）。
+		// 全量读 88 个 run 的三份 JSON 是纯浪费：每 750ms 一次、每次约 34ms。
+		json(res, 200, { runs: loadAllRuns({ limit: RUN_LIST_LIMIT }).map(toSummary), runsRoot: RUNS_ROOT });
 		return;
 	}
 
