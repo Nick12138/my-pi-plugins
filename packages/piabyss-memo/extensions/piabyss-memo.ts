@@ -34,15 +34,67 @@
  *     保留在 notes.json 里供同步引擎把删除传播到其他设备；超过 TTL 的墓碑
  *     由同步引擎物理清理，工具层不提供物理删除路径。
  *     语义区分：作废/取消的便签用 delete；任务真正做完用 complete + result。
+ * v7（拒绝一次性会话写入）：
+ *   - 测试/临时会话（cwd 落在系统临时目录下）调写动作一律拒绝，list 照旧可读；
+ *     设 `PIABYSS_MEMO_ALLOW_TEMP=1` 可放开（确有需要在临时目录里记事时）。
+ *     背景：2026-10-26，apps/host 的 verify-abort 回归脚本在临时目录建会话，
+ *     模型看到 prompt 里的「记住一个暗号」就调 create，给用户的真实看板塞了一条
+ *     测试用便签。只靠调用方（脚本）自己隔离 agent 目录永远会漏，这里由被调方兜底。
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { tmpdir } from "node:os";
+import { resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { getMemoStore, type MemoNote } from "../src/memo-store.js";
 import type { MemoRecurrence } from "../src/recurrence.js";
 import { scheduleMemoAutoSync } from "../src/memo-sync.js";
 
 const MEMO_TOOL_NAME = "piabyss_memo";
+
+/** 会改用户数据的动作（list 只读，永远放行）。 */
+const WRITE_ACTIONS = new Set(["create", "update", "complete", "reopen", "delete"]);
+
+/**
+ * 判断一个目录是否落在系统临时目录下（大小写不敏感，覆盖 Windows 的 C:\\…\\Temp）。
+ *
+ * @param raw 会话 cwd
+ * @returns 是否是一次性/临时会话
+ */
+function isUnderTempDir(raw: string | null | undefined): boolean {
+  if (!raw || !String(raw).trim()) return false;
+  let target: string;
+  try {
+    target = resolve(String(raw));
+  } catch {
+    return false;
+  }
+  const roots = [tmpdir(), "/tmp", "/private/tmp", "/var/tmp"]
+    .map((root) => resolve(root).replace(/[\\/]+$/, "") + sep)
+    .map((root) => root.toLowerCase());
+  const normalized = `${target.replace(/[\\/]+$/, "")}${sep}`.toLowerCase();
+  return roots.some((root) => normalized.startsWith(root));
+}
+
+/**
+ * 一次性会话的写拦截：命中就返回要回给模型的拒绝文案，否则 null。
+ *
+ * cwd 取不到（老宿主 / prewarm 共享宿主）时**不拦**：宁可漏拦，不能把正常写入挡掉。
+ *
+ * @param action 工具动作名
+ * @param ctx 扩展上下文
+ * @returns 拒绝文案或 null
+ */
+function tempSessionBlocker(action: string, ctx: ExtensionContext | undefined): string | null {
+  if (!WRITE_ACTIONS.has(action)) return null;
+  if (process.env.PIABYSS_MEMO_ALLOW_TEMP === "1") return null;
+  const cwd = ctx?.cwd ?? ctx?.sessionManager?.getCwd?.() ?? null;
+  if (!isUnderTempDir(cwd)) return null;
+  return (
+    `拒绝：这是临时目录里的一次性会话（cwd=${cwd}），不能写用户的真实待办看板。\n` +
+    "测试/脚本请把 agent 目录（PI_CODING_AGENT_DIR）也指到临时位置；确需在临时目录里记事，设 PIABYSS_MEMO_ALLOW_TEMP=1。"
+  );
+}
 
 /** 周期规则入参（工具层形状；经 toStoreRecurrence 转换后交 store 校验归一）。 */
 const RecurrenceSchema = Type.Object({
@@ -221,6 +273,11 @@ export default function (pi: ExtensionAPI) {
     parameters: ParamsSchema,
 
     async execute(_toolCallId, params: MemoParams, _signal, _onUpdate, ctx) {
+      // 一次性/临时会话不得写真实看板（见顶部 v7 说明）。
+      const blocked = tempSessionBlocker(params.action, ctx);
+      if (blocked) {
+        return { content: [{ type: "text" as const, text: blocked }], isError: true };
+      }
       const agentDir = getAgentDir();
       const store = getMemoStore(agentDir);
       try {

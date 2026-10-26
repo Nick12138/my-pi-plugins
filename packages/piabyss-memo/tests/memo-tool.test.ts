@@ -27,6 +27,7 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   delete process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PIABYSS_MEMO_ALLOW_TEMP;
 });
 
 /** 用临时 agentDir 加载插件并抓取注册的工具。 */
@@ -178,5 +179,86 @@ describe("piabyss_memo delete 动作", () => {
     const failed = await tool.execute("t1", { action: "delete" });
     expect(failed.isError).toBe(true);
     expect(textOf(failed)).toContain("a note id is required");
+  });
+});
+
+/** 造一个最小 ctx（护栏只看 cwd，其余字段按需）。 */
+function ctxAt(cwd: string): unknown {
+  return {
+    cwd,
+    sessionManager: {
+      getSessionId: () => "01a178d8-test",
+      getSessionFile: () => null,
+      getSessionName: () => null,
+      getCwd: () => cwd,
+    },
+  };
+}
+
+describe("一次性临时会话护栏", () => {
+  it("cwd 在系统临时目录下：写动作被拒，且不落盘", async () => {
+    const tool = await loadTool();
+    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    tempDirs.push(scratch);
+
+    const refused = await tool.execute(
+      "t1",
+      { action: "create", title: "暗号：蓝鲸七号", contentMd: "测试用" },
+      undefined,
+      undefined,
+      ctxAt(scratch) as never,
+    );
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toContain("临时目录里的一次性会话");
+    expect(textOf(refused)).toContain("PIABYSS_MEMO_ALLOW_TEMP=1");
+
+    // 拒绝是因为真的没写：换一个正常 cwd 去读，看板仍是空的。
+    const listed = await tool.execute("t2", { action: "list" }, undefined, undefined, ctxAt(process.cwd()) as never);
+    expect(textOf(listed)).toBe("The memo board is empty.");
+  });
+
+  it("临时会话里 list 仍然放行（只读不拦）", async () => {
+    const tool = await loadTool();
+    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    tempDirs.push(scratch);
+    const listed = await tool.execute("t1", { action: "list" }, undefined, undefined, ctxAt(scratch) as never);
+    expect(listed.isError).toBeUndefined();
+    expect(textOf(listed)).toBe("The memo board is empty.");
+  });
+
+  it("真实工作区 cwd 不受影响", async () => {
+    const tool = await loadTool();
+    const created = await tool.execute(
+      "t1",
+      { action: "create", title: "买咖啡豆" },
+      undefined,
+      undefined,
+      ctxAt(process.cwd()) as never,
+    );
+    expect(created.isError).toBeUndefined();
+    expect(textOf(created)).toContain("Memo note created");
+  });
+
+  it("PIABYSS_MEMO_ALLOW_TEMP=1 可放开", async () => {
+    const tool = await loadTool();
+    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    tempDirs.push(scratch);
+    process.env.PIABYSS_MEMO_ALLOW_TEMP = "1";
+    const created = await tool.execute(
+      "t1",
+      { action: "create", title: "临时目录里真要记一条" },
+      undefined,
+      undefined,
+      ctxAt(scratch) as never,
+    );
+    expect(created.isError).toBeUndefined();
+    expect(textOf(created)).toContain("Memo note created");
+  });
+
+  it("没有 ctx（老宿主 / prewarm）时不拦，避免误伤", async () => {
+    const tool = await loadTool();
+    const created = await tool.execute("t1", { action: "create", title: "无 ctx" });
+    expect(created.isError).toBeUndefined();
+    expect(textOf(created)).toContain("Memo note created");
   });
 });
