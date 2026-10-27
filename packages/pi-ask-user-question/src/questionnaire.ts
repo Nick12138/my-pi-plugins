@@ -1,7 +1,7 @@
 /**
  * 问卷执行流程：依次询问每道题，任何一题取消即整体取消。
  *
- * 照搬自 PiAbyss `ask-user-question-tool.ts` 的 `runQuestionnaire` /
+ * 与桌面宿主内置实现同源的 `ask-user-question-tool.ts` 的 `runQuestionnaire` /
  * `askMultiSelect`（解析纯函数拆至 `answers.ts`，行为逐字节一致），并在此之上
  * 增加**回退重答**：第 2 题起，每题追加一行回退哨兵（`↩ 修改上一题`），选中它
  * 即退回答上一题、带着上次的选择重新问一次。
@@ -41,31 +41,36 @@ type StepContext = {
 };
 
 /**
- * 随 `ui.select` / `ui.input` 一起下发的 PiAbyss 扩展元数据。
+ * 随 `ui.select` / `ui.input` 一起下发的桌面宿主扩展元数据。
+ *
+ * 元数据同时挂在两个键下：通用键 `askUserQuestion` 是本插件的正式命名；
+ * 旧键 `piabyss` 是早期桌面宿主的遗留读取键，保留是为了让旧版桌面端
+ * 继续渲染选项列表/复选框/回退预选。两个键的内容完全一致，宿主取其一即可。
  *
  * `questionIndex` / `questionCount` / `questionHeader` 让桌面卡片能画出题号进度
  * 并把 header 渲染成 chip，而不是把它硬拼进标题；`defaultValue` 让回退重问时
  * 预选上一次的答案。三者都是提示，宿主不认识就忽略。
  */
-function piabyssMeta(step: StepContext, extra: Record<string, unknown>): Record<string, unknown> {
-  return {
-    piabyss: {
-      questionIndex: step.questionIndex + 1,
-      questionCount: step.questionCount,
-      ...(step.question.header ? { questionHeader: step.question.header } : {}),
-      ...(step.previous !== undefined && step.previous !== ""
-        ? { defaultValue: step.previous }
-        : {}),
-      ...extra,
-    },
+function questionMeta(step: StepContext, extra: Record<string, unknown>): Record<string, unknown> {
+  const meta = {
+    questionIndex: step.questionIndex + 1,
+    questionCount: step.questionCount,
+    ...(step.question.header ? { questionHeader: step.question.header } : {}),
+    ...(step.previous !== undefined && step.previous !== ""
+      ? { defaultValue: step.previous }
+      : {}),
+    ...extra,
   };
+  // 双键下发：`askUserQuestion`（通用）+ `piabyss`（遗留桌面端兼容，见上）。
+  return { askUserQuestion: meta, piabyss: meta };
 }
 
 /**
  * 多选：原生 `ui.select` 只能单选，所以仍走 `ui.input`，但把选项以
- * `piabyss.optionDetails` + `multiSelect: true` 结构化下发。
+ * `askUserQuestion.optionDetails`（旧桌面端读遗留键 `piabyss.optionDetails`，两者同内容）
+ * + `multiSelect: true` 结构化下发。
  *
- * PiAbyss 桌面据此渲染成**复选框列表**，确认时把勾选的 1-based 下标拼成
+ * 桌面端据此渲染成**复选框列表**，确认时把勾选的 1-based 下标拼成
  * `"1,3"` 回传 —— 与下面的 `parseMultiSelection` 完全对齐，解析逻辑不用改。
  * 不认这套元数据的宿主则退化成「选项列表 + 一个文本框」，因此选项列表放在
  * dialog 的 message 里（不是拼进标题），桌面渲染复选框时会把 message 隐去。
@@ -82,7 +87,7 @@ export async function askMultiSelect(
   const backHint = step.allowBack
     ? `\n\n${BACK_ROW_LABEL} = go back and change the previous answer`
     : "";
-  // 只有 RPC 宿主（Agents-Anywhere / PiAbyss）需要这行结构化标记：它们拿不到
+  // 只有 RPC 宿主（Agents-Anywhere / 桌面宿主）需要这行结构化标记：它们拿不到
   // `ui.input` 的第三个参数，否则多选只能退化成空文本框。pi 自己的 TUI 走不到
   // 这里（ctx.mode === "tui"），placeholder 保持纯人读文本不变。
   const marker =
@@ -106,7 +111,7 @@ export async function askMultiSelect(
   const value = await ctx.ui.input(
     `${header}${question.question}`,
     `${list}\n\n${MULTI_SELECT_INSTRUCTIONS}${backHint}${marker}`,
-    piabyssMeta(step, {
+    questionMeta(step, {
       optionDetails: plan.optionDetails,
       multiSelect: true,
       allowFreeform: true,
@@ -154,7 +159,7 @@ async function askSingleSelect(ctx: ExtensionContext, step: StepContext): Promis
   const selected = await ctx.ui.select(
     `${header}${question.question}`,
     plan.values,
-    piabyssMeta(step, { optionDetails: plan.optionDetails, allowFreeform: true }),
+    questionMeta(step, { optionDetails: plan.optionDetails, allowFreeform: true }),
   );
   if (selected === undefined) return { kind: "cancelled" };
 
@@ -165,7 +170,7 @@ async function askSingleSelect(ctx: ExtensionContext, step: StepContext): Promis
   const typed = await ctx.ui.input(
     `${header}${question.question}`,
     "",
-    piabyssMeta(step, { allowFreeform: true, allowBack: step.allowBack }),
+    questionMeta(step, { allowFreeform: true, allowBack: step.allowBack }),
   );
   if (typed === undefined) return { kind: "cancelled" };
   return {

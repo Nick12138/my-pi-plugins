@@ -1,13 +1,13 @@
 /**
  * 备忘录云同步的本地 HTTP 控制面（127.0.0.1）。
  *
- * 为什么用 HTTP：PiAbyss 桌面端（备忘录页的「测试连接 / 立即同步」）需要即时
+ * 为什么用 HTTP：桌面端端（备忘录页的「测试连接 / 立即同步」）需要即时
  * 触发插件内的同步引擎，而协议层（memo.* RPC）由 Host 代理到这里 —— 与
  * pi-automation 的既有模式一致（Host 的 automation-api.ts ↔ 插件的 http.ts）。
  * 数据面仍然是文件：notes.json / 图片目录由引擎直接读写，控制面只做
  * 触发与状态查询。
  *
- * 端点（除 health 外都要求鉴权头 `X-Piabyss-Memo-Sync-Token`）：
+ * 端点（除 health 外都要求鉴权头 `X-Pi-Memo-Sync-Token`）：
  *   GET  /api/health     存活探测（未鉴权；端口关闭 = 插件未加载）
  *   GET  /api/status      同步状态（configured/autoSync/lastSync*，不含密钥）
  *   POST /api/test       用当前配置做一次 R2 连接测试（不落盘）
@@ -15,8 +15,8 @@
  *   POST /api/auto-sync  提示引擎「数据有变更」：autoSync 开启时防抖同步
  *
  * 鉴权必要性：仅监听 127.0.0.1 不是安全边界——任意网页都能发起跨源请求
- * （简单请求免预检）。token 存在 `<agentDir>/piabyss/memo/sync-token`
- * （0600），或用环境变量 PIABYSS_MEMO_SYNC_TOKEN 覆盖；Host 侧读同一文件
+ * （简单请求免预检）。token 存在备忘录数据目录下的 `sync-token`
+ * （0600），或用环境变量 PI_MEMO_SYNC_TOKEN 覆盖；Host 侧读同一文件
  * 带上鉴权头即可。不发送 CORS 许可，浏览器跨源读不到响应。
  */
 import * as http from "node:http";
@@ -24,16 +24,17 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getMemoSync, type MemoSyncStats, type MemoSyncSettings } from "./memo-sync.js";
+import { memoDataDir } from "./memo-store.js";
 
 export const DEFAULT_HTTP_PORT = 18768;
-export const PORT_ENV = "PIABYSS_MEMO_SYNC_PORT";
-export const TOKEN_ENV = "PIABYSS_MEMO_SYNC_TOKEN";
+export const PORT_ENV = "PI_MEMO_SYNC_PORT";
+export const TOKEN_ENV = "PI_MEMO_SYNC_TOKEN";
 const TOKEN_FILE_NAME = "sync-token";
 const MAX_BODY_BYTES = 64 * 1024;
 
 /** 运行时单例挂 globalThis：pi 用 jiti(moduleCache:false) 加载扩展，模块级
  * 变量会随模块实例分裂（见 pi-automation 的同类注释）。 */
-const SERVER_KEY = Symbol.for("piabyss-memo-sync.http");
+const SERVER_KEY = Symbol.for("pi-memo-sync.http");
 
 interface HttpRuntime {
   server: http.Server | null;
@@ -46,7 +47,7 @@ function runtimeStore(): Record<symbol, HttpRuntime | undefined> {
 }
 
 function tokenFilePath(agentDir: string): string {
-  return join(agentDir, "piabyss", "memo", TOKEN_FILE_NAME);
+  return join(memoDataDir(agentDir), TOKEN_FILE_NAME);
 }
 
 /** 读取（缺失则生成并落盘）控制面 token。 */
@@ -103,7 +104,7 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 function authorized(req: http.IncomingMessage, url: URL, token: string): boolean {
-  const header = req.headers["x-piabyss-memo-sync-token"];
+  const header = req.headers["x-pi-memo-sync-token"];
   const fromHeader = (Array.isArray(header) ? header[0] : header) ?? "";
   if (fromHeader && safeEqual(fromHeader, token)) return true;
   // `?token=` 仅对只读 GET 有效：写操作走 query 会被当成「简单请求」绕过
@@ -206,7 +207,7 @@ async function handle(
   if (!authorized(req, url, token)) {
     json(res, 401, {
       error: "缺少或错误的 token",
-      hint: `读取 ${tokenFilePath(runtime.agentDir)}，并通过 X-Piabyss-Memo-Sync-Token 头传入`,
+      hint: `读取 ${tokenFilePath(runtime.agentDir)}，并通过 X-Pi-Memo-Sync-Token 头传入`,
     });
     return;
   }

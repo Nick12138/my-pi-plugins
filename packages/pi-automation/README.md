@@ -88,7 +88,7 @@ locks/                           单飞锁 / 写锁
 
 ## 边界
 
-- 只在 **pi 进程存活期间**调度（pi/PiAbyss 关闭就不跑）。
+- 只在 **pi 进程存活期间**调度（pi/宿主关闭就不跑）。
 - 执行会话默认**不加载扩展/技能**（`loadExtensions:true` 可开），更轻、更确定。
 - 需要跑命令（git/npm/gh/脚本）的任务必须 `permission:"full"`。
 

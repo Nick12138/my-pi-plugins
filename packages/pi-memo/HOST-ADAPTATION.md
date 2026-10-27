@@ -1,9 +1,9 @@
-# piabyss-memo v0.4.0 桌面端（PiAbyss Host）适配说明
+# pi-memo v0.4.0 桌面宿主适配说明
 
-插件端已完成「计划功能」与「状态收敛」，`packages/piabyss-memo` 升至
+插件端已完成「计划功能」与「状态收敛」，`packages/pi-memo` 升至
 **0.4.0**（叠加在已发布的 v0.3.0「更名方寸间 + 取消记录类别」（方寸间现名「待办 · 速记」）之上，
 本文档只覆盖 v0.4.0 新增部分）。本文档是桌面端重新适配的完整依据；
-插件端实现以 `packages/piabyss-memo/src/recurrence.ts`（规则校验与
+插件端实现以 `packages/pi-memo/src/recurrence.ts`（规则校验与
 时刻计算）、`src/memo-store.ts`（字段与语义）为权威，建议 Host 侧逻辑
 与其对齐。
 
@@ -116,7 +116,7 @@
 - `nextDueAt` 是持久化字段：两台设备并发各完成一轮时，LWW 后写者胜，
   可能丢一轮 `lastDoneAt` 更新——备忘录场景并发概率极低，接受此权衡。
 
-## 六、agent 工具（piabyss_memo）行为变化
+## 六、agent 工具（memo）行为变化
 
 - `update` 新增参数 `dueAt`（支持 `YYYY-MM-DD`、`YYYY-MM-DD HH:mm`
   设备本地时间或完整 ISO；`null` 清除）与 `recurrence`（结构化对象；
@@ -132,9 +132,9 @@
 | `src/recurrence.ts` | 新增：规则类型 / `normalizeRecurrence` 校验归一 / `nextOccurrence` 时区计算（含 DST） |
 | `src/memo-store.ts` | 新字段、archived 移除与迁移、complete 周期滚动、update 守卫与重算、`normalizeNoteDefaults` 导出 |
 | `src/memo-sync.ts` | 仅 `parseCloudNotes` 改用 `normalizeNoteDefaults`，合并策略零改动 |
-| `extensions/piabyss-memo.ts` | update 计划参数、complete 周期文案、list 计划展示、工具描述约束 |
+| `extensions/pi-memo.ts` | update 计划参数、complete 周期文案、list 计划展示、工具描述约束 |
 | `tests/recurrence.test.ts` | 新增 16 例（时区/DST/interval 锚点/月末跳过/until 含端点） |
 | `tests/memo-store.test.ts` | 新增周期语义与迁移用例，磁盘形状断言更新 |
-| `tests/memo-sync.test.ts` | 云端旧数据（archived、缺计划字段）迁移用例；修复在已配置环境（PiAbyss Host 内）跑测试时 env 泄漏导致的误报 |
+| `tests/memo-sync.test.ts` | 云端旧数据（archived、缺计划字段）迁移用例；修复在已配置环境（桌面宿主内）跑测试时 env 泄漏导致的误报 |
 
 验证：`vitest run` 全仓 192 例通过；`tsc --noEmit` 零错误。

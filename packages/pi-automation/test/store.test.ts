@@ -104,7 +104,7 @@ test("updateJob：命令型任务全量回传 prompt:\"\" 不报错，command �
 	const updated = updateJob(
 		job.id,
 		{ prompt: "", command: "echo hello", name: "cmd-edit-renamed" },
-		{ by: "piabyss" },
+		{ by: "host" },
 	);
 	assert.equal(updated.name, "cmd-edit-renamed");
 	assert.equal(updated.command, "echo hello", "command 不应被改动");

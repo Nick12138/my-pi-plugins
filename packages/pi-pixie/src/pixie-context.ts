@@ -2,8 +2,8 @@
  * 小精灵运行契约（`<pixie-context>` 块）的插件侧装配。
  *
  * v0.10 起这份契约由本插件注入。此前它挂在 Host 的 prompt 前导里
- * （PiAbyss `packages/pi-host/src/pixie-agent-runner.ts` 的
- * `buildSegmentContextPreamble()`），只有从 PiAbyss 界面 / 控制面发消息才会带上
+ * （桌面宿主 `pixie-agent-runner.ts` 的 `buildSegmentContextPreamble()`），
+ * 只有从桌面端界面 / 控制面发消息才会带上
  * ——用户直接用裸 `pi` CLI 打开小精灵工作区时，模型拿不到任何委派契约。
  *
  * 契约文案与 Host 同源（措辞照搬），两处差异：
@@ -11,7 +11,8 @@
  *    插件不投递信封，没有来源可标；
  * 2. 时间锚点在插件里现跑 `new Date()`（每段注入一次，见 buildHandoffCard）。
  *
- * 已知工作区列表优先读 Host 落盘的 `<agentDir>/piabyss/pixie/context.json`；
+ * 已知工作区列表优先读 Host 落盘的 `<agentDir>/pixie/context.json`（旧版
+ * 宿主落盘在 `<agentDir>/piabyss/pixie/context.json`，作为遗留路径兜底）；
  * 没有这个文件（纯 CLI 场景）时按 Pi 的会话目录编码反推，取最近活跃的前 5 个。
  *
  * 全部只读、全部 best-effort：任何一步失败都退化成「少一行」，绝不抛出。
@@ -57,10 +58,20 @@ export function pixieClockLine(now: Date): string {
 	return `本段开始时间：${date}（${weekday}）${time}，${zone}。这是段开始那一刻的锚点，段可能开很久；判断今天/周几/是否逾期，一律以现跑 date 为准，不要凭记忆推。`;
 }
 
-/** `<agentDir>/piabyss/pixie/context.json` 里 Host 落盘的已知工作区。 */
+/** Host 落盘的已知工作区：`<agentDir>/pixie/context.json`（新）或
+ * `<agentDir>/piabyss/pixie/context.json`（旧版宿主遗留路径，兜底）。 */
 export function readContextWorkspaces(agentDir: string): string[] {
+	const candidates = [join(agentDir, "pixie", "context.json"), join(agentDir, "piabyss", "pixie", "context.json")];
+	for (const path of candidates) {
+		const workspaces = readWorkspacesFile(path);
+		if (workspaces !== null) return workspaces;
+	}
+	return [];
+}
+
+function readWorkspacesFile(path: string): string[] | null {
 	try {
-		const raw = readFileSync(join(agentDir, "piabyss", "pixie", "context.json"), "utf8");
+		const raw = readFileSync(path, "utf8");
 		const parsed: unknown = JSON.parse(raw);
 		if (parsed === null || typeof parsed !== "object") return [];
 		const list = (parsed as { workspaces?: unknown }).workspaces;
@@ -69,7 +80,7 @@ export function readContextWorkspaces(agentDir: string): string[] {
 			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
 			.map((value) => value.trim());
 	} catch {
-		return [];
+		return null;
 	}
 }
 
@@ -209,7 +220,7 @@ export function knownWorkspaces(agentDir: string = resolveAgentDir()): string[] 
 }
 
 /**
- * 组装完整契约块（含 `<pixie-context>` 定界标签）。文案与 PiAbyss Host 同源，
+ * 组装完整契约块（含 `<pixie-context>` 定界标签）。文案与桌面宿主同源，
  * 只有来源标记行与「界面里创建」这类归属措辞按插件侧实情微调。
  *
  * automation 的字段规范也住在这里：pi-automation 没有自己的注入通道，而计划是
@@ -242,7 +253,7 @@ export function buildPixieContextPreamble(agentDir: string = resolveAgentDir(), 
 		"  jobId: string | null（只有这份草案是改现有计划时才带上它的 id，新建一律不写）。",
 	];
 	if (workspaces.length > 0) {
-		lines.push("已知的 PiAbyss 工作区：", ...workspaces.map((path) => `- ${path}`));
+		lines.push("已知的工作区：", ...workspaces.map((path) => `- ${path}`));
 	}
 	lines.push(`</${PIXIE_CONTEXT_TAG}>`);
 	return lines.join("\n");

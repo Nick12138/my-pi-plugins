@@ -1,4 +1,4 @@
-/** Authenticated loopback control plane for the PiAbyss UI. */
+/** Authenticated loopback control plane for the desktop UI. */
 import * as http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ export function createStopHandler(deps: {
 		if (!record) return { ok: false, status: "not_found", jobId };
 		if (!record.job.sessionId || record.job.sessionId !== sessionId) return { ok: false, status: "forbidden", jobId, error: "job does not belong to caller session" };
 		if (deps.isTerminal(record.status)) return { ok: true, status: "already_ended", jobId, state: record.status.status };
-		// control 端点只服务 PiAbyss UI 的停止按钮：标记来源为用户手动停止
+		// control 端点只服务桌面端 UI 的停止按钮：标记来源为用户手动停止
 		const result = await deps.kill(jobId, { by: "user" });
 		if (result.ok) return { ok: true, status: "killed", jobId };
 		const current = deps.load(jobId);
@@ -44,7 +44,7 @@ export function resolveControlToken(): string {
 	const file = path.join(ROOT, "token");
 	const fromEnv = process.env[TOKEN_ENV]?.trim();
 	if (fromEnv) {
-		// PiAbyss reads the token file; keep it aligned with explicit plugin config.
+		// Desktop UI reads the token file; keep it aligned with explicit plugin config.
 		mkdirSync(ROOT, { recursive: true, mode: 0o700 });
 		writeFileSync(file, fromEnv, { encoding: "utf8", mode: 0o600 });
 		try { chmodSync(file, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }
@@ -63,7 +63,7 @@ export function resolveControlToken(): string {
 		writeFileSync(file, value, { encoding: "utf8", mode: 0o600, flag: "wx" });
 	} catch {
 		// Another plugin instance may have won the create race. Never silently
-		// fall back to a memory-only token: PiAbyss must be able to read it.
+		// fall back to a memory-only token: the desktop UI must be able to read it.
 		const winner = readFileSync(file, "utf8").trim();
 		if (!winner) throw new Error(`shelljob token file is empty: ${file}`);
 		try { chmodSync(file, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }

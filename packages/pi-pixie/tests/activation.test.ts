@@ -115,7 +115,7 @@ const envSnapshot = (): Record<string, string | undefined> => ({
   [PIXIE_RESIDENT_ENV]: process.env[PIXIE_RESIDENT_ENV],
   [PIXIE_TOKEN_ENV]: process.env[PIXIE_TOKEN_ENV],
   PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-  PIABYSS_PIXIE_WORKSPACE: process.env.PIABYSS_PIXIE_WORKSPACE,
+  PI_PIXIE_WORKSPACE: process.env.PI_PIXIE_WORKSPACE,
 });
 
 const restoreEnv = (snapshot: Record<string, string | undefined>): void => {
@@ -371,7 +371,7 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
   it("activates the resident console when ctx.cwd matches the pixie workspace", async () => {
     delete process.env[PIXIE_RESIDENT_ENV];
     process.env.PI_CODING_AGENT_DIR = "C:/agent-test";
-    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    delete process.env.PI_PIXIE_WORKSPACE;
     const mock = createMockPi([]);
     buildPixieExtension(mock.pi);
     await mock.emitBeforeAgentStart(ctxWithSession("sess-x", "C:\\agent-test\\workspace\\pixie"));
@@ -424,20 +424,20 @@ describe("extension entry (extensions/pi-pixie.ts)", () => {
 
 describe("pixie workspace cwd resolution", () => {
   it("defaults to <agentDir>/workspace/pixie", () => {
-    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    delete process.env.PI_PIXIE_WORKSPACE;
     process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
     expect(resolvePixieWorkspacePath()).toBe(join("C:/agent-x", "workspace", "pixie"));
   });
 
-  it("honours PIABYSS_PIXIE_WORKSPACE with the {agentDir} placeholder", () => {
+  it("honours PI_PIXIE_WORKSPACE with the {agentDir} placeholder", () => {
     process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
-    process.env.PIABYSS_PIXIE_WORKSPACE = "{agentDir}/custom";
+    process.env.PI_PIXIE_WORKSPACE = "{agentDir}/custom";
     expect(resolvePixieWorkspacePath()).toBe(join("C:/agent-x", "custom"));
   });
 
   it("compares case-insensitively on Windows, sensitively elsewhere", () => {
     process.env.PI_CODING_AGENT_DIR = "C:/agent-x";
-    delete process.env.PIABYSS_PIXIE_WORKSPACE;
+    delete process.env.PI_PIXIE_WORKSPACE;
     const workspace = join("C:/agent-x", "workspace", "pixie");
     if (process.platform === "win32") {
       expect(isPixieWorkspaceCwd(workspace.toUpperCase())).toBe(true);
@@ -451,7 +451,7 @@ describe("pixie workspace cwd resolution", () => {
 });
 
 describe("readPixiePort / readPixieToken", () => {
-  it("parses a valid port from PIABYSS_PIXIE_HTTP_PORT", () => {
+  it("parses a valid port from PI_PIXIE_HTTP_PORT", () => {
     expect(readPixiePort({ [PIXIE_PORT_ENV]: "18790" })).toBe(18790);
   });
 

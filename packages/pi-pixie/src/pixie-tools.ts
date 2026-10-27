@@ -1,11 +1,11 @@
 /**
  * pixie_dispatch / pixie_report 工具的插件侧壳。
  *
- * 参数 schema 与文本格式照搬 PiAbyss 内置实现
+ * 参数 schema 与文本格式与桌面宿主内置实现同源
  * （packages/pi-host/src/pixie-tool.ts）的口径，区别只在执行方式：委派引擎
- * 仍在 Host 侧，工具通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT）转发。
+ * 仍在 Host 侧，工具通过环回 HTTP 控制面（PI_PIXIE_HTTP_PORT）转发。
  *
- * - pixie_dispatch：仅在常驻小精灵会话激活（扩展入口据 PIABYSS_PIXIE_RESIDENT
+ * - pixie_dispatch：仅在常驻小精灵会话激活（扩展入口据 PI_PIXIE_RESIDENT
  *   控制注册；普通会话不注册该工具）。
  * - pixie_report：注册后被激活门控保持在 active tools 之外（见 activation.ts），
  *   普通工作区会话看不到该工具。
@@ -68,7 +68,7 @@ const DispatchParams = Type.Object({
 		description: "目标工作区绝对路径（须在 <pixie-context> 已知工作区列表或用户当前工作区内）。",
 	}),
 	task: Type.String({
-		description: "委派提示词：目标+必要上下文+完成后用 pixie_report 回调（需用户决定用 pixie_ask）。源自便签的任务要求完成后用 piabyss_memo complete 回填。",
+		description: "委派提示词：目标+必要上下文+完成后用 pixie_report 回调（需用户决定用 pixie_ask）。源自便签的任务要求完成后用 memo complete 回填。",
 	}),
 	taskName: Type.Optional(
 		Type.String({
@@ -186,7 +186,7 @@ export function buildPixieDispatchTool(
 		async execute(_toolCallId, params: DispatchParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult(formatDispatchFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+				return errorResult(formatDispatchFailureText("未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
 			const taskName = normalizeName(params.taskName);
 			const sessionName = normalizeName(params.sessionName);
@@ -260,7 +260,7 @@ export function buildPixieReportTool(options: {
 		async execute(_toolCallId, params: ReportParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult(formatReportFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+				return errorResult(formatReportFailureText("未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
 			// 对应原实现的 findDispatch：按会话解析进行中的委派。
 			const sessionId = getSessionId(ctx);
@@ -400,7 +400,7 @@ export function buildPixieAskTool(options: {
 		async execute(_toolCallId, params: AskParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult(formatAskFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+				return errorResult(formatAskFailureText("未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
 			const dispatchId = await resolveArmedDispatchId(getPort, ctx);
 			if (!dispatchId) {
@@ -458,7 +458,7 @@ export function buildPixieNameTool(
 		async execute(_toolCallId, params: NameParamsType, _signal, _onUpdate, ctx) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult(formatNameFailureText("未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。"));
+				return errorResult(formatNameFailureText("未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。"));
 			}
 			const name = params.name?.trim() ?? "";
 			if (!name) {
@@ -625,7 +625,7 @@ export function buildPixieStatusTool(options: { getPort?: PixiePortReader } = {}
 		async execute(_toolCallId, params: StatusParamsType) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+				return errorResult("Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。");
 			}
 			try {
 				const result = await pixieRequest({
@@ -687,7 +687,7 @@ export function buildPixieSessionsTool(options: { getPort?: PixiePortReader } = 
 		async execute(_toolCallId, params: SessionsParamsType) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+				return errorResult("Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。");
 			}
 			const cwd = params.cwd?.trim();
 			try {
@@ -760,7 +760,7 @@ export function buildPixieInterjectTool(options: { getPort?: PixiePortReader } =
 		async execute(_toolCallId, params: InterjectParamsType) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+				return errorResult("Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。");
 			}
 			const mode = params.mode === "checkpoint" ? "checkpoint" : "append";
 			const after = params.after === "wait" ? "wait" : params.after === "continue" ? "continue" : undefined;
@@ -826,7 +826,7 @@ export function buildPixieStopTool(options: { getPort?: PixiePortReader } = {}):
 		async execute(_toolCallId, params: StopParamsType) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+				return errorResult("Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。");
 			}
 			try {
 				const result = await pixieRequest({
@@ -883,7 +883,7 @@ export function buildPixieRetryTool(options: { getPort?: PixiePortReader } = {})
 		async execute(_toolCallId, params: RetryParamsType) {
 			const port = getPort();
 			if (port === null) {
-				return errorResult("Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。");
+				return errorResult("Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。");
 			}
 			const mode =
 				params.mode === "resume" || params.mode === "redispatch" ? params.mode : undefined;

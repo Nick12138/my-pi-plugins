@@ -1,5 +1,5 @@
 /**
- * pi-purge — operator-mode extension for pi / PiAbyss.
+ * pi-purge — operator-mode extension for pi / 桌面宿主.
  *
  * 核心契约（与 dsh-purge 对齐）：启用时可以覆盖用户的提示词；禁用时必须逐项还原。
  *   1. before_agent_start: 记录启用前的 forceSystemPrompt 基线；
@@ -9,7 +9,7 @@
  *   3. project_trust: 默认只在当前进程内放行，不写 trust.json；
  *      rememberTrust=true 时先记录原值再持久化，禁用时只撤销本扩展写入的 true。
  *   4. purge_status / purge_toggle + /purge 在线管理。
- *   5. session_shutdown: PiAbyss「设置 → 扩展」禁用/重载前先还原强制提示词和本扩展写入的 trust 条目。
+ *   5. session_shutdown: 桌面端「设置 → 扩展」禁用/重载前先还原强制提示词和本扩展写入的 trust 条目。
  *
  * 还原边界：已经发送给模型的当前回合无法撤回；下一次 before_agent_start 起恢复原生提示词。
  * 已经解析的项目信任在当前进程内仍是 trusted，重开会话/重启后重新询问。
@@ -616,7 +616,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (event, ctx) => {
-    // PiAbyss 在「设置 → 扩展」禁用/重载时会先对旧 runner 发 session_shutdown，
+    // 桌面端在「设置 → 扩展」禁用/重载时会先对旧 runner 发 session_shutdown，
     // 再移除扩展。这里是禁用前最后一次还原机会：删掉本扩展写入的 forceSystemPrompt，
     // 并清理本扩展写入的 trust 条目。新 runner 若仍包含本扩展，下一回合会重新注入。
     restoreLiveOptions(ctx);

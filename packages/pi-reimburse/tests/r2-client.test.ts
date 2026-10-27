@@ -35,12 +35,12 @@ describe("signR2Request", () => {
   it("builds a path-style URL and signs deterministic headers", () => {
     const signed = signR2Request(CREDS, {
       method: "PUT",
-      key: "piabyss/memo/notes.json",
+      key: "reimburse/notes.json",
       body: Buffer.from("hello"),
       amzDate: "20250101T000000Z",
     });
     expect(signed.url.hostname).toBe("abc123.r2.cloudflarestorage.com");
-    expect(signed.url.pathname).toBe("/memos/piabyss/memo/notes.json");
+    expect(signed.url.pathname).toBe("/memos/reimburse/notes.json");
     expect(signed.headers["x-amz-date"]).toBe("20250101T000000Z");
     expect(signed.headers["x-amz-content-sha256"]).toBe(
       createHash("sha256").update("hello").digest("hex"),
@@ -51,7 +51,7 @@ describe("signR2Request", () => {
     // 同输入同签名（无随机性）。
     const again = signR2Request(CREDS, {
       method: "PUT",
-      key: "piabyss/memo/notes.json",
+      key: "reimburse/notes.json",
       body: Buffer.from("hello"),
       amzDate: "20250101T000000Z",
     });

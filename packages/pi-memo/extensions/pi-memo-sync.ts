@@ -1,19 +1,19 @@
 /**
- * piabyss-memo —— 云同步工具 `piabyss_memo_sync` + 进程级同步运行时。
+ * pi-memo —— 云同步工具 `memo_sync` + 进程级同步运行时。
  *
  * 与 pi-reimburse 的 reimburse_sync 同一模式，但配置不进工具：
- * R2 密钥由 PiAbyss「设置 → 插件 → PiAbyss 待办 · 速记」的配置表单管理
+ * R2 密钥由 桌面端「设置 → 插件 → 待办 · 速记」的配置表单管理
  * （pluginLibrary.setEnv 注入环境变量，扩展与其同进程因此实时生效），
  * 本工具只提供 test / sync_now / status 三个动作做诊断与手动同步。
  *
  * 进程级单例（挂 globalThis，防 jiti moduleCache:false 的模块实例分裂）：
- *   - 环回 HTTP 控制面（127.0.0.1:<PIABYSS_MEMO_SYNC_PORT|18768>）：
- *     PiAbyss Host 的 memo.testSync / memo.syncNow 协议代理到这里，
+ *   - 环回 HTTP 控制面（127.0.0.1:<PI_MEMO_SYNC_PORT|18768>）：
+ *     桌面宿主的 memo.testSync / memo.syncNow 协议代理到这里，
  *     桌面备忘录页的「测试连接 / 立即同步」按钮由此触达插件内的引擎；
  *   - 启动同步：autoSync 开启且已配置时，进程启动后延迟拉齐一次。
  *
  * 备忘录数据变更的 autoSync 触发：
- *   - agent 侧（piabyss_memo 工具改记录）→ 工具内部直接 scheduleAutoSync；
+ *   - agent 侧（memo 工具改记录）→ 工具内部直接 scheduleAutoSync；
  *   - 桌面侧（memo.create/update/delete 协议落盘）→ Host 经控制面
  *     POST /api/auto-sync 通知本引擎防抖同步。
  */
@@ -28,9 +28,9 @@ import {
   syncHttpServerPort,
 } from "../src/memo-sync-http.js";
 
-const SYNC_TOOL_NAME = "piabyss_memo_sync";
+const SYNC_TOOL_NAME = "memo_sync";
 
-const RUNTIME_KEY = Symbol.for("piabyss-memo-sync.runtime");
+const RUNTIME_KEY = Symbol.for("pi-memo-sync.runtime");
 
 interface SyncRuntime {
   httpPort: number;
@@ -63,14 +63,14 @@ function ensureRuntime(): SyncRuntime {
       runtime.httpPort = port;
       runtime.httpError = null;
       console.error(
-        `[piabyss-memo-sync] 已启动：控制面 http://127.0.0.1:${port}（默认端口 ${DEFAULT_HTTP_PORT}，可用 PIABYSS_MEMO_SYNC_PORT 覆盖）`,
+        `[pi-memo-sync] 已启动：控制面 http://127.0.0.1:${port}（默认端口 ${DEFAULT_HTTP_PORT}，可用 PI_MEMO_SYNC_PORT 覆盖）`,
       );
     })
     .catch((error: unknown) => {
       runtime.httpError = error instanceof Error ? error.message : String(error);
       console.error(
-        `[piabyss-memo-sync] HTTP 控制面启动失败（端口 ${configuredPort}）：${runtime.httpError}。` +
-          `PiAbyss 待办 · 速记页的云同步按钮将不可用；同步工具仍可直接调用。`,
+        `[pi-memo-sync] HTTP 控制面启动失败（端口 ${configuredPort}）：${runtime.httpError}。` +
+          `待办 · 速记页的云同步按钮将不可用；同步工具仍可直接调用。`,
       );
     });
 
@@ -115,20 +115,20 @@ function formatStatus(settings: ReturnType<ReturnType<typeof getMemoSync>["getSe
   ];
   if (!settings.configured) {
     lines.push(
-      "提示：R2 密钥在 PiAbyss「设置 → 插件 → PiAbyss 待办 · 速记」的配置表单里填写，不要在对话里传密钥。",
+      "提示：R2 密钥在 桌面端「设置 → 插件 → 待办 · 速记」的配置表单里填写，不要在对话里传密钥。",
     );
   }
   return lines.join("\n");
 }
 
-export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
+export default function piMemoSyncExtension(pi: ExtensionAPI): void {
   const runtime = ensureRuntime();
 
   pi.registerTool({
     name: SYNC_TOOL_NAME,
     label: "待办 · 速记同步",
     description:
-      "PiAbyss 速记的 R2 云同步：test 测连通；sync_now 立即双向同步；status 看配置与最近状态。密钥在插件配置里填，不在对话中传。",
+      "待办 · 速记的 R2 云同步：test 测连通；sync_now 立即双向同步；status 看配置与最近状态。密钥在插件配置里填，不在对话中传。",
     promptSnippet: "速记云同步：test / sync_now / status",
     promptGuidelines: [
       "sync_now 失败时把错误原样告诉用户（通常是密钥错误或网络问题），不要重试超过一次。",
@@ -150,7 +150,7 @@ export default function piabyssMemoSyncExtension(pi: ExtensionAPI): void {
                 content: [
                   {
                     type: "text" as const,
-                    text: "尚未配置 R2 连接信息：请在 PiAbyss「设置 → 插件 → PiAbyss 待办 · 速记」的配置表单里填写 Account ID / Access Key ID / Secret Access Key / 桶名。",
+                    text: "尚未配置 R2 连接信息：请在 桌面端「设置 → 插件 → 待办 · 速记」的配置表单里填写 Account ID / Access Key ID / Secret Access Key / 桶名。",
                   },
                 ],
                 details: { action: "test", ok: false, error: "not configured" },

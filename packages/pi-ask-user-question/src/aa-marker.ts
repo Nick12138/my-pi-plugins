@@ -2,15 +2,15 @@
  * Agents-Anywhere（AA）结构化标记。
  *
  * 为什么需要它：pi 的 RPC 模式里 `ui.input(title, placeholder, opts)` 只把
- * `title / placeholder / timeout` 发给宿主，**第三个参数（PiAbyss 的
- * `piabyss` 元数据）被直接丢弃**（见 pi `rpc-mode.js` 的 `input`）。所以多选
+ * `title / placeholder / timeout` 发给宿主，**第三个参数（桌面宿主的
+ * `askUserQuestion` / 遗留 `piabyss` 元数据）被直接丢弃**（见 pi `rpc-mode.js` 的 `input`）。所以多选
  * 在 AA 一侧只剩一段纯文本，宿主无法知道「这是多选、有哪些选项」，只能给一个
  * 空文本框。
  *
  * 这里把多选的结构化信息编码成**一行** JSON、追加到 placeholder 末尾：
  * - AA connector 解析它 → 渲染成真正的勾选框（`multiple: true` + options），
  *   回答时把选中项换算回 1-based 序号串（`parseMultiSelection` 只认序号）；
- * - PiAbyss 桌面端读的是第三个参数里的 `optionDetails`，并且在多选卡片上隐去
+ * - 桌面端端读的是第三个参数里的 `optionDetails`，并且在多选卡片上隐去
  *   `message`，因此看不到这一行（`ExtensionUiRequestContent` 的 `!isMultiSelect`）；
  * - pi 自己的 TUI 不做标记（只有 `ctx.mode === "rpc"` 才追加），避免终端里
  *   出现一串 JSON。

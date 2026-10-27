@@ -10,7 +10,7 @@
  * （cwd 变化即重新 import）——所以**所有跨会话状态必须挂在 globalThis**，
  * 模块级变量会随模块实例分裂，导致通知永远送不到后来的会话。
  *
- * 边界：PiAbyss 关闭后本进程不在，自动化任务自然失效（符合既定需求）。
+ * 边界：宿主关闭后本进程不在，自动化任务自然失效（符合既定需求）。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerAutomationTool } from "../src/tool.ts";

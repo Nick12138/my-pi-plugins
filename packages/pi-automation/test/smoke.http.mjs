@@ -1,5 +1,5 @@
 /**
- * HTTP 控制面冒烟：验证 PiAbyss 将要调用的接口全部可用。
+ * HTTP 控制面冒烟：验证桌面端将要调用的接口全部可用。
  * 运行：node Agent临时工作/automation-spike/http-smoke.mjs
  */
 import { mkdtempSync, rmSync } from "node:fs";

@@ -1,11 +1,11 @@
 /**
- * 本地 HTTP 控制面（127.0.0.1），供 PiAbyss 面板 / 外部工具控制自动化。
+ * 本地 HTTP 控制面（127.0.0.1），供 桌面面板 / 外部工具控制自动化。
  *
  * 为什么用 HTTP 而不是只读文件：
  * - 控制（创建/立即执行/续聊）需要**即时**生效，文件轮询有延迟；
  * - 与 pi-subagent 的既有模式一致（面板读盘 + HTTP 控制）。
  *
- * 数据面仍然是文件：jobs.json / runs/*.json / sessions/*.jsonl 由 PiAbyss 直接读。
+ * 数据面仍然是文件：jobs.json / runs/*.json / sessions/*.jsonl 由 桌面端直接读。
  */
 import * as http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -51,7 +51,7 @@ const MAX_BODY_BYTES = 128 * 1024;
  * 调用方读 `~/.pi/automation/token` 并带上 `X-Pi-Automation-Token` 头即可。
  *
  * 落盘失败绝不静默：token 只活在内存里时，任何按契约读文件的调用方（同机的
- * PiAbyss 面板、CLI、cron 脚本）都再也拿不到它，只能对着 401 猜根因，且本进程
+ * 桌面面板、CLI、cron 脚本）都再也拿不到它，只能对着 401 猜根因，且本进程
  * 活着就永远解不开。所以这里打告警，来源（env / file / memory）也由
  * `authTokenInfo().source` 交给启动日志。
  */
@@ -391,7 +391,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 	// POST /api/jobs
 	if (req.method === "POST" && seg[0] === "jobs" && seg.length === 1) {
 		const body = await readBody(req);
-		const job = createJob(toJobInput(body), { by: String(body.by ?? "piabyss") });
+		const job = createJob(toJobInput(body), { by: String(body.by ?? "host") });
 		void scheduler.tick("tick").catch(() => undefined);
 		json(res, 201, { job });
 		return;
@@ -408,7 +408,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 		// PATCH/POST /api/jobs/:id
 		if ((req.method === "PATCH" || req.method === "POST") && seg.length === 2) {
 			const body = await readBody(req);
-			const job = updateJob(jobId, toJobPatch(body), { by: String(body.by ?? "piabyss") });
+			const job = updateJob(jobId, toJobPatch(body), { by: String(body.by ?? "host") });
 			void scheduler.tick("tick").catch(() => undefined);
 			json(res, 200, { job });
 			return;
@@ -416,7 +416,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 		// DELETE /api/jobs/:id?purge=1
 		if (req.method === "DELETE" && seg.length === 2) {
 			const purge = url.searchParams.get("purge") === "1";
-			deleteJob(jobId, { by: "piabyss" }, { purgeArtifacts: purge });
+			deleteJob(jobId, { by: "host" }, { purgeArtifacts: purge });
 			json(res, 200, { removed: true, purged: purge });
 			return;
 		}
@@ -448,7 +448,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, sched
 		}
 		// POST /api/jobs/:id/enable | /disable
 		if (req.method === "POST" && (seg[2] === "enable" || seg[2] === "disable")) {
-			const job = setEnabled(jobId, seg[2] === "enable", { by: "piabyss" });
+			const job = setEnabled(jobId, seg[2] === "enable", { by: "host" });
 			json(res, 200, { job });
 			return;
 		}

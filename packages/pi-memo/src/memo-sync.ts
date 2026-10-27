@@ -1,12 +1,12 @@
 /**
- * 备忘录云同步引擎（插件内置，不依赖 PiAbyss Host）。
+ * 备忘录云同步引擎（插件内置，不依赖 桌面宿主）。
  *
- * 与 pi-reimburse 的 reimburse-sync.ts 同一套策略，从 PiAbyss Host 的
+ * 与 pi-reimburse 的 reimburse-sync.ts 同一套策略，从桌面宿主的
  * memo-sync.ts 逐行移植（磁盘格式与云端键布局完全一致，老数据无缝衔接）：
  *
  * 键布局（前缀固定，不开放配置）：
- *   piabyss/memo/notes.json
- *   piabyss/memo/images/<noteId>/<fileName>
+ *   <前缀>/notes.json（前缀见 OBJECT_KEY_PREFIX）
+ *   <前缀>/images/<noteId>/<fileName>
  *
  * 同步策略 = 「逐条记录最后写入者胜（LWW）+ 删除墓碑」：
  *   1. 拉取云端 notes.json（不存在视为空库）；
@@ -15,22 +15,22 @@
  *   4. 合并结果整体回写本地 notes.json，并从云端补齐缺失的图片；
  *   5. 上传合并后的 notes.json 与图片，供其他设备拉取。
  *
- * 配置来源（插件自持，密钥不再进 PiAbyss Host/协议层）：
- *   - 环境变量优先——由 PiAbyss「设置 → 插件 → PiAbyss 备忘录」的配置表单
- *     写入（PIABYSS_MEMO_R2_* / PIABYSS_MEMO_AUTO_SYNC，经 pluginLibrary.setEnv
+ * 配置来源（插件自持，密钥不再进 桌面宿主/协议层）：
+ *   - 环境变量优先——由 桌面端「设置 → 插件 → 待办 · 速记」的配置表单
+ *     写入（PI_MEMO_R2_* / PI_MEMO_AUTO_SYNC，经 pluginLibrary.setEnv
  *     注入 Host 进程，扩展与其同进程因此实时生效）；
- *   - 兼容回退：环境变量缺失时读旧版 `<agentDir>/piabyss/memo/sync-config.json`
+ *   - 兼容回退：环境变量缺失时读备忘录数据目录下旧版 `sync-config.json`
  *     里的同名字段（Host 内置同步时代的配置文件，老设备免重填）。
  *
  * 同步状态（lastSyncAt/Ok/Error）持久化在
- * `<agentDir>/piabyss/memo/sync-config.json`（与 notes.json 同目录、同套原子写）。
+ * 备忘录数据目录下的 `sync-config.json`（与 notes.json 同目录、同套原子写）。
  * autoSync 开启时，备忘录每次变更后防抖触发后台同步（桌面端变更由 Host 经
  * 环回控制面通知本引擎，见 memo-sync-http.ts）。
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { getMemoStore, normalizeNoteDefaults, type MemoNote } from "./memo-store.js";
+import { getMemoStore, memoDataDir, normalizeNoteDefaults, type MemoNote } from "./memo-store.js";
 import {
   deleteObject,
   getObject,
@@ -42,8 +42,13 @@ import {
 const CONFIG_FILE_NAME = "sync-config.json";
 /** 上传指纹缓存文件：记录「已确认上传到云端」的对象内容哈希，避免重复上传。 */
 const UPLOAD_HASHES_FILE = "upload-hashes.json";
-/** 对象键前缀：固定值，不开放配置。 */
-const OBJECT_KEY_PREFIX = "piabyss/memo";
+/**
+ * 对象键前缀。默认沿用历史前缀（老设备与云端已有数据无缝衔接）；
+ * 可用环境变量 `PI_MEMO_R2_PREFIX` 覆盖为自定义命名空间（如 "memo"）——
+ * 注意换前缀等于换了一个云端命名空间，已有云端数据不会被自动迁移。
+ */
+const LEGACY_OBJECT_KEY_PREFIX = "piabyss/memo";
+const OBJECT_KEY_PREFIX_ENV = "PI_MEMO_R2_PREFIX";
 /** autoSync 防抖窗口：连续变更合并为一次同步。 */
 const AUTO_SYNC_DEBOUNCE_MS = 5_000;
 /** 每次进程只做一次启动同步；延迟执行错开启动高峰。 */
@@ -53,11 +58,11 @@ const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
 
 /* ----------------------------- 配置项（env） ------------------------------ */
 
-export const ENV_ACCOUNT_ID = "PIABYSS_MEMO_R2_ACCOUNT_ID";
-export const ENV_ACCESS_KEY_ID = "PIABYSS_MEMO_R2_ACCESS_KEY_ID";
-export const ENV_SECRET_ACCESS_KEY = "PIABYSS_MEMO_R2_SECRET_ACCESS_KEY";
-export const ENV_BUCKET = "PIABYSS_MEMO_R2_BUCKET";
-export const ENV_AUTO_SYNC = "PIABYSS_MEMO_AUTO_SYNC";
+export const ENV_ACCOUNT_ID = "PI_MEMO_R2_ACCOUNT_ID";
+export const ENV_ACCESS_KEY_ID = "PI_MEMO_R2_ACCESS_KEY_ID";
+export const ENV_SECRET_ACCESS_KEY = "PI_MEMO_R2_SECRET_ACCESS_KEY";
+export const ENV_BUCKET = "PI_MEMO_R2_BUCKET";
+export const ENV_AUTO_SYNC = "PI_MEMO_AUTO_SYNC";
 
 /** autoSync 的 env 值：真值集合（其余一律视为关）。 */
 const AUTO_SYNC_TRUTHY = new Set(["true", "1", "on", "yes"]);
@@ -102,7 +107,7 @@ type UploadHashesFile = {
   hashes: Record<string, string>;
 };
 
-/** 一次双向同步的统计（形状与 PiAbyss 协议的 memo.syncNow 结果一致）。 */
+/** 一次双向同步的统计（形状与宿主协议的 memo.syncNow 结果一致）。 */
 export type MemoSyncStats = {
   /** 合并后仍可见（未删除）的记录数，即上传的记录数。 */
   uploadedNotes: number;
@@ -128,7 +133,7 @@ function credentialsOf(config: MemoSyncConfig): R2Credentials {
 
 /** 配置文件路径（notes.json 同级）。 */
 function configPath(agentDir: string): string {
-  return join(agentDir, "piabyss", "memo", CONFIG_FILE_NAME);
+  return join(memoDataDir(agentDir), CONFIG_FILE_NAME);
 }
 
 /** 读取磁盘状态文件（缺失/损坏 → 空对象）。 */
@@ -213,7 +218,7 @@ function parseCloudNotes(body: Buffer | null): MemoNote[] {
 
 function warn(context: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.warn(`[piabyss-memo-sync] ${context}: ${message}`);
+  console.warn(`[pi-memo-sync] ${context}: ${message}`);
 }
 
 export class MemoSync {
@@ -281,9 +286,10 @@ export class MemoSync {
     }
   }
 
-  /** 对象键：固定前缀下的相对路径。 */
+  /** 对象键：前缀下的相对路径（前缀见 LEGACY_OBJECT_KEY_PREFIX 注释）。 */
   private objectKey(relative: string): string {
-    return `${OBJECT_KEY_PREFIX}/${relative}`;
+    const prefix = process.env[OBJECT_KEY_PREFIX_ENV]?.trim() || LEGACY_OBJECT_KEY_PREFIX;
+    return `${prefix}/${relative}`;
   }
 
   /** 读取上传指纹缓存（缺失/损坏/目标变更 → 空缓存）。 */
@@ -337,7 +343,7 @@ export class MemoSync {
     const config = this.resolvedConfig();
     if (!config.accountId || !config.bucket || !config.accessKeyId || !config.secretAccessKey) {
       throw new Error(
-        "尚未配置 R2 连接信息（在 PiAbyss「设置 → 插件 → PiAbyss 备忘录」里填写 Account ID / Access Key ID / Secret Access Key / 桶名）",
+        "尚未配置 R2 连接信息（在 桌面端「设置 → 插件 → 待办 · 速记」里填写 Account ID / Access Key ID / Secret Access Key / 桶名）",
       );
     }
     return credentialsOf(config);

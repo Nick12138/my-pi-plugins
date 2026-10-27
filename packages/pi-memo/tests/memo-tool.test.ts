@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import memoExtension from "../extensions/piabyss-memo.js";
+import memoExtension from "../extensions/pi-memo.js";
 import { getMemoStore, type MemoNote } from "../src/memo-store.js";
 
 type ToolResult = {
@@ -27,12 +27,12 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   delete process.env.PI_CODING_AGENT_DIR;
-  delete process.env.PIABYSS_MEMO_ALLOW_TEMP;
+  delete process.env.PI_MEMO_ALLOW_TEMP;
 });
 
 /** 用临时 agentDir 加载插件并抓取注册的工具。 */
 async function loadTool(): Promise<CapturedTool> {
-  const root = await mkdtemp(join(tmpdir(), "piabyss-memo-tool-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-memo-tool-"));
   tempDirs.push(root);
   const agentDir = join(root, "agent");
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -51,7 +51,7 @@ function textOf(result: ToolResult): string {
   return result.content.map((part) => part.text).join("\n");
 }
 
-describe("piabyss_memo create 动作", () => {
+describe("memo create 动作", () => {
   it("写入新记录并回显 id（不需要 id 入参）", async () => {
     const tool = await loadTool();
     const created = await tool.execute("t1", {
@@ -125,7 +125,7 @@ describe("piabyss_memo create 动作", () => {
   });
 });
 
-describe("piabyss_memo delete 动作", () => {
+describe("memo delete 动作", () => {
   /** 新建一条便签并返回 id。 */
   async function createNote(tool: CapturedTool, title: string): Promise<string> {
     const created = await tool.execute("c1", { action: "create", title, contentMd: "作废测试" });
@@ -198,7 +198,7 @@ function ctxAt(cwd: string): unknown {
 describe("一次性临时会话护栏", () => {
   it("cwd 在系统临时目录下：写动作被拒，且不落盘", async () => {
     const tool = await loadTool();
-    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    const scratch = await mkdtemp(join(tmpdir(), "pi-memo-scratch-"));
     tempDirs.push(scratch);
 
     const refused = await tool.execute(
@@ -210,7 +210,7 @@ describe("一次性临时会话护栏", () => {
     );
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toContain("临时目录里的一次性会话");
-    expect(textOf(refused)).toContain("PIABYSS_MEMO_ALLOW_TEMP=1");
+    expect(textOf(refused)).toContain("PI_MEMO_ALLOW_TEMP=1");
 
     // 拒绝是因为真的没写：换一个正常 cwd 去读，看板仍是空的。
     const listed = await tool.execute("t2", { action: "list" }, undefined, undefined, ctxAt(process.cwd()) as never);
@@ -219,7 +219,7 @@ describe("一次性临时会话护栏", () => {
 
   it("临时会话里 list 仍然放行（只读不拦）", async () => {
     const tool = await loadTool();
-    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    const scratch = await mkdtemp(join(tmpdir(), "pi-memo-scratch-"));
     tempDirs.push(scratch);
     const listed = await tool.execute("t1", { action: "list" }, undefined, undefined, ctxAt(scratch) as never);
     expect(listed.isError).toBeUndefined();
@@ -239,11 +239,11 @@ describe("一次性临时会话护栏", () => {
     expect(textOf(created)).toContain("Memo note created");
   });
 
-  it("PIABYSS_MEMO_ALLOW_TEMP=1 可放开", async () => {
+  it("PI_MEMO_ALLOW_TEMP=1 可放开", async () => {
     const tool = await loadTool();
-    const scratch = await mkdtemp(join(tmpdir(), "piabyss-memo-scratch-"));
+    const scratch = await mkdtemp(join(tmpdir(), "pi-memo-scratch-"));
     tempDirs.push(scratch);
-    process.env.PIABYSS_MEMO_ALLOW_TEMP = "1";
+    process.env.PI_MEMO_ALLOW_TEMP = "1";
     const created = await tool.execute(
       "t1",
       { action: "create", title: "临时目录里真要记一条" },

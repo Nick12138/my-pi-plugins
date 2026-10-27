@@ -1,14 +1,14 @@
 # pi-pixie
 
-Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会话专用）与 `pixie_report`（被委派会话回调用）等指挥台工具。**委派引擎本身仍在 PiAbyss Host 侧**——插件只把工具的执行转发到 Host 的环回 HTTP 控制面，参数 schema 与结果文案和 PiAbyss 内置实现（`packages/pi-host/src/pixie-tool.ts`）保持一致。
+Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会话专用）与 `pixie_report`（被委派会话回调用）等指挥台工具。**委派引擎本身仍在桌面宿主侧**——插件只把工具的执行转发到 Host 的环回 HTTP 控制面，参数 schema 与结果文案和桌面宿主内置实现（pixie-tool.ts）保持一致。
 
-> 注意：下文的环回端点是本插件定义的**新契约**，需要 PiAbyss Host 侧配合实现（移除内置 customTools 注入、启动环回控制面、给常驻会话注入 `PIABYSS_PIXIE_RESIDENT=1`）。Host 未实现控制面时，本插件在任何环境下都只会返回降级错误文案，不影响其它功能。
+> 注意：下文的环回端点是本插件定义的**新契约**，需要桌面宿主侧配合实现（移除内置 customTools 注入、启动环回控制面、给常驻会话注入 `PI_PIXIE_RESIDENT=1`）。Host 未实现控制面时，本插件在任何环境下都只会返回降级错误文案，不影响其它功能。
 
 ## 会话段语义（v0.10）
 
 - **段 = 小精灵工作区里创建时间最新的会话**，由用户在界面里点「新会话」产生。**没有打盹、没有交接摘要、没有自动换段**：v0.8 及之前的 `pixie_rest` 与轮数上限自动换段已全部移除。
 - 记忆靠插件侧的 `pixie-segments` 卡片 + `pixie_recall`：新段首轮自动注入「运行契约 + 历史段索引 + 上一段收尾」（全部直接读本地，不经 Host），更早的段按需回读（见下节）。
-- **运行契约（`<pixie-context>`）v0.10 起归插件**：此前由 PiAbyss Host 在 prompt 前导里注入，只有从 PiAbyss 界面/控制面发消息才带，用户直接用裸 `pi` CLI 打开小精灵工作区时模型拿不到任何委派契约。现在契约内嵌在新段卡片里，时间锚点由插件现跑 `new Date()` 生成；**没有历史段也照发**（全新工作区恰恰最需要它）。契约内容：时间锚点行、落点、排队、回调三分法（完成/报错/询问）、模型与推理深度默认不传、委派 cwd 必须来自已知工作区列表、`automation` 工具只读 + ```automation-plan 草案字段规范。已知工作区优先读 `<agentDir>/piabyss/pixie/context.json`，缺失时扫 `<agentDir>/sessions/` 目录名反推最近 5 个，全失败就省略该行。
+- **运行契约（`<pixie-context>`）v0.10 起归插件**：此前由桌面宿主在 prompt 前导里注入，只有从桌面端界面/控制面发消息才带，用户直接用裸 `pi` CLI 打开小精灵工作区时模型拿不到任何委派契约。现在契约内嵌在新段卡片里，时间锚点由插件现跑 `new Date()` 生成；**没有历史段也照发**（全新工作区恰恰最需要它）。契约内容：时间锚点行、落点、排队、回调三分法（完成/报错/询问）、模型与推理深度默认不传、委派 cwd 必须来自已知工作区列表、`automation` 工具只读 + ```automation-plan 草案字段规范。已知工作区优先读 `<agentDir>/pixie/context.json`（旧版宿主遗留路径 `piabyss/pixie/` 兜底），缺失时扫 `<agentDir>/sessions/` 目录名反推最近 5 个，全失败就省略该行。
 - 历史段按**创建时间**新→旧排序（header `timestamp` / 文件名 ISO 时间戳都编码创建时间，缺失时退回 mtime）；`pixie_recall` 省略 `segment` 时读到的就是卡片标为 0 的那一段。
 - Host 给每个新段按首条用户消息起名（写进 `session_info`）；小精灵可用 `pixie_name` 把**当前段**改成更贴切的短名（`POST /api/pixie/name`）。
 - 工作区里可能同时存在多个小精灵会话，因此 `pixie_dispatch` 的请求体带派发方自己的 `sourceSessionId`，Host 用它把委派回报送回**发起委派的那个会话**，而不是「最新的那个会话」。
@@ -22,11 +22,11 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
 - 其余指挥台工具：`pixie_report`（被委派会话回调）/ `pixie_ask`（询问用户）/ `pixie_name`（改当前会话段的名字）/ `pixie_recall`（回读历史会话段正文）/ `pixie_dispatch_status`（查岗）/ `pixie_interject`（插话）/ `pixie_stop`（叫停）/ `pixie_retry`（续跑或重派）。
 - **换段后的记忆（插件侧）**：换段只换「当前活动会话文件」，上一段的正文一直在本机 Pi 会话目录里。新段的第一条用户消息之前，插件直接读会话目录注入一张**交接卡片**：运行契约（`<pixie-context>`）+ 历史段索引（一段一行：段名 · 时间 · 条数 · 序号，按创建时间新→旧）+ 上一段的收尾若干条；更早或更细的内容用 `pixie_recall` 按需回读。**这条路完全不经过 Host**，只依赖 Pi 的原生会话存储（见下节）。
 - **pixie_report**（注册在每个非小精灵会话上，但默认保持休眠）：被委派的任务会话在完成任务后回调。参数与原实现一致 `{ result, success? }`——dispatchId 对模型透明，插件先查 dispatch-state 端点按当前会话解析出 dispatchId，再 POST `{ dispatchId, summary, success }`。
-- 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：PiAbyss Host 注入的代理设置会拦截环回请求），单请求超时默认 3 秒；`POST /api/pixie/dispatch` 单独放宽到 **15 秒**（受理要先打开目标工作区的后台图，实测 0.9–3.3 秒，3 秒预算会让已受理的委派被误报为失败并诱发重复派单）。
+- 全部请求走 `node:http` **直连 `127.0.0.1`**（禁用全局 fetch：桌面宿主注入的代理设置会拦截环回请求），单请求超时默认 3 秒；`POST /api/pixie/dispatch` 单独放宽到 **15 秒**（受理要先打开目标工作区的后台图，实测 0.9–3.3 秒，3 秒预算会让已受理的委派被误报为失败并诱发重复派单）。
 
 ## 激活门控安全语义
 
-- `pixie_dispatch`：Host 在常驻小精灵会话注入环境变量 `PIABYSS_PIXIE_RESIDENT=1`，扩展入口仅在该会话注册此工具；普通会话完全不注册、不可见。
+- `pixie_dispatch`：Host 在常驻小精灵会话注入环境变量 `PI_PIXIE_RESIDENT=1`，扩展入口仅在该会话注册此工具；普通会话完全不注册、不可见。
 - `pixie_report`：注册在每个非小精灵会话上，但由激活扩展保持在 active tools 之外——扩展在每个 `before_agent_start` 调 `GET /api/pixie/dispatch-state?sessionId=<当前会话id>`，**仅当响应为 `{ armed: true }` 时才把工具加入 active tools**，否则剪除。因此普通工作区会话永远看不到该工具，工作区 agent 无法在无委派的情况下调用它。
 - 门控查询的任何失败（端口缺失/非法、连接失败、3 秒超时、非 200、响应体不合法）一律**保守地视为未 armed**，且绝不抛错——不会让 agent 启动失败。armed 状态每轮重新评估：委派注入时工具加入，委派结束后工具重新剪除。查询**失败后有 30 秒退避**（退避期内不再重复查询，避免 Host 挂死时每轮阻塞 3 秒）；Host 健康时仍每轮实时评估。
 
@@ -42,7 +42,7 @@ Pixie 委派/回调工具的插件侧壳：`pixie_dispatch`（常驻小精灵会
 
 ## 环回 HTTP API 契约
 
-Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，插件依赖的端点如下：
+Host 侧控制面监听 `127.0.0.1:<PI_PIXIE_HTTP_PORT>`，插件依赖的端点如下：
 
 ### 1. `POST /api/pixie/dispatch`（pixie_dispatch 执行）
 
@@ -143,8 +143,8 @@ Host 侧控制面监听 `127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>`，插件依赖的�
 
 | 变量 | 作用 |
 | --- | --- |
-| `PIABYSS_PIXIE_HTTP_PORT` | Host 环回控制面端口。缺失或非法（非整数、≤0、>65535）时：工具执行返回可读的失败结果；门控查询直接视为未 armed。 |
-| `PIABYSS_PIXIE_RESIDENT` | Host 在常驻小精灵会话注入 `=1`，扩展据此只注册 `pixie_dispatch`；其余值或不设置 = 普通会话，只注册 `pixie_report` + 激活门控。 |
+| `PI_PIXIE_HTTP_PORT` | Host 环回控制面端口。缺失或非法（非整数、≤0、>65535）时：工具执行返回可读的失败结果；门控查询直接视为未 armed。 |
+| `PI_PIXIE_RESIDENT` | Host 在常驻小精灵会话注入 `=1`，扩展据此只注册 `pixie_dispatch`；其余值或不设置 = 普通会话，只注册 `pixie_report` + 激活门控。 |
 
 ## 测试
 

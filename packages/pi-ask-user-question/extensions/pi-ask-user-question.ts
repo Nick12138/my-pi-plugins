@@ -1,5 +1,5 @@
 /**
- * pi-ask-user-question —— 把 PiAbyss 内置 `ask_user_question` 工具外移为插件。
+ * pi-ask-user-question —— 把 桌面宿主内置 `ask_user_question` 工具外移为插件。
  *
  * 注册问卷工具，并挂一个内联激活扩展：每轮开始前读
  * `<agentDir>/settings.json` 的 `askUserQuestionEnabled`（缺省为开，仅显式

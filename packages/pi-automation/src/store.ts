@@ -8,7 +8,7 @@
  *   locks/<jobId>.lock              单飞锁（跨进程）
  *   locks/jobs.lock                 jobs.json 的读改写锁
  *   runs.jsonl                      追加型台账（fire/skip/lock/terminate/error）
- *   notify-queue.jsonl              通知队列（PiAbyss 消费）
+ *   notify-queue.jsonl              通知队列（桌面端消费）
  */
 import {
 	appendFileSync,
@@ -99,7 +99,7 @@ export function migrateLegacyRoot(
 /**
  * 新目录是不是「只有 Host 钉下的 token」这种空壳。
  *
- * 必须认得出来：PiAbyss 的 Host 启动时就会往 `<root>/token` 落一份控制面 token，
+ * 必须认得出来：桌面端的 Host 启动时就会往 `<root>/token` 落一份控制面 token，
  * 于是更名之后**每个用户**都会在插件第一次跑起来之前先有 `~/.pi/automation/`。
  * 把它当成「新目录已经有数据了」而拒绝搬家，表现是面板里任务全空——看着像数据丢失。
  */

@@ -1,7 +1,7 @@
 /**
  * pi-reimburse —— 云同步工具 `reimburse_sync`。
  *
- * 与 PiAbyss 备忘录同一模式，配置不进工具：
+ * 与桌面端备忘录插件 memo 同一模式，配置不进工具：
  * R2 密钥与 autoSync 由插件设置页「报销管家」的配置表单管理（写入
  * PI_REIMBURSE_R2_* / PI_REIMBURSE_AUTO_SYNC 环境变量，扩展与其同进程
  * 因此实时生效），本工具只提供 test / sync_now / status 三个动作做

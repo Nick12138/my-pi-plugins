@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 async function tempLayout(): Promise<{ agentDir: string; store: MemoStore }> {
-  const root = await mkdtemp(join(tmpdir(), "piabyss-memo-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-memo-"));
   tempDirs.push(root);
   const agentDir = join(root, "agent");
   return { agentDir, store: new MemoStore(agentDir) };
@@ -48,14 +48,14 @@ describe("MemoStore（磁盘格式与原子写）", () => {
       title: "  带标签  ",
       contentMd: "正文",
       tags: ["#A", "a", "b ", ""],
-      workspaceHint: " PiAbyss ",
+      workspaceHint: " DefaultProject ",
     });
     expect(note.title).toBe("带标签");
     expect(note.status).toBe("open");
     expect(note.sessionId).toBeNull();
     // 大小写去重 + 去空白 + 丢弃空串，保留首个书写形式。
     expect(note.tags).toEqual(["A", "b"]);
-    expect(note.workspaceHint).toBe("PiAbyss");
+    expect(note.workspaceHint).toBe("DefaultProject");
     expect(note.completedAt).toBeNull();
     expect(note.deletedAt).toBeNull();
     expect(note.result).toBeNull();
@@ -100,7 +100,7 @@ describe("MemoStore（磁盘格式与原子写）", () => {
       ].sort(),
     );
 
-    // 字段读回一致（跨实例，模拟 PiAbyss 桌面页/同步引擎读取同一文件）。
+    // 字段读回一致（跨实例，模拟 桌面端页/同步引擎读取同一文件）。
     const reopened = new MemoStore(agentDir);
     const loaded = reopened.list().find((entry) => entry.id === note.id);
     expect(loaded).toEqual(note);
@@ -291,7 +291,7 @@ describe("MemoStore（磁盘格式与原子写）", () => {
         sessionId: " session-1 ",
         sessionPath: "D:/sessions/session-1.jsonl",
         sessionTitle: " 处理备忘录 ",
-        sessionCwd: "D:/work/PiAbyss",
+        sessionCwd: "D:/work/demo-project",
       });
       expect(done.status).toBe("done");
       expect(done.completedAt).not.toBeNull();
@@ -300,7 +300,7 @@ describe("MemoStore（磁盘格式与原子写）", () => {
       expect(done.result?.sessionId).toBe("session-1");
       expect(done.sessionId).toBe("session-1");
       expect(done.result?.sessionTitle).toBe("处理备忘录");
-      expect(done.result?.sessionCwd).toBe("D:/work/PiAbyss");
+      expect(done.result?.sessionCwd).toBe("D:/work/demo-project");
       expect(typeof done.result?.at).toBe("number");
 
       // 覆盖式更新：再次 complete 替换旧总结。

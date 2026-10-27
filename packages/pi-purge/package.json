@@ -1,7 +1,7 @@
 {
   "name": "pi-purge",
   "version": "0.4.0",
-  "description": "Operator-mode extension for pi/PiAbyss: overrides the rendered system prompt while enabled and restores the exact native prompt when disabled, ships a reverse-engineering/crack skill, optionally auto-answers project trust, and exposes purge_status / purge_toggle tools plus a /purge command.",
+  "description": "Operator-mode extension for pi and desktop hosts: overrides the rendered system prompt while enabled and restores the exact native prompt when disabled, ships a reverse-engineering/crack skill, optionally auto-answers project trust, and exposes purge_status / purge_toggle tools plus a /purge command.",
   "keywords": ["pi-package", "pi-purge", "operator-mode"],
   "license": "MIT",
   "author": "Nick12138",

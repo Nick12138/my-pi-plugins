@@ -115,11 +115,11 @@ function testParseWhereBash(): void {
 
 // ── 测试 3：候选收集顺序与环境变量 ─────────────────────────────
 function testCollectCandidates(): void {
-	console.log("── 测试 3：候选收集顺序（SHELL 优先 → 固定路径 → PiAbyss 自带）");
+	console.log("── 测试 3：候选收集顺序（SHELL 优先 → 固定路径 → 桌面端自带）");
 	const cands = collectBashCandidates({ SHELL: "C:\\sh\\env-bash.exe", MSYS_BASH: "", LOCALAPPDATA: "C:\\Users\\example\\AppData\\Local" } as NodeJS.ProcessEnv);
 	assert.equal(cands[0], "C:\\sh\\env-bash.exe", "SHELL 环境变量优先");
 	assert.ok(cands.includes("C:\\Program Files\\Git\\bin\\bash.exe"), "含 Git for Windows 固定路径");
-	assert.ok(cands.includes(path.join("C:\\Users\\example\\AppData\\Local", "PiAbyss", "resources", "git", "bin", "bash.exe")), "含 PiAbyss 自带 bash");
+	assert.ok(cands.includes(path.join("C:\\Users\\example\\AppData\\Local", "PiAbyss", "resources", "git", "bin", "bash.exe")), "含 桌面端自带 bash");
 	assert.equal(new Set(cands).size, cands.length, "候选已去重");
 	const noEnv = collectBashCandidates({} as NodeJS.ProcessEnv);
 	assert.equal(noEnv[0], "C:\\Program Files\\Git\\bin\\bash.exe", "无环境变量时固定路径打头");

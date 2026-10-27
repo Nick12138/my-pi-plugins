@@ -1,6 +1,6 @@
 # pi-purge
 
-pi / PiAbyss 的 operator-mode 扩展。dsh-purge 的 pi 侧等价物，但全部走 pi 官方扩展 API，零二进制修改、零补丁。
+pi / 桌面宿主的 operator-mode 扩展。dsh-purge 的 pi 侧等价物，但全部走 pi 官方扩展 API，零二进制修改、零补丁。
 
 | 能力 | 实现 |
 | --- | --- |
@@ -13,11 +13,11 @@ pi / PiAbyss 的 operator-mode 扩展。dsh-purge 的 pi 侧等价物，但全�
 
 核心契约：**启用时可以覆盖；禁用时必须还原。** 覆盖发生在渲染层，用户自己的 `SYSTEM.md` / `--system-prompt` / `--append-system-prompt` 在启用期间不写入、不破坏，禁用后原样回来。
 
-pi 核心的工具链（bash/edit/write）本身没有审批门：PiAbyss 只在某个扩展在 tool_call 里主动弹 UI 时才出 Modal。本扩展不弹任何 UI，因此装上即无感直通。
+pi 核心的工具链（bash/edit/write）本身没有审批门：桌面端只在某个扩展在 tool_call 里主动弹 UI 时才出 Modal。本扩展不弹任何 UI，因此装上即无感直通。
 
-## 安装（PiAbyss 设置 → 扩展）
+## 安装（宿主设置 → 扩展）
 
-1. 打开 PiAbyss → 设置 → 扩展（Packages）
+1. 打开桌面端 → 设置 → 扩展（Packages）
 2. 在库工具栏的安装源输入框填入本包绝对路径（换成你的实际路径）：
 
     D:/我的项目/my-pi-plugins/packages/pi-purge
@@ -56,7 +56,7 @@ CLI 等价安装：
 
 ## 在设置 → 扩展里禁用
 
-PiAbyss 修改扩展偏好时会走官方 `agentSession.reload()`：先对旧扩展实例发 `session_shutdown`，再移除/重载扩展。`pi-purge` 在 `session_shutdown` 里做最后一次还原：
+桌面端修改扩展偏好时会走官方 `agentSession.reload()`：先对旧扩展实例发 `session_shutdown`，再移除/重载扩展。`pi-purge` 在 `session_shutdown` 里做最后一次还原：
 
 - 删除本扩展写入的 `forceSystemPrompt`，系统提示词回到原生；
 - `reason=reload/quit` 时清理本扩展写入的 trust 条目；
@@ -100,7 +100,7 @@ Windows 上通常是 `C:/Users/<你>/.pi/agent/pi-purge/config.json`。可用 `P
 - 模型在逆向/破解任务上按 `prompts/purge-addendum.md` 的提醒加载；
 - 当前输入命中逆向/破解关键词时，只额外追加一行任务提醒（`[pi-purge] This request matches reverse-engineering/cracking. Load the reverse-engineering skill now...`），不会把 12KB 正文塞进系统提示词；
 - 用户也可以直接 `/skill:reverse-engineering` 强制加载；
-- PiAbyss「设置 → 技能」里能看到并按需启停；
+- 桌面端「设置 → 技能」里能看到并按需启停；
 - `package.json` 的 `pi.skills` 已声明 `./skills`。
 
 普通任务不会带上这份长 playbook。
@@ -112,7 +112,7 @@ Windows 上通常是 `C:/Users/<你>/.pi/agent/pi-purge/config.json`。可用 `P
     # 行为测试（独立 node 脚本，遵循本仓库老插件惯例）
     node --experimental-strip-types packages/pi-purge/tests/pi-purge.test.ts
 
-    # 严格类型检查（用旁边 PiAbyss 的 tsc 对真实 pi 1.1.0 SDK 类型）
+    # 严格类型检查（用旁边桌面宿主仓库的 tsc 对真实 pi 1.1.0 SDK 类型）
     ../PiAbyss/node_modules/.bin/tsc -p packages/pi-purge/tsconfig.check.json
 
 测试会把 `PI_PURGE_CONFIG_PATH` / `PI_PURGE_PROMPTS_DIR` 指向临时目录，不会改你的真实状态。

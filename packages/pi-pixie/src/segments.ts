@@ -15,7 +15,7 @@
  * - recallSegmentsText()：pixie_recall 工具的主体（index/tail/search）。
  *
  * 运行契约（`<pixie-context>` 块，见 pixie-context.ts）自 v0.10 起内嵌在卡片里：
- * 此前它由 PiAbyss Host 在 prompt 前导注入，裸 `pi` CLI 打开小精灵工作区时拿不到。
+ * 此前它由桌面宿主在 prompt 前导注入，裸 `pi` CLI 打开小精灵工作区时拿不到。
  * 因此卡片**不再**要求「至少有一个历史段」——全新工作区一个历史段都没有时，
  * 契约正是模型最先需要的东西。
  *

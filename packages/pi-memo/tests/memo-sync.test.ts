@@ -1,5 +1,5 @@
 /**
- * 备忘录云同步引擎单测（从 PiAbyss Host 的 memo-sync.test.ts 移植，改为
+ * 备忘录云同步引擎单测（从桌面宿主的 memo-sync.test.ts 移植，改为
  * env 配置 + 旧配置文件回退的解析语义）：
  * 配置解析（env 优先 / legacy 回退）、固定前缀上传、指纹跳过、失败状态、
  * 双向合并、墓碑传播与复活、autoSync 防抖。
@@ -9,7 +9,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoNote, MemoStore } from "../src/memo-store.js";
+import { MemoNote, MemoStore, memoDataDir } from "../src/memo-store.js";
 import {
   ENV_ACCOUNT_ID,
   ENV_ACCESS_KEY_ID,
@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 async function tempLayout(): Promise<{ agentDir: string; store: MemoStore; sync: MemoSync }> {
-  const root = await mkdtemp(join(tmpdir(), "piabyss-memo-sync-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-memo-sync-"));
   tempDirs.push(root);
   const agentDir = join(root, "agent");
   return { agentDir, store: new MemoStore(agentDir), sync: getMemoSync(agentDir) };
@@ -96,8 +96,8 @@ function mockR2() {
 describe("MemoSync 配置解析", () => {
   it("env 优先，缺失回退旧配置文件，并报告来源", async () => {
     const { agentDir, sync } = await tempLayout();
-    // 本套测试可能跑在已注入 PIABYSS_MEMO_* 环境变量的进程里（例如直接在
-    // PiAbyss Host 会话里执行）：先清空，验证「无 env → 回退旧配置文件」。
+    // 本套测试可能跑在已注入 PI_MEMO_* 环境变量的进程里（例如直接在
+    // 桌面宿主会话里执行）：先清空，验证「无 env → 回退旧配置文件」。
     for (const name of [
       ENV_ACCOUNT_ID,
       ENV_ACCESS_KEY_ID,
@@ -150,7 +150,7 @@ describe("MemoSync 配置解析", () => {
     expect(settings.lastSyncOk).toBe(true);
     expect(settings.lastSyncError).toBeNull();
     expect(settings.lastSyncAt).not.toBeNull();
-    expect(existsSync(join(agentDir, "piabyss", "memo", "sync-config.json"))).toBe(true);
+    expect(existsSync(join(memoDataDir(agentDir), "sync-config.json"))).toBe(true);
 
     // 重开实例读到同一份状态。
     expect(getMemoSync(agentDir).getSettings().lastSyncAt).toBe(settings.lastSyncAt);

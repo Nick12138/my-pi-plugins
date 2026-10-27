@@ -149,7 +149,7 @@
     {
       "id": "pi-ask-user-question",
       "name": "提问问卷",
-      "description": "ask_user_question 工具：向用户发起结构化问卷（最多 4 题、每题 2-4 选项），支持单选/多选/自由文本补充；选项元数据（optionDetails、allowFreeform、multiSelect、questionIndex/Count/Header、defaultValue）供桌面端渲染选项列表、复选框、输入框、题号进度与回退预选。v0.2.0 起第 2 题起追加「↩ 修改上一题」哨兵行，可退回上一题重答（桌面端把它摘出来渲染成卡片底部按钮）。v0.3.0 起多选题不再把编号列表塞进标题，而是结构化下发，桌面渲染成复选框列表，确认时回传「1,3」。源自 PiAbyss 内置工具外移，details 信封 { answers, cancelled } 与桌面端兼容。可在 PiAbyss 设置页用“提问工具”开关整体启停。",
+      "description": "ask_user_question 工具：向用户发起结构化问卷（最多 4 题、每题 2-4 选项），支持单选/多选/自由文本补充；选项元数据（optionDetails、allowFreeform、multiSelect、questionIndex/Count/Header、defaultValue）供桌面端渲染选项列表、复选框、输入框、题号进度与回退预选。v0.2.0 起第 2 题起追加「↩ 修改上一题」哨兵行，可退回上一题重答（桌面端把它摘出来渲染成卡片底部按钮）。v0.3.0 起多选题不再把编号列表塞进标题，而是结构化下发，桌面渲染成复选框列表，确认时回传「1,3」。源自桌面宿主内置工具外移，details 信封 { answers, cancelled } 与桌面端兼容。可在桌面端设置页用“提问工具”开关整体启停。",
       "icon": "❓",
       "version": "0.3.0",
       "author": "Nick12138",
@@ -164,22 +164,21 @@
       }
     },
     {
-      "id": "piabyss-memo",
-      "name": "PiAbyss 待办 · 速记",
-      "description": "piabyss_memo + piabyss_memo_sync 双工具：PiAbyss 待办 · 速记（原名「备忘录」「方寸间」；定位待办 · 速记 · 备忘 · 收集）看板的 Agent 侧读写（create/list/complete/reopen/update，create 直接往看板写一条新记录，complete 覆盖式写入结果并记录会话信息），以及内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss Host）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、变更后 5 秒防抖 autoSync；桌面待办 · 速记页的「测试/立即同步」经插件本地控制面（127.0.0.1:18768）触达本引擎。R2 密钥与 autoSync 在下方的配置表单里填写。直接读写 <agentDir>/piabyss/memo/notes.json，磁盘格式、软删除墓碑与原子写与 PiAbyss Host 完全一致（桌面待办 · 速记页面共用同一文件）。v0.3.0 起取消记录类别，旧数据 type 字段自动剔除。",
+      "id": "pi-memo",
+      "name": "待办 · 速记",
+      "description": "memo + memo_sync 双工具：待办 · 速记（定位待办/备忘/收集/速记）看板的 Agent 侧读写（list/create/complete/reopen/update/delete，create 直接往看板写新记录，complete 覆盖式写入结果并记录会话信息），以及内置 Cloudflare R2 云同步（插件自持）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、变更后 5 秒防抖 autoSync；桌面待办 · 速记页的「测试/立即同步」经插件本地控制面（127.0.0.1:18768）触达本引擎。R2 密钥与 autoSync 在下方的配置表单里填写。数据落盘 <agentDir>/memo/notes.json（旧版 <agentDir>/piabyss/memo/ 自动兼容，与桌面宿主共用同一份文件），磁盘格式、软删除墓碑与原子写与桌面宿主完全一致。",
       "icon": "📌",
-      "version": "0.3.0",
+      "version": "0.7.0",
       "author": "Nick12138",
       "tags": [
         "待办",
         "速记",
         "memo",
-        "云同步",
-        "PiAbyss"
+        "云同步"
       ],
       "install": {
         "type": "repo",
-        "path": "packages/piabyss-memo"
+        "path": "packages/pi-memo"
       },
       "toggleScopes": [
         "user"
@@ -189,7 +188,7 @@
           "key": "r2AccountId",
           "type": "text",
           "label": "Cloudflare Account ID",
-          "env": "PIABYSS_MEMO_R2_ACCOUNT_ID",
+          "env": "PI_MEMO_R2_ACCOUNT_ID",
           "required": false,
           "placeholder": "xxxxxxxxxxxxxxxx",
           "description": "Cloudflare 账户 ID（同步端点为 https://<accountId>.r2.cloudflarestorage.com）。四项连接信息填齐后云同步才可用。"
@@ -198,7 +197,7 @@
           "key": "r2AccessKeyId",
           "type": "text",
           "label": "R2 Access Key ID",
-          "env": "PIABYSS_MEMO_R2_ACCESS_KEY_ID",
+          "env": "PI_MEMO_R2_ACCESS_KEY_ID",
           "required": false,
           "placeholder": "<在 Cloudflare R2「管理 API 令牌」创建>",
           "description": "R2 API 令牌的 Access Key ID。"
@@ -207,7 +206,7 @@
           "key": "r2SecretAccessKey",
           "type": "text",
           "label": "R2 Secret Access Key",
-          "env": "PIABYSS_MEMO_R2_SECRET_ACCESS_KEY",
+          "env": "PI_MEMO_R2_SECRET_ACCESS_KEY",
           "secret": true,
           "required": false,
           "placeholder": "<与 Access Key ID 配对使用>",
@@ -217,16 +216,16 @@
           "key": "r2Bucket",
           "type": "text",
           "label": "R2 桶名",
-          "env": "PIABYSS_MEMO_R2_BUCKET",
+          "env": "PI_MEMO_R2_BUCKET",
           "required": false,
           "placeholder": "my-memos",
-          "description": "存放备忘录的 R2 桶名（对象固定落在 piabyss/memo/ 前缀下，可与其他插件共用一个桶）。"
+          "description": "存放备忘录的 R2 桶名（对象默认落在 piabyss/memo/ 前缀下，可用 PI_MEMO_R2_PREFIX 覆盖，可与其他插件共用一个桶）。"
         },
         {
           "key": "autoSync",
           "type": "select",
           "label": "自动同步",
-          "env": "PIABYSS_MEMO_AUTO_SYNC",
+          "env": "PI_MEMO_AUTO_SYNC",
           "required": false,
           "default": "false",
           "options": [
@@ -244,40 +243,38 @@
       ]
     },
     {
-      "id": "piabyss-present-files",
-      "name": "PiAbyss 文件交付",
-      "description": "piabyss_present_files 工具：声明本次交付给用户的文件清单（路径 + 可选标签），PiAbyss 桌面端按工具名从会话历史还原文件胶囊；对路径做 stat 软校验（缺失仅警告不阻断），不落盘不改状态。",
+      "id": "pi-present-files",
+      "name": "文件交付",
+      "description": "present_files 工具：声明本次交付给用户的文件清单（路径 + 可选标签），桌面端按工具名从会话历史还原文件胶囊；对路径做 stat 软校验（缺失仅警告不阻断），不落盘不改状态。",
       "icon": "📎",
       "version": "0.1.0",
       "author": "Nick12138",
       "tags": [
         "文件交付",
-        "PiAbyss",
         "声明式"
       ],
       "install": {
         "type": "repo",
-        "path": "packages/piabyss-present-files"
+        "path": "packages/pi-present-files"
       }
     },
     {
       "id": "pi-pixie",
       "name": "Pixie 小精灵",
-      "description": "小精灵工作区化工具壳 v0.10：pixie_dispatch（委派，支持批次/排队/会话归属，可带短名 taskName/sessionName，并携带派发方会话自己的 sourceSessionId 供 Host 把回报送回正确会话）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_name（改当前会话段的名字）/ pixie_recall（回读历史会话段正文）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。会话段语义：段由用户在界面里点「新会话」产生，小精灵工作区里创建时间最新的会话就是当前段——没有打盹、没有交接摘要、没有自动换段。记忆在插件侧：新段首轮自动注入运行契约（<pixie-context>：时间锚点 / 委派落点 / 排队与回调三分法 / 模型与推理深度默认不传 / automation 只读与草案字段规范）+ 历史段索引 + 上一段收尾；契约此前由 Host 注入，现归插件，不依赖 PiAbyss 入口（裸 pi CLI 打开小精灵工作区同样生效），没有历史段也照发；段索引与收尾直接读 Pi 会话目录里的 jsonl，不经 Host，按创建时间新→旧排序，更早的段用 pixie_recall 按需回读；Host 按首条用户消息给新段起名，小精灵可用 pixie_name 改成更贴切的短名。配置项含失联超时。委派引擎留在 PiAbyss Host，插件通过环回 HTTP 控制面（PIABYSS_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
+      "description": "小精灵工作区化工具壳 v0.10：pixie_dispatch（委派，支持批次/排队/会话归属，可带短名 taskName/sessionName，并携带派发方会话自己的 sourceSessionId 供 Host 把回报送回正确会话）/ pixie_report（完成与进度回调）/ pixie_ask（询问用户）/ pixie_name（改当前会话段的名字）/ pixie_recall（回读历史会话段正文）/ pixie_dispatch_status（查岗）/ pixie_sessions（会话缓存：小精灵自己创建的会话 + 被委托会话的简介与结果）/ pixie_interject（插话与进度检查点）/ pixie_stop（叫停）/ pixie_retry（续跑或重派）。落点规则：默认只复用【小精灵自己创建的】会话，没有就新开；用户自己的会话不会被自动复用，除非用户在对话中明确给出会话 id（sessionId）；受理回执会写明复用还是新开。每条新任务可带 taskName 短名、新开会话可带 sessionName，供 Host 的「工作区 → 会话 → 任务」委派列表显示（列表只显示短名 + 状态，不显示完整提示词）。会话段语义：段由用户在界面里点「新会话」产生，小精灵工作区里创建时间最新的会话就是当前段——没有打盹、没有交接摘要、没有自动换段。记忆在插件侧：新段首轮自动注入运行契约（<pixie-context>：时间锚点 / 委派落点 / 排队与回调三分法 / 模型与推理深度默认不传 / automation 只读与草案字段规范）+ 历史段索引 + 上一段收尾；契约此前由 Host 注入，现归插件，不依赖 桌面宿主 入口（裸 pi CLI 打开小精灵工作区同样生效），没有历史段也照发；段索引与收尾直接读 Pi 会话目录里的 jsonl，不经 Host，按创建时间新→旧排序，更早的段用 pixie_recall 按需回读；Host 按首条用户消息给新段起名，小精灵可用 pixie_name 改成更贴切的短名。配置项含失联超时。委派引擎留在 桌面宿主，插件通过环回 HTTP 控制面（PI_PIXIE_HTTP_PORT + token 鉴权）转发请求。指挥台工具仅在小精灵工作区会话激活（cwd 匹配），report/ask 仅在已派发（armed）会话可见。",
       "icon": "🧚",
       "version": "0.10.0",
       "author": "Nick12138",
       "tags": [
         "pixie",
-        "委派",
-        "PiAbyss"
+        "委派"
       ],
       "config": [
         {
           "key": "workspacePath",
           "type": "text",
           "label": "小精灵工作区路径",
-          "env": "PIABYSS_PIXIE_WORKSPACE",
+          "env": "PI_PIXIE_WORKSPACE",
           "required": false,
           "placeholder": "留空 = {agentDir}\\workspace\\pixie",
           "default": "",
@@ -287,7 +284,7 @@
           "key": "model",
           "type": "select",
           "label": "小精灵专用模型",
-          "env": "PIABYSS_PIXIE_MODEL",
+          "env": "PI_PIXIE_MODEL",
           "required": false,
           "default": "",
           "optionsSource": "pi:models",
@@ -297,7 +294,7 @@
           "key": "callbackTimeoutMs",
           "type": "text",
           "label": "委派回调超时（毫秒）",
-          "env": "PIABYSS_PIXIE_STALE_MS",
+          "env": "PI_PIXIE_STALE_MS",
           "required": false,
           "placeholder": "1800000",
           "default": "1800000",
@@ -307,7 +304,7 @@
           "key": "staleNotify",
           "type": "select",
           "label": "失联超时提醒",
-          "env": "PIABYSS_PIXIE_STALE_NOTIFY",
+          "env": "PI_PIXIE_STALE_NOTIFY",
           "required": false,
           "default": "on",
           "options": [
@@ -621,7 +618,7 @@
     {
       "id": "pi-reimburse",
       "name": "报销管家",
-      "description": "reimburse + reimburse_sync 双工具：管理个人报销单（类别/日期/项目名称/事宜/费用/票据/备注；直票=发票/车票图片，或替票组合=交易截图+共享替票，替票可被多条报销单复用），支持按状态/月份/类别/项目过滤与两状态流转。内置 Cloudflare R2 云同步（插件自持，不依赖 PiAbyss）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、内容指纹免重传、变更后 5 秒防抖 autoSync。R2 密钥与 autoSync 在下方的配置表单里填写。数据落盘 ~/.pi/reimburse/，图片复制托管、原图可删，跨会话跨工作区保留。",
+      "description": "reimburse + reimburse_sync 双工具：管理个人报销单（类别/日期/项目名称/事宜/费用/票据/备注；直票=发票/车票图片，或替票组合=交易截图+共享替票，替票可被多条报销单复用），支持按状态/月份/类别/项目过滤与两状态流转。内置 Cloudflare R2 云同步（插件自持，不依赖桌面宿主）：LWW 逐条合并+删除墓碑传播、图片上传/补齐、内容指纹免重传、变更后 5 秒防抖 autoSync。R2 密钥与 autoSync 在下方的配置表单里填写。数据落盘 ~/.pi/reimburse/，图片复制托管、原图可删，跨会话跨工作区保留。",
       "icon": "💰",
       "version": "0.2.0",
       "author": "Nick12138",
@@ -672,7 +669,7 @@
           "env": "PI_REIMBURSE_R2_BUCKET",
           "required": false,
           "placeholder": "my-reimburse",
-          "description": "存放报销数据的 R2 桶名（对象固定落在 reimburse/ 前缀下，可与其他插件共用一个桶）。"
+          "description": "存放报销单的 R2 桶名（对象落在 reimburse/ 前缀下，可与其他插件共用一个桶）。"
         },
         {
           "key": "autoSync",

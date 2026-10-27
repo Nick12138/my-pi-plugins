@@ -32,7 +32,7 @@ let base = "";
 let agentDir = "";
 
 beforeAll(async () => {
-  const root = await mkdtemp(join(tmpdir(), "piabyss-memo-http-"));
+  const root = await mkdtemp(join(tmpdir(), "pi-memo-http-"));
   tempDirs.push(root);
   agentDir = join(root, "agent");
   const port = await startSyncHttpServer(agentDir, 0);
@@ -66,7 +66,7 @@ async function call(
   options: { token?: string | false } = {},
 ): Promise<{ status: number; data: Record<string, unknown> | null }> {
   const headers: Record<string, string> = {};
-  if (options.token !== false) headers["X-Piabyss-Memo-Sync-Token"] = options.token ?? TOKEN;
+  if (options.token !== false) headers["X-Pi-Memo-Sync-Token"] = options.token ?? TOKEN;
   const res = await realFetch(`${base}${path}`, { method, headers });
   const text = await res.text();
   let data: Record<string, unknown> | null = null;
@@ -134,7 +134,7 @@ describe("memo-sync HTTP 控制面", () => {
           port,
           path: "/api/status",
           method: "GET",
-          headers: { Host: "evil.example.com", "X-Piabyss-Memo-Sync-Token": TOKEN },
+          headers: { Host: "evil.example.com", "X-Pi-Memo-Sync-Token": TOKEN },
         },
         (res) => {
           res.resume();
@@ -222,7 +222,7 @@ describe("memo-sync HTTP 控制面", () => {
     expect(missing.status).toBe(404);
 
     const res = await realFetch(`${base}/status`, {
-      headers: { "X-Piabyss-Memo-Sync-Token": TOKEN },
+      headers: { "X-Pi-Memo-Sync-Token": TOKEN },
     });
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });

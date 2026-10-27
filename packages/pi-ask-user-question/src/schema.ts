@@ -1,5 +1,5 @@
 /**
- * TypeBox 参数 schema 与派生类型 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
+ * TypeBox 参数 schema 与派生类型 —— 与桌面宿主内置实现同源的 `ask-user-question-tool.ts`。
  */
 import { Type, type Static } from "typebox";
 import {

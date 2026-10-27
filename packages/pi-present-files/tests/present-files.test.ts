@@ -9,9 +9,9 @@ import {
   formatRecordedLines,
   normalizeDeclaredFile,
 } from "../src/present-files.js";
-import { buildPresentFilesTool } from "../extensions/piabyss-present-files.js";
+import { buildPresentFilesTool } from "../extensions/pi-present-files.js";
 
-const root = await mkdtemp(join(tmpdir(), "piabyss-present-files-"));
+const root = await mkdtemp(join(tmpdir(), "pi-present-files-"));
 const existing = join(root, "report.md");
 
 afterAll(async () => {
@@ -52,7 +52,7 @@ describe("pure path / formatting helpers", () => {
   });
 });
 
-describe("piabyss_present_files tool", () => {
+describe("present_files tool", () => {
   const signal = () => new AbortController().signal;
 
   it("records delivered files and echoes them back", async () => {

@@ -1,5 +1,5 @@
 /**
- * 开关与激活钩子 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
+ * 开关与激活钩子 —— 与桌面宿主内置实现同源的 `ask-user-question-tool.ts`。
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -101,7 +101,7 @@ describe("buildSelectPlan", () => {
     const plan = buildSelectPlan(huge);
     expect(plan.optionDetails[0]!.preview).toHaveLength(MAX_PREVIEW_LENGTH);
     // The trusted tool cap must never exceed the protocol's hard ceiling
-    // (MAX_EXTENSION_UI_OPTION_PREVIEW_LENGTH = 16384 in PiAbyss), or the
+    // (MAX_EXTENSION_UI_OPTION_PREVIEW_LENGTH = 16384 in 桌面宿主), or the
     // request would be rejected by the Desktop-side validator.
     expect(MAX_PREVIEW_LENGTH).toBeLessThanOrEqual(16384);
   });
@@ -219,15 +219,24 @@ describe("formatAnswers", () => {
 
 describe("ask_user_question tool", () => {
   function fakeContext(selectResult: string | undefined, inputResult?: string) {
-    const selects: Array<{ title: string; values: string[]; piabyss: unknown }> = [];
+    const selects: Array<{ title: string; values: string[]; piabyss: unknown; askUserQuestion?: unknown }> = [];
     const inputs: string[] = [];
     return {
       selects,
       inputs,
       ctx: {
         ui: {
-          select: async (title: string, values: string[], options?: { piabyss?: unknown }) => {
-            selects.push({ title, values, piabyss: options?.piabyss });
+          select: async (
+            title: string,
+            values: string[],
+            options?: { piabyss?: unknown; askUserQuestion?: unknown },
+          ) => {
+            selects.push({
+              title,
+              values,
+              piabyss: options?.piabyss,
+              askUserQuestion: options?.askUserQuestion,
+            });
             return selectResult;
           },
           input: async (title: string) => {
@@ -269,7 +278,7 @@ describe("ask_user_question tool", () => {
     ]);
   });
 
-  it("sends the piabyss option details with allowFreeform on every select", async () => {
+  it("sends the host metadata under both the generic and legacy keys", async () => {
     const { ctx, selects } = fakeContext("Top strip");
     await runQuestionnaire(ctx as never, { questions: [QUESTION] });
     expect(selects[0]!.values).toEqual([
@@ -278,7 +287,7 @@ describe("ask_user_question tool", () => {
       "Top strip",
       "Type something.",
     ]);
-    expect(selects[0]!.piabyss).toEqual({
+    const expected = {
       questionIndex: 1,
       questionCount: 1,
       questionHeader: "Layout",
@@ -292,7 +301,10 @@ describe("ask_user_question tool", () => {
         { id: "Top strip", description: "Collapse into a strip above the chat." },
       ],
       allowFreeform: true,
-    });
+    };
+    // 通用键 `askUserQuestion` 与遗留键 `piabyss`（旧版桌面端读取）内容一致。
+    expect(selects[0]!.piabyss).toEqual(expected);
+    expect(selects[0]!.askUserQuestion).toEqual(expected);
   });
 
   it("asks a follow-up input for the sentinel row", async () => {

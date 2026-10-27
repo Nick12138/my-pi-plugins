@@ -1,20 +1,20 @@
 /**
  * pi-pixie — Pixie 委派/回调/询问/改名/回读/查岗/插话/叫停/重试工具的插件侧壳
- * （委派引擎仍在 PiAbyss Host；换段后的记忆在插件侧，见 src/segment-memory.ts）。
+ * （委派引擎仍在 桌面宿主；换段后的记忆在插件侧，见 src/segment-memory.ts）。
  *
  * v4（工作区化）→ v4.1（队列 + 查岗 + 插话 + 叫停 + 重试）：全部工具注册到
  * 每个会话的工具注册表，可见性完全由 before_agent_start 的 active-tools
  * 门控统一管理（src/activation.ts）：
  *
  * - 小精灵工作区会话（ctx.cwd == 解析后工作区路径；旧 Host 兼容
- *   PIABYSS_PIXIE_RESIDENT=1）：dispatch/name/recall/status/interject/stop/retry
+ *   PI_PIXIE_RESIDENT=1）：dispatch/name/recall/status/interject/stop/retry
  *   钉回 active tools，report/ask 移出——小精灵的指挥台工具从第一轮就可用。
  * - 普通会话（含被委派的工作区会话）：指挥台工具移出；`pixie_report` +
  *   `pixie_ask` 由 armed 门控加入/剪除——仅已派发（armed）会话可见。
  *
- * 所有工具都经 node:http 直连 127.0.0.1:<PIABYSS_PIXIE_HTTP_PORT>（禁用全局
+ * 所有工具都经 node:http 直连 127.0.0.1:<PI_PIXIE_HTTP_PORT>（禁用全局
  * fetch：Host 的代理设置会拦截环回请求），v4 起附带 token 鉴权头
- * （PIABYSS_PIXIE_HTTP_TOKEN → X-Piabyss-Pixie-Token）。
+ * （PI_PIXIE_HTTP_TOKEN → X-Piabyss-Pixie-Token）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {

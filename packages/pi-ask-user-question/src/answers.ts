@@ -1,5 +1,5 @@
 /**
- * 答案模型、选中值解析与结果文本格式化 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
+ * 答案模型、选中值解析与结果文本格式化 —— 与桌面宿主内置实现同源的 `ask-user-question-tool.ts`。
  */
 import type { AskUserQuestion } from "./schema.js";
 

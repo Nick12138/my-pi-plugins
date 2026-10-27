@@ -204,7 +204,7 @@ describe("listSegments", () => {
 });
 
 describe("buildHandoffCard", () => {
-  // 前端（PiAbyss）剥掉 <pixie-segments> 后按行解析：索引行与收尾标题的格式
+  // 前端（桌面端）剥掉 <pixie-segments> 后按行解析：索引行与收尾标题的格式
   // 一个字符都不能改。这里把前端的两条正则抄一份当契约用。
   const SEGMENT_INDEX_LINE = /^\s*(\d+)\.\s+(.+?)\s+·\s+(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})\s+·\s+(\d+)\s*条\s*$/;
   const TAIL_TITLE = /的收尾[：:]\s*$/;

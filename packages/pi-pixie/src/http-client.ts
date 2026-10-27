@@ -1,7 +1,7 @@
 /**
  * Pixie 环回 HTTP 客户端（node:http 直连 127.0.0.1）。
  *
- * 必须用 node:http 而不是全局 fetch：PiAbyss Host 会给进程注入代理设置，
+ * 必须用 node:http 而不是全局 fetch：桌面宿主会给进程注入代理设置，
  * 全局 fetch 走系统代理会被拦截，环回控制面必须直连。这里只负责请求构造
  * （method/path/body/headers）、超时控制（默认 3 秒）与原始响应读取，
  * 不做业务语义映射（响应映射见 protocol.ts）。
@@ -9,11 +9,15 @@
 import { request as httpRequest, type IncomingMessage } from "node:http";
 
 /** Host 侧环回控制面端口经此环境变量下发。 */
-export const PIXIE_PORT_ENV = "PIABYSS_PIXIE_HTTP_PORT";
+export const PIXIE_PORT_ENV = "PI_PIXIE_HTTP_PORT";
+/** 旧版桌面宿主的遗留变量名（新名未设置时兑底读取，跨版本兼容）。 */
+export const PIXIE_PORT_ENV_LEGACY = "PIABYSS_PIXIE_HTTP_PORT";
 /** 控制面鉴权 token（v4：Host 启动生成，经此环境变量下发）。 */
-export const PIXIE_TOKEN_ENV = "PIABYSS_PIXIE_HTTP_TOKEN";
+export const PIXIE_TOKEN_ENV = "PI_PIXIE_HTTP_TOKEN";
+export const PIXIE_TOKEN_ENV_LEGACY = "PIABYSS_PIXIE_HTTP_TOKEN";
 /** 常驻小精灵会话标记（v3 兼容：Host 在该会话注入；v4 由 cwd 比较接管）。 */
-export const PIXIE_RESIDENT_ENV = "PIABYSS_PIXIE_RESIDENT";
+export const PIXIE_RESIDENT_ENV = "PI_PIXIE_RESIDENT";
+export const PIXIE_RESIDENT_ENV_LEGACY = "PIABYSS_PIXIE_RESIDENT";
 
 /** 单请求超时：3 秒。 */
 export const PIXIE_HTTP_TIMEOUT_MS = 3000;
@@ -27,7 +31,7 @@ export const PIXIE_LOOPBACK_HOST = "127.0.0.1";
 
 /** 读取并校验环回控制面端口；未设置或非法返回 null。 */
 export function readPixiePort(env: NodeJS.ProcessEnv = process.env): number | null {
-	const raw = env[PIXIE_PORT_ENV];
+	const raw = env[PIXIE_PORT_ENV] ?? env[PIXIE_PORT_ENV_LEGACY];
 	if (!raw) return null;
 	const port = Number(raw);
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
@@ -36,7 +40,7 @@ export function readPixiePort(env: NodeJS.ProcessEnv = process.env): number | nu
 
 /** 读取并校验环回控制面 token；未设置返回 null（请求不带鉴权头）。 */
 export function readPixieToken(env: NodeJS.ProcessEnv = process.env): string | null {
-	const raw = env[PIXIE_TOKEN_ENV];
+	const raw = env[PIXIE_TOKEN_ENV] ?? env[PIXIE_TOKEN_ENV_LEGACY];
 	const trimmed = raw?.trim();
 	return trimmed ? trimmed : null;
 }
@@ -52,7 +56,7 @@ export type PixieRequestOptions = {
 	/** POST JSON body（会被序列化）；GET 不传。 */
 	body?: unknown;
 	timeoutMs?: number;
-	/** 鉴权 token；缺省读 PIABYSS_PIXIE_HTTP_TOKEN。 */
+	/** 鉴权 token；缺省读 PI_PIXIE_HTTP_TOKEN。 */
 	token?: string | null;
 };
 
@@ -63,7 +67,12 @@ export function buildRequestHeaders(
 	token: string | null = readPixieToken(),
 ): Record<string, string> {
 	const headers: Record<string, string> = { host: `${PIXIE_LOOPBACK_HOST}` };
-	if (token) headers["x-piabyss-pixie-token"] = token;
+	if (token) {
+		// 双头下发：`x-pixie-token` 是通用命名；`x-piabyss-pixie-token` 是旧版
+		// 桌面宿主的鉴权头，保留为跨版本兼容（宿主只认其一即可）。
+		headers["x-pixie-token"] = token;
+		headers["x-piabyss-pixie-token"] = token;
+	}
 	if (method === "POST") {
 		headers["content-type"] = "application/json";
 		headers["content-length"] = String(Buffer.byteLength(JSON.stringify(body ?? {}), "utf8"));

@@ -1,10 +1,10 @@
 /**
- * 备忘录本地存储层（从 PiAbyss `packages/pi-host/src/memo-store.ts` 外移）。
+ * 备忘录本地存储层（从桌面宿主仓库的 memo-store.ts 外移）。
  *
- * v1（纯本地）：数据落盘在 `<agentDir>/piabyss/memo/` 下：
+ * v1（纯本地）：数据落盘在备忘录数据目录下（`memoDataDir` 解析，见下）：
  *   - `notes.json`  全量记录（单文件，原子写入）
  *
- * 磁盘格式权威是 PiAbyss 原实现（packages/pi-host/src/memo-store.ts）：
+ * 磁盘格式权威是桌面宿主原实现（memo-store.ts）：
  * 桌面备忘录页面 / 协议 handler / 同步引擎与插件共用同一份 notes.json，
  * 任何字段写错都会让整个备忘录页面异常，因此读写逻辑逐行保持一致：
  *   - `schemaVersion: 1` + `notes` 数组；
@@ -16,14 +16,14 @@
  *     多个消费者各自持有实例也不会互相覆盖，天然多实例安全。
  *
  * 与原实现的差异（不影响磁盘格式）：
- *   - 不依赖 @piabyss/protocol，类型在本文件内自定义（结构与原类型一致）；
+ *   - 不依赖宿主协议包，类型在本文件内自定义（结构与原类型一致）；
  *   - 「新建」草稿（draft.json）由 Host 端 UI/协议层负责，插件只维护
  *     notes.json，故省略草稿相关方法；
  *   - 错误用本地的 MemoStoreError（code 与原 HostError 相同）。
  *
  * v2（云同步插件自持）：补齐同步引擎需要的图片文件方法
  * （hardRemove / readImageFile / hasImageFile / writeImageFile）。图片目录
- * `<agentDir>/piabyss/memo/images/<noteId>/<fileName>` 与 Host 端共用，
+ * 数据目录下的 `images/<noteId>/<fileName>` 与桌面宿主端共用，
  * 读写逻辑与 Host 侧逐行一致。
  *
  * v3（方寸间 v0.3.0，现名「待办 · 速记」）：取消记录类别（type 字段）：旧数据读盘时经
@@ -41,6 +41,30 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeRecurrence, nextOccurrence, type MemoRecurrence } from "./recurrence.js";
+
+/**
+ * 备忘录数据目录（notes.json / images / sync-config.json / sync-token 都在这下面）。
+ *
+ * 解析优先级：
+ *   1. `PI_MEMO_DIR` 环境变量（相对 agentDir 或绝对路径，自定义落盘位置）；
+ *   2. `<agentDir>/memo/`（本插件的通用默认目录）；
+ *   3. `<agentDir>/piabyss/memo/`（旧版遗留目录：与桌面宿主内置备忘录共用同一
+ *      份 notes.json，目录已存在时继续使用，保证老设备数据无缝衔接、桌面页
+ *      与插件始终共享同一份数据）；
+ *   4. 都不存在时创建 `<agentDir>/memo/`。
+ */
+export function memoDataDir(agentDir: string): string {
+  const configured = process.env.PI_MEMO_DIR?.trim();
+  if (configured) {
+    // 绝对路径直接用；相对路径相对 agentDir 解析（如 "memo" → <agentDir>/memo）。
+    return /^[A-Za-z]:[\\/]|^\\\\|^\//.test(configured) ? configured : join(agentDir, configured);
+  }
+  const generic = join(agentDir, "memo");
+  const legacy = join(agentDir, "piabyss", "memo");
+  if (existsSync(generic)) return generic;
+  if (existsSync(legacy)) return legacy;
+  return generic;
+}
 
 /** contentMd 长度上限。 */
 const MAX_CONTENT_LENGTH = 200_000;
@@ -62,7 +86,7 @@ export type MemoImage = {
   bytes: number;
 };
 
-/** Agent 处理备忘录后的结果总结（由 piabyss_memo 工具写入，覆盖式更新）。 */
+/** Agent 处理备忘录后的结果总结（由 memo 工具写入，覆盖式更新）。 */
 export type MemoAgentResult = {
   /** 结果总结（Markdown）。 */
   resultMd: string;
@@ -143,7 +167,7 @@ export type MemoUpdatePatch = {
   recurrence?: unknown;
 };
 
-/** piabyss_memo 工具 complete 时提交的结果总结及会话关联。 */
+/** memo 工具 complete 时提交的结果总结及会话关联。 */
 export type MemoCompleteResultInput = {
   resultMd: string;
   sessionId: string;
@@ -154,7 +178,7 @@ export type MemoCompleteResultInput = {
 
 const NOTE_STATUSES: readonly MemoNoteStatus[] = ["open", "in_progress", "done"];
 
-/** 与 PiAbyss HostError 对齐的存储错误（code 取值一致）。 */
+/** 与 桌面宿主Error 对齐的存储错误（code 取值一致）。 */
 export class MemoStoreError extends Error {
   readonly code: "INVALID_REQUEST" | "RESOURCE_NOT_FOUND";
 
@@ -218,7 +242,7 @@ export class MemoStore {
   private readonly imagesRoot: string;
 
   constructor(agentDir: string) {
-    this.root = join(agentDir, "piabyss", "memo");
+    this.root = memoDataDir(agentDir);
     this.filePath = join(this.root, "notes.json");
     this.imagesRoot = join(this.root, "images");
   }

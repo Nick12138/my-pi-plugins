@@ -2,7 +2,7 @@
  * pi-automation 类型与常量。
  *
  * 设计原则：
- * - 文件即真相源：jobs.json 只由本插件写，PiAbyss 只读；控制面走 HTTP。
+ * - 文件即真相源：jobs.json 只由本插件写，桌面端只读；控制面走 HTTP。
  * - 每次执行 = 一个独立的 pi 会话文件（sessions/<jobId>/<runId>.jsonl），
  *   不污染宿主会话，天然支持「历史可读 + fork 续聊」。
  */

@@ -3,8 +3,8 @@
  *
  * 角色判定（v4）：每个 before_agent_start 按 ctx.cwd 与解析后的小精灵工作区
  * 路径比较（Windows 大小写归一），命中 → 小精灵会话（dispatch/name 等指挥台
- * 工具常驻 active）；否则 → 普通会话。PIABYSS_PIXIE_RESIDENT=1 保留为旧 Host 的兼容
- * 判定（v3 环境变量窗口）。工作区路径来自 PIABYSS_PIXIE_WORKSPACE（支持
+ * 工具常驻 active）；否则 → 普通会话。PI_PIXIE_RESIDENT=1 保留为旧 Host 的兼容
+ * 判定（v3 环境变量窗口）。工作区路径来自 PI_PIXIE_WORKSPACE（支持
  * {agentDir} 占位符），留空 = <agentDir>/workspace/pixie。
  *
  * 激活门控（普通会话）：report/ask 工具注册在每个会话上，但在
@@ -33,14 +33,16 @@ import { resolveAgentDir } from "./pixie-context.js";
 import { PIXIE_DISPATCH_STATE_PATH, mapDispatchStateResponse } from "./protocol.js";
 
 /** 小精灵工作区路径环境变量（与 plugins.json config[].env 对应）。 */
-export const PIXIE_WORKSPACE_ENV = "PIABYSS_PIXIE_WORKSPACE";
+export const PIXIE_WORKSPACE_ENV = "PI_PIXIE_WORKSPACE";
+/** 旧版桌面宿主的遗留变量名（新名未设置时兑底读取）。 */
+export const PIXIE_WORKSPACE_ENV_LEGACY = "PIABYSS_PIXIE_WORKSPACE";
 
 /** 解析小精灵工作区路径（与 Host 侧 resolvePixieWorkspacePath 同构）。 */
 export function resolvePixieWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
 	const agentDir = resolveAgentDir(env);
-	const configured = env[PIXIE_WORKSPACE_ENV]?.trim();
+	const configured = (env[PIXIE_WORKSPACE_ENV] ?? env[PIXIE_WORKSPACE_ENV_LEGACY])?.trim();
 	if (!configured) return join(agentDir, "workspace", "pixie");
 	return join(configured.replaceAll("{agentDir}", agentDir));
 }
@@ -67,7 +69,11 @@ export function sessionIdFromCtx(ctx?: ExtensionContext): string | null {
 /** 本会话是否为常驻小精灵会话（工作区 cwd 匹配，或旧 Host 的 env 标记）。 */
 export function isPixieResidentSession(ctx?: ExtensionContext): boolean {
 	try {
-		return isPixieWorkspaceCwd(ctx?.cwd) || process.env.PIABYSS_PIXIE_RESIDENT === "1";
+		return (
+			isPixieWorkspaceCwd(ctx?.cwd) ||
+			process.env.PI_PIXIE_RESIDENT === "1" ||
+			process.env.PIABYSS_PIXIE_RESIDENT === "1"
+		);
 	} catch {
 		return false;
 	}

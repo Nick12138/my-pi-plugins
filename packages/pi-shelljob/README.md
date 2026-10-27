@@ -11,7 +11,7 @@
 
 命令以 POSIX shell 语法执行：Unix 为 `sh -c`；Windows 下自动探测可用的 Git Bash 并以 `bash -lc` 启动——与同步 bash 工具同一 shell，无需区分两套语法，中文输出也不再因 cmd 的 GBK 代码页而乱码。支持管道、重定向等一切 shell 语法。
 
-Windows 的 bash 探测（v2）：候选依次为 `SHELL`/`MSYS_BASH` 环境变量 → Git for Windows 固定路径（`C:\Program Files\Git\bin\bash.exe` 等）→ PiAbyss 自带 `resources\git\bin\bash.exe` → `where bash` 结果；`System32\bash.exe` 与 `WindowsApps\bash.exe` 这类 WSL 壳别名一律排除，且每个候选必须真实跑通 `bash -c "echo ok"`（带短超时）才被采用——文件存在或 where 命中都不算数，坏候选（如无发行版时 execvpe 直接失败的 WSL 启动器）会被验证淘汰。全部不可用时回退 cmd.exe，保证命令照常执行而不是静默 exit 1。
+Windows 的 bash 探测（v2）：候选依次为 `SHELL`/`MSYS_BASH` 环境变量 → Git for Windows 固定路径（`C:\Program Files\Git\bin\bash.exe` 等）→ 桌面端自带 `resources\git\bin\bash.exe` → `where bash` 结果；`System32\bash.exe` 与 `WindowsApps\bash.exe` 这类 WSL 壳别名一律排除，且每个候选必须真实跑通 `bash -c "echo ok"`（带短超时）才被采用——文件存在或 where 命中都不算数，坏候选（如无发行版时 execvpe 直接失败的 WSL 启动器）会被验证淘汰。全部不可用时回退 cmd.exe，保证命令照常执行而不是静默 exit 1。
 
 ## 使用边界（写进 promptGuidelines）
 
@@ -52,7 +52,7 @@ Windows 的 bash 探测（v2）：候选依次为 `SHELL`/`MSYS_BASH` 环境变�
 | 默认单任务超时 | `SHELLJOB_DEFAULT_TIMEOUT_MS` | `0`（不限） | 未显式传 `timeoutMs` 时生效 |
 | 单任务日志保护上限 | `SHELLJOB_MAX_LOG_BYTES` | `5242880`（5MB） | 超过后保护性 kill，防失控输出塞满磁盘 |
 
-## PiAbyss Host 停止接口
+## 桌面宿主停止接口
 
 扩展在首个会话启动时额外启动一个仅绑定 `127.0.0.1` 的窄权限 HTTP 控制面（默认 `18767`，可用 `SHELLJOB_CONTROL_PORT` 配置）。它只接受停止动作，内部走 `killShellJob({ by: "user" })`——终态标记为用户手动停止，通知 Agent 时会明确「用户在界面上手动停止，并非异常退出」；由既有 settle/Notifier 链路通知任务所属 Agent；Host 不应再发送 prompt/followUp。
 
@@ -67,7 +67,7 @@ Content-Type: application/json
 
 响应状态：成功停止 `{ok:true,status:"killed",jobId}`；目标已结束 `{ok:true,status:"already_ended",jobId,state}`；缺失 `404 {ok:false,status:"not_found",jobId}`；任务不属于给定 session `403 {ok:false,status:"forbidden",jobId,error}`；杀进程失败仍运行 `500 {ok:false,status:"failed",jobId,error}`。请求体仅允许 `jobId`。认证失败为 401，Host 非回环为 403，格式错误为 400。
 
-Token 首次生成到 `~/.pi/shelljob/token`（文件权限 0600），也可由 `SHELLJOB_CONTROL_TOKEN` 注入；写请求必须用 header。PiAbyss Host 必须保管该 bearer 凭据并仅向当前会话 UI 转发控制请求，同时以可信的当前 Pi sessionId 设置 `X-Pi-Session-Id`。端点在首个会话启动时开启、最后一个会话关闭时关闭，插件扩展重载时由进程级服务单例防重复监听。
+Token 首次生成到 `~/.pi/shelljob/token`（文件权限 0600），也可由 `SHELLJOB_CONTROL_TOKEN` 注入；写请求必须用 header。桌面宿主 必须保管该 bearer 凭据并仅向当前会话 UI 转发控制请求，同时以可信的当前 Pi sessionId 设置 `X-Pi-Session-Id`。端点在首个会话启动时开启、最后一个会话关闭时关闭，插件扩展重载时由进程级服务单例防重复监听。
 
 ## 命令
 

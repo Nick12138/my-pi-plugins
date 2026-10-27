@@ -1,12 +1,12 @@
 # pi-automation 对接契约
 
-> 本文是 **PiAbyss 侧（面板 / 协议 / 控制器）对接 pi-automation 的接口说明**。
-> 插件只负责调度与执行；界面、通知投递、工作区激活由 PiAbyss 决定。
+> 本文是 **宿主侧（面板 / 协议 / 控制器）对接 pi-automation 的接口说明**。
+> 插件只负责调度与执行；界面、通知投递、工作区激活由 宿主决定。
 
 - 包路径：`my-pi-plugins/packages/pi-automation`
 - 数据根：`~/.pi/automation`（可用 `PI_AUTOMATION_DIR` 覆盖）
 - 控制面：`http://127.0.0.1:18766`（可用 `PI_AUTOMATION_PORT` 覆盖）
-- 生命周期：**pi 进程存活期间**调度（PiAbyss 关闭 → 不执行，符合既定需求）
+- 生命周期：**pi 进程存活期间**调度（宿主关闭 → 不执行，符合既定需求）
 
 ---
 
@@ -19,7 +19,7 @@
 | 包目录 / 扩展文件 | `packages/pi-schedule/extensions/pi-schedule.ts` | `packages/pi-automation/extensions/pi-automation.ts` |
 | agent 工具名 | `schedule` | `automation` |
 | 技能 | `skills/schedule` | `skills/automation` |
-| PiAbyss 协议方法 | `schedule.*` | `automation.*` |
+| 宿主协议方法 | `schedule.*` | `automation.*` |
 | 数据根 | `~/.pi/schedule` | `~/.pi/automation` |
 | 鉴权头 | `X-Pi-Schedule-Token` | `X-Pi-Automation-Token` |
 | 环境变量 | `PI_SCHEDULE_DIR` / `_TOKEN` / `_PORT` / `_TICK_MS` | `PI_AUTOMATION_*` |
@@ -38,7 +38,7 @@
 3. **旧鉴权头仍然认**：`X-Pi-Schedule-Token` 与新头等价，方便没升级的外部脚本。
 4. **工具名与协议方法名不留旧别名**：`schedule` 工具与 `schedule.*` 是模型可见 / 面板可见
    的调用面，留着两套名字会让历史会话与提示词同时指向两个工具。升级必须成对进行
-   （插件与 PiAbyss 同一版本）。
+   （插件与桌面宿主同一版本）。
 5. `scheduledFor`、`scheduler` 这类**描述调度机制**的名字不在更名范围内，保持不变。
 
 ---
@@ -51,7 +51,7 @@
 | 创建/修改/删除/启停/立即执行/续聊 | **HTTP API** | 需要即时生效与校验反馈；文件轮询有延迟 |
 | 通知（完成/失败） | **读盘** `notify-queue.jsonl` 或 `GET /api/notifications` | 插件写队列，面板消费并决定是否弹系统通知 |
 
-**写盘边界（重要）**：`jobs.json` **只由插件写**。PiAbyss 不要直接改它——
+**写盘边界（重要）**：`jobs.json` **只由插件写**。宿主不要直接改它——
 并发写会丢更新（插件用 O_EXCL 锁保护自己的读改写，外部绕过锁会破坏该保证）。
 所有修改走 HTTP。
 
@@ -115,7 +115,7 @@
       "tags": [],
       "createdAt": "2026-01-01T00:00:00.000Z",
       "updatedAt": "2026-01-01T00:00:00.000Z",
-      "updatedBy": "piabyss",        // agent | piabyss | cli
+      "updatedBy": "host",            // agent | host | cli
       "nextRunAt": "2026-01-02T01:00:00.000Z",  // manual/已终止 → null
       "lastRunAt": null,
       "lastRunId": null,
@@ -185,7 +185,7 @@
    `?token=` 仅对只读 GET 有效（写走 query 会被当作 CORS「简单请求」绕过预检，属 CSRF 面）。
 3. 缺少/错误 → `401`。
 4. 带 body 的写请求必须声明 `Content-Type: application/json`，否则 `400`。
-5. 插件**不下发 CORS 头**，因此浏览器里的跨源页面读不到响应；PiAbyss 是同机本地客户端，不受影响。
+5. 插件**不下发 CORS 头**，因此浏览器里的跨源页面读不到响应；宿主是同机本地客户端，不受影响。
 6. `Host` 头必须是回环地址（`127.0.0.1` / `localhost` / `[::1]`），否则 `403`（防 DNS rebinding）。
 
 ### 状态码
@@ -201,7 +201,7 @@
 ### `GET /api/health`（免 token）
 
 返回 `{ ok, root, port, activeJobs, tickMs, maxConcurrent }`，不泄露任务内容/密钥。
-**字段集合是固定契约**：PiAbyss 侧 `isAutomationHealth` 用 `hasExactKeys` 校验，插件单方面加字段
+**字段集合是固定契约**：宿主侧 `isAutomationHealth` 用 `hasExactKeys` 校验，插件单方面加字段
 会把 `automation.status` 整个打挂——加字段必须与 Host 同版本升级。
 
 | 方法 | 路径 | 说明 |
@@ -242,7 +242,7 @@
   "loadExtensions": false,
   "tags": ["安全"],
   "enabled": true,
-  "by": "piabyss"          // 审计用，落进 updatedBy
+  "by": "host"              // 审计用，落进 updatedBy
 }
 ```
 
@@ -340,7 +340,7 @@ thinking 被混进文本、`role=toolResult` 直接不返回（源码注释：�
 
 ## 七、配置项（环境变量）
 
-`pi` 启动时以环境变量注入（PiAbyss 的插件配置机制可直接复用）：
+`pi` 启动时以环境变量注入（桌面宿主的插件配置机制可直接复用）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -352,7 +352,7 @@ thinking 被混进文本、`role=toolResult` 直接不返回（源码注释：�
 
 ---
 
-## 八、给 PiAbyss 的实现建议（按现有代码范式）
+## 八、给桌面宿主的实现建议（按现有代码范式）
 
 1. **协议层**（`packages/protocol`）：新增 `automation.*` 方法，`HostContext`；
    或更省事——Host 侧直接做 HTTP 代理（参考 `subagent-api.ts` 的 `node:http` 直连，

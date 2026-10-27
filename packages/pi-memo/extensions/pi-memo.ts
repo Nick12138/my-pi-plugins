@@ -1,5 +1,5 @@
 /**
- * piabyss-memo —— 把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件。
+ * pi-memo —— 把桌面宿主内置工具外移为 pi 插件（工具名 `memo`）。
  *
  * 「用 Agent 处理」一条备忘录时，桌面端把记录内容以引用块注入会话；
  * agent 处理完后通过本工具把该记录标记为已完成（或重新打开 / 更新正文），
@@ -11,8 +11,8 @@
  *   - 需要用户决策（如选择方案）时不标记完成，等结论出来再回填；
  *   - 用户会话中手动发送的指令优先级最高，可覆盖备忘录内嵌提示词。
  *
- * 工具直接读写 MemoStore（磁盘权威，无缓存），与 PiAbyss 桌面备忘录页面、
- * 协议 handler、以及本插件自带的云同步引擎（extensions/piabyss-memo-sync.ts
+ * 工具直接读写 MemoStore（磁盘权威，无缓存），与桌面端备忘录页面、
+ * 协议 handler、以及本插件自带的云同步引擎（extensions/pi-memo-sync.ts
  * + src/memo-sync.ts）共享同一份数据（磁盘格式见 src/memo-store.ts）。
  * 记录变更后触发 autoSync 防抖同步（引擎未配置/未开启时静默跳过）。
  *
@@ -36,7 +36,7 @@
  *     语义区分：作废/取消的便签用 delete；任务真正做完用 complete + result。
  * v7（拒绝一次性会话写入）：
  *   - 测试/临时会话（cwd 落在系统临时目录下）调写动作一律拒绝，list 照旧可读；
- *     设 `PIABYSS_MEMO_ALLOW_TEMP=1` 可放开（确有需要在临时目录里记事时）。
+ *     设 `PI_MEMO_ALLOW_TEMP=1` 可放开（确有需要在临时目录里记事时）。
  *     背景：2026-10-26，apps/host 的 verify-abort 回归脚本在临时目录建会话，
  *     模型看到 prompt 里的「记住一个暗号」就调 create，给用户的真实看板塞了一条
  *     测试用便签。只靠调用方（脚本）自己隔离 agent 目录永远会漏，这里由被调方兜底。
@@ -50,7 +50,7 @@ import { getMemoStore, type MemoNote } from "../src/memo-store.js";
 import type { MemoRecurrence } from "../src/recurrence.js";
 import { scheduleMemoAutoSync } from "../src/memo-sync.js";
 
-const MEMO_TOOL_NAME = "piabyss_memo";
+const MEMO_TOOL_NAME = "memo";
 
 /** 会改用户数据的动作（list 只读，永远放行）。 */
 const WRITE_ACTIONS = new Set(["create", "update", "complete", "reopen", "delete"]);
@@ -87,12 +87,12 @@ function isUnderTempDir(raw: string | null | undefined): boolean {
  */
 function tempSessionBlocker(action: string, ctx: ExtensionContext | undefined): string | null {
   if (!WRITE_ACTIONS.has(action)) return null;
-  if (process.env.PIABYSS_MEMO_ALLOW_TEMP === "1") return null;
+  if (process.env.PI_MEMO_ALLOW_TEMP === "1") return null;
   const cwd = ctx?.cwd ?? ctx?.sessionManager?.getCwd?.() ?? null;
   if (!isUnderTempDir(cwd)) return null;
   return (
     `拒绝：这是临时目录里的一次性会话（cwd=${cwd}），不能写用户的真实待办看板。\n` +
-    "测试/脚本请把 agent 目录（PI_CODING_AGENT_DIR）也指到临时位置；确需在临时目录里记事，设 PIABYSS_MEMO_ALLOW_TEMP=1。"
+    "测试/脚本请把 agent 目录（PI_CODING_AGENT_DIR）也指到临时位置；确需在临时目录里记事，设 PI_MEMO_ALLOW_TEMP=1。"
   );
 }
 
@@ -162,7 +162,7 @@ type MemoSessionInfo = {
 };
 
 const TOOL_DESCRIPTION =
-  "PiAbyss「待办 · 速记」看板（待办/备忘/收集）。记一笔或设提醒用 create；查用 list；任务真的做完、且没有在等用户决定的事时才 complete，必须给 result 摘要。周期便签 complete 只结当前轮，要停掉先清 recurrence。作废/取消的便签用 delete（软删除，同步会传播），不要拿 delete 代替做完（结项用 complete + result），也不要拿 complete 当删除。用户口头指令优先于便签字面。";
+  "「待办 · 速记」看板（待办/备忘/收集）。记一笔或设提醒用 create；查用 list；任务真的做完、且没有在等用户决定的事时才 complete，必须给 result 摘要。周期便签 complete 只结当前轮，要停掉先清 recurrence。作废/取消的便签用 delete（软删除，同步会传播），不要拿 delete 代替做完（结项用 complete + result），也不要拿 complete 当删除。用户口头指令优先于便签字面。";
 
 const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 

@@ -7,8 +7,8 @@ export default defineConfig({
   test: {
     include: [
       "packages/pi-ask-user-question/**/*.test.ts",
-      "packages/piabyss-memo/**/*.test.ts",
-      "packages/piabyss-present-files/**/*.test.ts",
+      "packages/pi-memo/**/*.test.ts",
+      "packages/pi-present-files/**/*.test.ts",
       "packages/pi-pixie/**/*.test.ts",
       "packages/pi-reimburse/**/*.test.ts",
       "packages/pi-subagent/**/*.test.ts",

@@ -1,7 +1,7 @@
 /**
- * Pure path / formatting logic for `piabyss_present_files`.
+ * Pure path / formatting logic for `present_files`.
  *
- * Extracted verbatim from the PiAbyss host implementation so the extension
+ * Extracted verbatim from the desktop host implementation so the extension
  * stays declarative and the behaviour stays unit-testable.
  */
 

@@ -1,10 +1,10 @@
 {
   "name": "pi-pixie",
   "version": "0.10.0",
-  "description": "Pixie delegation & command console plugin (dispatch/report/ask/name/recall/sessions/status/interject/stop/retry): talks to the PiAbyss Host loopback control plane; the delegation engine stays Host-side. Segments are created only when the user starts a new session in the UI; the newest-created session in the pixie workspace is the current segment (no naps, no handoff summaries, no automatic switching). Segment memory is plugin-side: the first turn of a new segment gets the runtime contract (<pixie-context>: time anchor, dispatch landing rules, callback handling, model defaults, automation read-only draft format) plus an index of past segments and the previous segment's tail, read straight from Pi's session directory; the contract used to be injected by the Host and now lives in this plugin, so a bare `pi` CLI session in the pixie workspace gets it too (even with zero past segments); pixie_recall reads older segments on demand. Dispatch carries the dispatching session's own sourceSessionId so the Host can route the report back, plus optional taskName/sessionName short names; pixie_name renames the current segment.",
+  "description": "Pixie delegation & command console plugin (dispatch/report/ask/name/recall/sessions/status/interject/stop/retry): talks to the 桌面宿主 loopback control plane; the delegation engine stays Host-side. Segments are created only when the user starts a new session in the UI; the newest-created session in the pixie workspace is the current segment (no naps, no handoff summaries, no automatic switching). Segment memory is plugin-side: the first turn of a new segment gets the runtime contract (<pixie-context>: time anchor, dispatch landing rules, callback handling, model defaults, automation read-only draft format) plus an index of past segments and the previous segment's tail, read straight from Pi's session directory; the contract used to be injected by the Host and now lives in this plugin, so a bare `pi` CLI session in the pixie workspace gets it too (even with zero past segments); pixie_recall reads older segments on demand. Dispatch carries the dispatching session's own sourceSessionId so the Host can route the report back, plus optional taskName/sessionName short names; pixie_name renames the current segment.",
   "keywords": [
     "pi-package",
-    "piabyss",
+    "pi-package",
     "pixie",
     "delegation"
   ],

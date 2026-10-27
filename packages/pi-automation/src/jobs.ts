@@ -1,6 +1,6 @@
 /**
  * 任务服务层：创建/修改/启停/删除 的**唯一校验入口**。
- * 工具（agent 调用）与 HTTP（PiAbyss 调用）都走这里，保证行为一致。
+ * 工具（agent 调用）与 HTTP（桌面端调用）都走这里，保证行为一致。
  */
 import { existsSync, statSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
@@ -52,7 +52,7 @@ export interface JobInput {
 }
 
 export interface Actor {
-	/** 谁改的：agent / piabyss / cli，落进 job.updatedBy 便于审计。 */
+	/** 谁改的：agent / host / cli，落进 job.updatedBy 便于审计。 */
 	by: string;
 }
 

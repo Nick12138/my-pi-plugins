@@ -1,8 +1,8 @@
 {
-  "name": "piabyss-present-files",
+  "name": "pi-present-files",
   "version": "0.1.0",
-  "description": "PiAbyss delivered-files declaration tool (`piabyss_present_files`), extracted from the PiAbyss host as a pi plugin.",
-  "keywords": ["pi-package", "piabyss", "files", "chips"],
+  "description": "Delivered-files declaration tool (`present_files`), extracted from the desktop host as a pi plugin.",
+  "keywords": ["pi-package", "files", "chips"],
   "license": "MIT",
   "author": "Nick12138",
   "type": "module",

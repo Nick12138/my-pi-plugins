@@ -353,7 +353,7 @@ class Scheduler {
 		return { ok: true };
 	}
 
-	/** 用户消息发送（PiAbyss 子代理会话视图输入框）：
+	/** 用户消息发送（桌面端子代理会话视图输入框）：
 	 *  - running/paused → 写入 steer 信箱，子进程侧轮询注入为 user 消息（opts.model/thinking 无法热切换，忽略）
 	 *  - 终态（completed/failed/stopped/interrupted）→ 同 session-id 以新消息续跑；opts.model / opts.thinking 作为下一次 spawn 的覆盖 */
 	async send(runId: string, message: string, operator: "user" | "agent" = "user", opts?: { model?: string; thinking?: string }): Promise<{ ok: boolean; mode?: "steer" | "resume"; error?: string }> {

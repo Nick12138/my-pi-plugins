@@ -1,10 +1,10 @@
 /**
- * 标签去重与 `ui.select` 载荷构造 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
+ * 标签去重与 `ui.select` 载荷构造 —— 与桌面宿主内置实现同源的 `ask-user-question-tool.ts`。
  */
 import { BACK_ROW_LABEL, CUSTOM_ROW_LABEL, MAX_PREVIEW_LENGTH } from "./constants.js";
 import type { AskUserQuestion } from "./schema.js";
 
-export type PiAbyssOptionDetail = {
+export type QuestionOptionDetail = {
   id: string;
   description?: string;
   preview?: string;
@@ -23,7 +23,7 @@ export type SelectPlan = {
   customValue: string;
   /** 回退哨兵串；未追加时为空串（选中值永远不可能是空串）。 */
   backValue: string;
-  optionDetails: PiAbyssOptionDetail[];
+  optionDetails: QuestionOptionDetail[];
 };
 
 export type SelectPlanOptions = {
@@ -62,7 +62,7 @@ export function buildSelectPlan(
   const includeBackRow = options.includeBackRow ?? false;
   const used = new Set<string>();
   const byValue = new Map<string, number>();
-  const optionDetails: PiAbyssOptionDetail[] = [];
+  const optionDetails: QuestionOptionDetail[] = [];
   const values = question.options.map((option, index) => {
     const value = disambiguate(option.label, used);
     byValue.set(value, index);

@@ -4,7 +4,7 @@
  * 备忘录云同步只需要 PUT / GET / 删除 / 连接测试四个操作，为此引入
  * @aws-sdk/client-s3 得不偿失：这里用 node:crypto 自实现 AWS Signature V4
  * （R2 要求 region=auto、service=s3、path-style 寻址）。fetch 可注入以便测试。
- * 与 PiAbyss Host 的 r2-client.ts / pi-reimburse 的 r2-client.ts 同源
+ * 与桌面宿主的 r2-client.ts / pi-reimburse 的 r2-client.ts 同源
  * （逐行移植，签名逻辑不变）。
  */
 import { createHash, createHmac } from "node:crypto";

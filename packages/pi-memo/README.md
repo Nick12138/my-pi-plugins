@@ -1,10 +1,10 @@
-# piabyss-memo
+# pi-memo（待办 · 速记）
 
-把 PiAbyss 内置工具 `piabyss_memo` 外移为 pi 插件：让 agent 直接操作用户的
+把桌面宿主内置工具外移为 pi 插件（工具名 `memo`）：让 agent 直接操作用户的
 待办 · 速记（原名「方寸间」「备忘录」；定位：待办 · 速记 · 备忘 · 收集）看板
-（list / create / complete / reopen / update / delete），与 PiAbyss 桌面端待办 · 速记页面
+（list / create / complete / reopen / update / delete），与桌面端待办 · 速记页面
 共用同一份磁盘数据。v2 起把云同步的 **Cloudflare R2 引擎** 也收进插件自持
-（`piabyss_memo_sync` 工具 + 本地控制面），不再依赖 PiAbyss Host 内置的
+（`memo_sync` 工具 + 本地控制面），不再依赖桌面宿主内置的
 同步引擎。v0.3.0 起取消记录类别（备忘 / 想法 / 任务），旧数据的 type 字段
 读盘时自动剔除。v0.4.0 新增**计划功能**（一次性截止 + 周期规则）并把状态
 收敛为三种（详见下文）。v0.5.0 新增 **`create` 动作**（agent 侧直接新建记录）。
@@ -63,29 +63,29 @@ v0.6.0 新增 **`delete` 动作**（软删除，打墓碑后由同步引擎传�
 
 ## 云同步（v2，插件自持）
 
-同步策略与 pi-reimburse 一致、代码从 PiAbyss Host 的 `memo-sync.ts` 逐行
+同步策略与 pi-reimburse 一致、代码与桌面宿主的 memo-sync.ts 同源逐行
 移植（云端键布局与老数据完全兼容，多设备无缝衔接）：
 
-- 键布局（固定前缀）：`piabyss/memo/notes.json`、`piabyss/memo/images/<noteId>/<fileName>`；
+- 键布局：默认前缀 `piabyss/memo/`（沿用历史前缀，云端老数据无缝衔接；可用 `PI_MEMO_R2_PREFIX` 覆盖为自定义前缀），下挂 `notes.json` 与 `images/<noteId>/<fileName>`；
 - 逐条 LWW（updatedAt 新者胜）+ 删除墓碑传播（TTL 30 天，过期物理清除含云端对象）；
 - 图片按内容指纹跳过重复上传；从云端补齐本地缺失图片；
 - autoSync：备忘录每次变更后 5 秒防抖同步；进程启动后拉齐一次。
 
 ### 配置（密钥不进对话）
 
-R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 待办 · 速记」的配置
+R2 连接信息与 autoSync 在**桌面端「设置 → 插件 → 待办 · 速记」的配置
 表单**里填写，经 `pluginLibrary.setEnv` 注入环境变量（扩展与 Host 同进程，
 保存即生效）：
 
 | 环境变量 | 说明 |
 | --- | --- |
-| `PIABYSS_MEMO_R2_ACCOUNT_ID` | Cloudflare 账户 ID |
-| `PIABYSS_MEMO_R2_ACCESS_KEY_ID` | R2 Access Key ID |
-| `PIABYSS_MEMO_R2_SECRET_ACCESS_KEY` | R2 Secret Access Key（敏感，打码显示） |
-| `PIABYSS_MEMO_R2_BUCKET` | R2 桶名 |
-| `PIABYSS_MEMO_AUTO_SYNC` | `true` / `false`，变更后防抖自动同步 |
+| `PI_MEMO_R2_ACCOUNT_ID` | Cloudflare 账户 ID |
+| `PI_MEMO_R2_ACCESS_KEY_ID` | R2 Access Key ID |
+| `PI_MEMO_R2_SECRET_ACCESS_KEY` | R2 Secret Access Key（敏感，打码显示） |
+| `PI_MEMO_R2_BUCKET` | R2 桶名 |
+| `PI_MEMO_AUTO_SYNC` | `true` / `false`，变更后防抖自动同步 |
 
-兼容回退：环境变量缺失时读旧版 `<agentDir>/piabyss/memo/sync-config.json`
+兼容回退：环境变量缺失时读备忘录数据目录下旧版 `sync-config.json`
 里的同名字段（Host 内置同步时代的配置，老设备免重填）；`lastSync*` 状态
 仍持久化在该文件。
 
@@ -94,25 +94,32 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 待办
 桌面待办 · 速记页的「测试连接 / 立即同步」按钮经 Host 的 `memo.testSync` /
 `memo.syncNow` 协议代理到插件的环回 HTTP 控制面（与 pi-automation 同一模式）：
 
-- 端口：`PIABYSS_MEMO_SYNC_PORT`（缺省 **18768**）；
-- 鉴权：`X-Piabyss-Memo-Sync-Token` 头，token 在
-  `<agentDir>/piabyss/memo/sync-token`（0600，首次自动生成）或
-  `PIABYSS_MEMO_SYNC_TOKEN` 覆盖；
+- 端口：`PI_MEMO_SYNC_PORT`（缺省 **18768**）；
+- 鉴权：`X-Pi-Memo-Sync-Token` 头，token 在
+  备忘录数据目录下的 `sync-token`（0600，首次自动生成）或
+  `PI_MEMO_SYNC_TOKEN` 覆盖；
 - 端点：`GET /api/health`（免鉴权）、`GET /api/status`（状态，不含密钥）、
   `POST /api/test`、`POST /api/sync`、`POST /api/auto-sync`
   （Host 在 memo.create/update/delete 落盘后通知引擎防抖同步）。
 
-### agent 工具 `piabyss_memo_sync`
+### agent 工具 `memo_sync`
 
 - `test`：用当前配置测一次连通性；
 - `sync_now`：立即双向同步，返回统计；
 - `status`：配置来源与最近同步状态。
-- 密钥不在对话中传递：未配置时引导用户去 PiAbyss 设置的插件配置里填。
+- 密钥不在对话中传递：未配置时引导用户去桌面端设置的插件配置里填。
 
 ## 磁盘路径与格式
 
-数据落盘在 `<agentDir>/piabyss/memo/notes.json`（与 PiAbyss 内置实现同一
-路径、同一格式）：
+数据目录解析优先级（`src/memo-store.ts` 的 `memoDataDir`）：
+
+1. `PI_MEMO_DIR` 环境变量（相对 agentDir 或绝对路径，自定义落盘位置）；
+2. `<agentDir>/memo/`（通用默认）；
+3. `<agentDir>/piabyss/memo/`（旧版遗留目录，已存在时继续使用，与桌面宿主
+   内置备忘录共用同一份 notes.json，老设备免迁移）；
+4. 都不存在时创建 `<agentDir>/memo/`。
+
+notes.json 与桌面宿主内置实现同一格式：
 
 ```jsonc
 {
@@ -156,7 +163,7 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 待办
 }
 ```
 
-**格式权威是 PiAbyss 原实现** `packages/pi-host/src/memo-store.ts`
+**格式权威是桌面宿主原实现**（memo-store.ts）
 （本插件的 `src/memo-store.ts` 逐行照搬其读写逻辑，v0.4.0 的计划字段与
 状态迁移需桌面端同步适配，见 `HOST-ADAPTATION.md`）。桌面待办 · 速记页面与本
 插件的同步引擎共用该文件，任何字段写错都会让整个页面异常，因此：
@@ -172,20 +179,20 @@ R2 连接信息与 autoSync 在 **PiAbyss「设置 → 插件 → PiAbyss 待办
 - 云同步对计划字段零改动：LWW 整条覆盖天然携带新字段，旧版本设备写入的
   记录在拉取时同样经 `normalizeNoteDefaults` 补齐。
 
-图片目录 `<agentDir>/piabyss/memo/images/<noteId>/<fileName>` 同样与
+图片目录在备忘录数据目录下的 `images/<noteId>/<fileName>`，同样与
 Host 共用；本插件 v2 补齐了 `hardRemove` / `readImageFile` /
 `hasImageFile` / `writeImageFile`（同步引擎用）。
 
 ### agentDir 对齐（前置条件）
 
 插件通过 pi 的 `getAgentDir()`（读环境变量 `PI_CODING_AGENT_DIR`，缺省
-`~/.pi/agent`）定位数据目录。PiAbyss Host 若以 `--agent-dir=` 参数启动而
+`~/.pi/agent`）定位数据目录。桌面宿主若以 `--agent-dir=` 参数启动而
 未设置 `PI_CODING_AGENT_DIR`，两边会指向不同目录，导致插件写到另一份
-`notes.json`。因此 **PiAbyss 启动 agent 时必须把 agentDir 以环境变量
+`notes.json`。因此 **桌面宿主启动 agent 时必须把 agentDir 以环境变量
 `PI_CODING_AGENT_DIR` 注入**（PiDeck 场景默认如此）。
 
 ## 安装
 
 放进 pi 插件目录即可（`pi.extensions` 指向 `./extensions`，两个扩展文件：
-`piabyss-memo.ts` 工具 + `piabyss-memo-sync.ts` 同步工具与控制面）。运行时
+`pi-memo.ts` 工具 + `pi-memo-sync.ts` 同步工具与控制面）。运行时
 依赖 `@earendil-works/pi-coding-agent` 与 `typebox`（peerDependencies）。

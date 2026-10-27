@@ -1,0 +1,16 @@
+{
+  "name": "pi-memo",
+  "version": "0.6.0",
+  "description": "待办 · 速记 board tool for Pi: create/list/complete/reopen/update the user's notes (待办 · 速记 · 备忘 · 收集) with plan support (one-shot due dates + recurring rules that roll to the next occurrence on completion), plus a self-contained Cloudflare R2 cloud sync (engine + loopback control plane), sharing the exact same on-disk format as the desktop host board.",
+  "keywords": ["pi-package", "memo", "todo", "sync"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

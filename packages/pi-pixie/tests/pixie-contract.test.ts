@@ -75,7 +75,7 @@ function execute(
 
 // ── 文本格式逐字节对照（原 pixie-tool.ts）────────────────────
 
-describe("tool text format (byte-exact vs PiAbyss pixie-tool.ts)", () => {
+describe("tool text format (byte-exact vs desktop-host pixie-tool.ts)", () => {
 	it("dispatch success text (queued)", () => {
 		expect(formatDispatchSuccessText({ sessionId: "sess-1", queued: true })).toBe(
 			"已派发到工作区会话（sessionId: sess-1，该会话当前忙，任务已排队）。等待其回调 pixie_report 后再向用户转述。",
@@ -236,7 +236,7 @@ describe("pixie_dispatch contract", () => {
 		const tool = buildPixieDispatchTool({ getPort: () => null });
 		const out = await execute(tool, { cwd: "D:/ws", task: "idle" });
 		expect(out.isError).toBe(true);
-		expect(out.content[0]?.text).toContain("PIABYSS_PIXIE_HTTP_PORT");
+		expect(out.content[0]?.text).toContain("PI_PIXIE_HTTP_PORT");
 	});
 
 	it("mock 服务挂起 → 超时报错，isError 文案可读", async () => {
@@ -402,7 +402,7 @@ describe("pixie_report contract", () => {
 		const out = await execute(tool, { result: "x" });
 		expect(out.isError).toBe(true);
 		expect(out.content[0]?.text).toBe(
-			"Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。",
+			"Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。",
 		);
 	});
 
@@ -544,7 +544,7 @@ describe("pixie_name contract", () => {
 		const out = await execute(tool, { name: "x" });
 		expect(out.isError).toBe(true);
 		expect(out.content[0]?.text).toBe(
-			"Error: 未找到 PiAbyss 环回控制面端口（PIABYSS_PIXIE_HTTP_PORT 未设置或非法）。",
+			"Error: 未找到 环回控制面端口（PI_PIXIE_HTTP_PORT 未设置或非法）。",
 		);
 	});
 });

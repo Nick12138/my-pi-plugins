@@ -308,7 +308,7 @@ async function main() {
     assert.ok(reEnabled?.includes("TEST ADDENDUM V2"), "latest addendum applied after re-enable");
     assert.equal((reEnabled ?? "").split("<operator_mode>").length - 1, 1, "no duplicate after re-enable");
 
-    // 模拟 PiAbyss「设置 → 扩展」禁用：旧 runner 先收到 session_shutdown，再移除扩展。
+    // 模拟桌面端「设置 → 扩展」禁用：旧 runner 先收到 session_shutdown，再移除扩展。
     // 这是扩展最后一次还原机会。
     assert.equal(typeof opts.forceSystemPrompt, "string", "force set before shutdown");
     await pi.handlers.get("session_shutdown")!(

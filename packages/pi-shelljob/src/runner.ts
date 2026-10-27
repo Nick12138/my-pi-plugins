@@ -58,7 +58,7 @@ function appendLog(jobId: string, text: string): void {
  * 探测不到可用 bash 时为 null，回退 cmd.exe（shell: true）。探测只在进程生命周期内做一次。
  *
  * 探测策略（v2，修复「所有命令 ~110ms exit 1、零输出」故障）：
- * 候选 = 环境变量（SHELL/MSYS_BASH）→ Git for Windows 固定路径 → PiAbyss 自带 bash
+ * 候选 = 环境变量（SHELL/MSYS_BASH）→ Git for Windows 固定路径 → 桌面端自带 bash
  * → where bash 结果（剔除 WSL 壳）。每个候选必须真实跑通 `bash -c "echo ok"`（带超时）
  * 才被采用——文件存在 / where 命中一律不算数。曾有缺陷：where 输出里只排除了
  * System32\bash.exe，漏掉同为 WSL 壳别名的 WindowsApps\bash.exe，导致命中一个
@@ -80,7 +80,7 @@ export function parseWhereBash(raw: string): string[] {
 }
 
 /** 收集 Windows bash 候选（按优先级，已去重、不验证）：
- * 环境变量 SHELL / MSYS_BASH → Git for Windows 固定路径 → PiAbyss 自带 bash。 */
+ * 环境变量 SHELL / MSYS_BASH → Git for Windows 固定路径 → 桌面端自带 bash。 */
 export function collectBashCandidates(env: NodeJS.ProcessEnv): string[] {
 	const candidates: string[] = [];
 	for (const v of [env.SHELL, env.MSYS_BASH]) {
@@ -93,7 +93,12 @@ export function collectBashCandidates(env: NodeJS.ProcessEnv): string[] {
 		"C:\\Program Files\\Git\\usr\\bin\\bash.exe",
 	];
 	const local = typeof env.LOCALAPPDATA === "string" ? env.LOCALAPPDATA.trim() : "";
-	if (local) fixed.push(path.join(local, "PiAbyss", "resources", "git", "bin", "bash.exe"));
+	if (local) {
+		// 桌面端（Electron 应用）自带便携 Git：遍历已知应用目录名，命中即用。
+		for (const appDir of ["PiAbyss", "PiDeck", "com.nick12138.pideck", "com.skitre.pideck"]) {
+			fixed.push(path.join(local, appDir, "resources", "git", "bin", "bash.exe"));
+		}
+	}
 	candidates.push(...fixed);
 	return [...new Set(candidates)];
 }

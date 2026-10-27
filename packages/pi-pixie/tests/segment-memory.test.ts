@@ -45,7 +45,7 @@ function makeTmp(prefix: string): string {
   return dir;
 }
 
-/** 空的 agentDir（没有 piabyss/context.json，也没有 sessions 目录）。 */
+/** 空的 agentDir（没有 context.json，也没有 sessions 目录）。 */
 const makeAgentDir = (): string => makeTmp("pixie-agentdir-");
 
 function makeSessionDirWithPrevious(): { dir: string; current: string } {
@@ -93,7 +93,7 @@ afterEach(() => {
   else process.env[PIXIE_WORKSPACE_ENV] = savedWorkspace;
   if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-  delete process.env.PIABYSS_PIXIE_RESIDENT;
+  delete process.env.PI_PIXIE_RESIDENT;
 });
 
 afterAll(() => {
@@ -182,14 +182,14 @@ describe("pixie segment memory injection", () => {
     mkdirSync(join(agentDir, "piabyss", "pixie"), { recursive: true });
     writeFileSync(
       join(agentDir, "piabyss", "pixie", "context.json"),
-      JSON.stringify({ version: 1, workspaces: ["D:\\我的项目\\PiAbyss", "D:\\我的项目\\my-pi-plugins"], updatedAt: 1 }),
+      JSON.stringify({ version: 1, workspaces: ["D:\\我的项目\\示例项目", "D:\\我的项目\\my-pi-plugins"], updatedAt: 1 }),
       "utf8",
     );
     const preamble = buildPixieContextPreamble(agentDir);
-    expect(preamble).toContain("已知的 PiAbyss 工作区：");
-    expect(preamble).toContain("- D:\\我的项目\\PiAbyss");
+    expect(preamble).toContain("已知的工作区：");
+    expect(preamble).toContain("- D:\\我的项目\\示例项目");
     expect(preamble).toContain("- D:\\我的项目\\my-pi-plugins");
-    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\PiAbyss", "D:\\我的项目\\my-pi-plugins"]);
+    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\示例项目", "D:\\我的项目\\my-pi-plugins"]);
   });
 
   it("没有 context.json 时扫 sessions 目录兜底，按最新会话倒序取前 5 个", () => {
@@ -202,8 +202,8 @@ describe("pixie segment memory injection", () => {
     };
     seed("--C--Users-example--", "2026-10-01T09-00-00-000Z");
     seed("--D--我的项目--", "2026-10-02T09-00-00-000Z");
-    seed("--D--我的项目-PiAbyss--", "2026-10-03T09-00-00-000Z");
-    seed("--D--我的项目-PiAbyss-packages--", "2026-10-04T09-00-00-000Z");
+    seed("--D--我的项目-示例项目--", "2026-10-03T09-00-00-000Z");
+    seed("--D--我的项目-示例项目-packages--", "2026-10-04T09-00-00-000Z");
     seed("--D--我的项目-SnipTranslate--", "2026-10-05T09-00-00-000Z");
     seed("--D--我的项目-kuai3--", "2026-10-06T09-00-00-000Z");
     // 最新但是脏形态（嵌套编码）：必须被丢弃，不能挤掉正常工作区。
@@ -216,8 +216,8 @@ describe("pixie segment memory injection", () => {
     expect(workspaces).toEqual([
       "D:\\我的项目\\kuai3",
       "D:\\我的项目\\SnipTranslate",
-      "D:\\我的项目\\PiAbyss\\packages",
-      "D:\\我的项目\\PiAbyss",
+      "D:\\我的项目\\示例项目\\packages",
+      "D:\\我的项目\\示例项目",
       "D:\\我的项目",
     ]);
     expect(buildPixieContextPreamble(agentDir)).toContain("- D:\\我的项目\\kuai3");
@@ -247,25 +247,25 @@ describe("pixie segment memory injection", () => {
     const agentDir = makeAgentDir();
     mkdirSync(join(agentDir, "piabyss", "pixie"), { recursive: true });
     const contextPath = join(agentDir, "piabyss", "pixie", "context.json");
-    mkdirSync(join(agentDir, "sessions", "--D--我的项目-PiAbyss--"), { recursive: true });
-    writeFileSync(join(agentDir, "sessions", "--D--我的项目-PiAbyss--", "2026-10-03T09-00-00-000Z_id.jsonl"), "{}\n", "utf8");
+    mkdirSync(join(agentDir, "sessions", "--D--我的项目-示例项目--"), { recursive: true });
+    writeFileSync(join(agentDir, "sessions", "--D--我的项目-示例项目--", "2026-10-03T09-00-00-000Z_id.jsonl"), "{}\n", "utf8");
 
     writeFileSync(contextPath, "not json", "utf8");
-    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\PiAbyss"]);
+    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\示例项目"]);
 
     writeFileSync(contextPath, JSON.stringify({ version: 1, workspaces: [] }), "utf8");
-    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\PiAbyss"]);
+    expect(knownWorkspaces(agentDir)).toEqual(["D:\\我的项目\\示例项目"]);
 
     // 空 agentDir：既无 context.json 也无 sessions → 契约里干脆不写这一行。
     const empty = makeAgentDir();
     const preamble = buildPixieContextPreamble(empty);
     expect(preamble).toContain("</pixie-context>");
-    expect(preamble).not.toContain("已知的 PiAbyss 工作区");
+    expect(preamble).not.toContain("已知的工作区");
   });
 
   it("会话目录名反解：正常形态还原、脏形态丢弃", () => {
     expect(decodeSessionDirName("--C--Users-example--")).toBe("C:\\Users\\example");
-    expect(decodeSessionDirName("--D--我的项目-PiAbyss--")).toBe("D:\\我的项目\\PiAbyss");
+    expect(decodeSessionDirName("--D--我的项目-示例项目--")).toBe("D:\\我的项目\\示例项目");
     expect(decodeSessionDirName("--C--Users-liu-.pi-agent-sessions---C--Users-liu-.pi-agent-pideck-DefaultProject----")).toBeNull();
     expect(decodeSessionDirName("--D--我的项目-OKXBot--")).toBe("D:\\我的项目\\OKXBot");
     // 已知局限：真实路径里的连字符与分隔符编码后无法区分，只能按分隔符还原。

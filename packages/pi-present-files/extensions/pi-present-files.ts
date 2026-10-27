@@ -1,13 +1,13 @@
 /**
- * piabyss-present-files — PiAbyss 内置结果文件声明工具的外移插件。
+ * pi-present-files — 桌面宿主内置结果文件声明工具的外移插件。
  *
- * Agent 在回合结尾调用 `piabyss_present_files`，声明本轮真正交付给用户的
+ * Agent 在回合结尾调用 `present_files`，声明本轮真正交付给用户的
  * 结果文件（报告、生成的文档、改过的 PDF/Word 等）。桌面端据此在助手结尾
  * 报告下渲染可点击的文件胶囊：pdf / word / excel 走系统默认程序打开，
  * markdown 与代码文件在右侧 Dock 里以「一文件一标签」的内置预览打开。
  *
  * 纯声明式：不落盘、不改状态，声明随会话历史里的 tool 块一起持久化，会话
- * 重放后胶囊仍可还原。工具名与参数结构必须与 PiAbyss 内置实现保持一致，
+ * 重放后胶囊仍可还原。工具名与参数结构必须与桌面宿主内置实现保持一致，
  * 否则桌面前端无法从会话历史还原文件胶囊。
  */
 
@@ -23,7 +23,7 @@ import {
   normalizeDeclaredFile,
 } from "../src/present-files.js";
 
-const TOOL_NAME = "piabyss_present_files";
+const TOOL_NAME = "present_files";
 
 const ParamsSchema = Type.Object({
   files: Type.Array(
@@ -45,16 +45,16 @@ const ParamsSchema = Type.Object({
 type PresentFilesParams = Static<typeof ParamsSchema>;
 
 const TOOL_DESCRIPTION =
-  "把本轮交付给用户的文件登记成 PiAbyss 报告下方的文件芯片（一轮一次，放在收尾前）。只登记真实交付物，不登记中间文件、临时文件或日志。PDF/Office 点击后用系统默认应用打开，md/代码在右侧预览打开。";
+  "把本轮交付给用户的文件登记成 报告下方的文件芯片（一轮一次，放在收尾前）。只登记真实交付物，不登记中间文件、临时文件或日志。PDF/Office 点击后用系统默认应用打开，md/代码在右侧预览打开。";
 
 export function buildPresentFilesTool(
   getCwd?: (ctx?: { sessionManager?: { getCwd(): string } }) => string | null,
 ) {
   return defineTool({
     name: TOOL_NAME,
-    label: "PiAbyss delivered files",
+    label: "Delivered files",
     description: TOOL_DESCRIPTION,
-    promptSnippet: "登记本轮交付文件（PiAbyss 芯片）",
+    promptSnippet: "登记本轮交付文件（文件芯片）",
     parameters: ParamsSchema,
     async execute(_toolCallId, params: PresentFilesParams, _signal, _onUpdate, ctx) {
       try {

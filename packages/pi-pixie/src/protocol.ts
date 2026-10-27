@@ -1,7 +1,7 @@
 /**
  * Pixie 环回控制面的响应映射与工具文本格式。
  *
- * 文本格式与 PiAbyss 内置实现（packages/pi-host/src/pixie-tool.ts）逐字节一致：
+ * 文本格式与桌面宿主内置实现（pixie-tool.ts）逐字节一致：
  * - dispatch 成功：`已派发到工作区会话（sessionId: …）。等待其回调 pixie_report 后再向用户转述。`
  * - dispatch 失败：`委派失败：…`（isError）
  * - report 成功：`已回调小精灵。…`

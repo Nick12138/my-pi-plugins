@@ -1,6 +1,6 @@
 # pi-reimburse · 报销管家 💰
 
-个人报销管理 + 云同步插件（纯 pi 插件，不依赖 PiAbyss）。帮用户登记和追踪
+个人报销管理 + 云同步插件（纯 pi 插件，不依赖桌面宿主）。帮用户登记和追踪
 个人垫付的报销单——什么时候、什么项目、花了多少钱、票据齐不齐、报销到账
 没有。数据落盘在 `~/.pi/reimburse/`，跨会话、跨工作区共享同一份个人数据。
 
@@ -64,7 +64,7 @@ reimburse_sync({
 - `status`：配置来源 + 最近同步状态 + 数据概况。
 
 **配置不进工具**：R2 密钥与 autoSync 由插件设置页「报销管家」的配置表单
-管理（与 PiAbyss 备忘录同一模式），写入以下环境变量（扩展与其同进程，
+管理（与桌面端备忘录插件 memo 同一模式），写入以下环境变量（扩展与其同进程，
 实时生效）：
 
 | 环境变量 | 说明 |
@@ -81,13 +81,13 @@ reimburse_sync({
 - `autoSync` 开启时，`reimburse` 每次成功变更后 5 秒防抖后台同步；进程启动
   10 秒后还会做一次启动同步（每次进程只一次）。
 
-## 云同步设计（与 PiAbyss 备忘录同一套策略）
+## 云同步设计（与 memo 插件同一套策略）
 
 - **后端**：Cloudflare R2（S3 兼容），对象键固定前缀 `reimburse/`：
   - `reimburse/claims.json`（全量报销单 + 替票，单文件）
   - `reimburse/images/claims/<claimId>/<fileName>`
   - `reimburse/images/receipts/<receiptId>/<fileName>`
-- **R2 客户端**：`node:crypto` 自实现 SigV4（与 PiAbyss Host 的 r2-client.ts
+- **R2 客户端**：`node:crypto` 自实现 SigV4（与桌面宿主的 r2-client.ts
   同源移植），不引 AWS SDK；fetch 可注入便于测试。
 - **策略**：逐条记录 LWW（`updatedAt` 新者胜，打平保本地）+ 删除墓碑。
   报销单与替票各自独立合并；删除后另一台设备的更新（updatedAt 更新）会

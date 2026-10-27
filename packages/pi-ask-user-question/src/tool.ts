@@ -1,5 +1,5 @@
 /**
- * `ask_user_question` 工具定义 —— 照搬自 PiAbyss `ask-user-question-tool.ts`。
+ * `ask_user_question` 工具定义 —— 与桌面宿主内置实现同源的 `ask-user-question-tool.ts`。
  */
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatAnswers } from "./answers.js";

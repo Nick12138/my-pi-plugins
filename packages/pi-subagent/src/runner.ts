@@ -21,7 +21,7 @@ export interface SpawnOptions {
 	lastError?: string;
 	/** 项目信任：--approve / --no-approve */
 	projectTrusted?: boolean;
-	/** 用户追加消息（PiAbyss 子代理会话视图输入框）：终态续跑时作为新指令
+	/** 用户追加消息（桌面端子代理会话视图输入框）：终态续跑时作为新指令
 	 * 写入 prompt，优先于恢复模板。 */
 	message?: string;
 }
@@ -141,7 +141,7 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 		// 原生可执行（pi.exe 等）
 		return { command: process.execPath, args };
 	}
-	// 解释器环境但入口不是 CLI（如 PiAbyss/PiDeck 的 host main.js）：优先 PATH 上
+	// 解释器环境但入口不是 CLI（如 桌面端/PiDeck 的 host main.js）：优先 PATH 上
 	// 真实可 spawn 的 pi（Linux/macOS 的正常形态；Windows 下通常命不中，见上）
 	if (hasPiCommand()) return { command: "pi", args };
 	// 兜底：包内 cli.js，用当前解释器跑（Windows 上这是唯一可靠路径）
