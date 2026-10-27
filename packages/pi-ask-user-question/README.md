@@ -14,8 +14,10 @@
 - 单选题：每道题压成一次 `ctx.ui.select(title, values, { piabyss: { optionDetails, allowFreeform: true } })`，
   选项的 `description` / `preview` 经 `piabyss.optionDetails` 元数据一并送出，
   桌面端复用内联/弹窗卡片渲染等宽预览面板。
-  注意：`piabyss` 元数据是 PiAbyss 定制扩展，仅在 PiAbyss Host 下生效；
-  纯 pi 运行时会静默忽略（下拉可用，但 optionDetails/预览与 allowFreeform 不生效）。
+  注意：`piabyss` 元数据是宿主侧的定制扩展，只在两个宿主里生效 —— **PiAbyss**
+  与 **Abyss AI**（`abyss-ai` 的 Host 只把带这份元数据的对话框送到页面，见
+  `apps/host/src/extension-ui.ts`）。纯 pi 运行时会静默忽略
+  （下拉可用，但 optionDetails/预览与 allowFreeform 不生效）。
 - 重复标签自动去重追加 `(2)`，保证「选项串 → 下标」映射唯一。
 - 选中哨兵行 `Type something.` 会追问一次自由文本 `ctx.ui.input`；
   桌面端 `allowFreeform` 直接提交的自定义文本也按自定义答案处理。
@@ -35,6 +37,12 @@
   后四个供桌面画题号进度、渲染 header chip，并在回退重问时预选上次答案。
 - 取消语义：任何一题取消即整体 `cancelled: true`，已作答的题目保留在结果里
   （回退后再取消，不会带上用户已经退回去的那几题）。
+- **宿主没有回传通道 = 立刻取消**：没有 `uiContext` 的宿主（例如接 SDK 但没传
+  `uiContext` 的桥）里，`ctx.ui.select()` 会立刻 resolve `undefined`，整份问卷
+  因此被当成「用户取消」。接 SDK 的宿主想要能作答，必须实现
+  `docs/rpc-extension-ui.md` 那套 `extension_ui_request` / `extension_ui_response`
+  （Abyss AI 的做法：只有带 `piabyss` 元数据的对话框才走页面，`confirm()` 永远
+  直接 `false`，不恢复审批流）。
 
 ## 开关
 
