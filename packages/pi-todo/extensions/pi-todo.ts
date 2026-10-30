@@ -46,13 +46,13 @@ const TodoParamsSchema = Type.Object({
         status: Type.Optional(
           Type.Union(
             [Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
-            { description: "初始状态，默认 pending" },
+            { description: "初始状态，默认 pending。completed/deleted 只能沿用列表里已有的状态，不能靠 plan 新增完成或删除" },
           ),
         ),
       }),
       {
         description:
-          "一次写全的任务表（plan 必填；空数组=清空）。改计划时整表重发并保留各任务当前 status，别逐条 update。",
+          "一次写全的任务表（plan 必填；空数组=清空）。plan 只用于规划/重排，完成状态必须逐个 update，不能批量提交。",
       },
     ),
   ),
@@ -63,7 +63,7 @@ const TodoParamsSchema = Type.Object({
   status: Type.Optional(
     Type.Union(
       [Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")],
-      { description: "任务状态（update 用）" },
+      { description: "任务状态（update 用）；每完成一个任务就单独调用一次，不要批量勾" },
     ),
   ),
   id: Type.Optional(Type.Number({ description: "任务 id（update/get/delete 必填）" })),
@@ -187,11 +187,13 @@ export default function (pi: ExtensionAPI) {
     name: TODO_TOOL_NAME,
     label: "Todo",
     description:
-      "维护多步任务清单（≥3 步）。plan 一次写完整表（推荐起点），另有 create/update/list/get/delete/clear；清单存进会话并由 PiDeck 显示。",
+      "维护多步任务清单（≥3 步）。plan 一次写完整表（推荐起点），另有 create/update/list/get/delete/clear；清单存进会话并由 PiDeck 显示。每完成一个任务就用 update 把它置为 completed（一次一个），不要用 plan 批量提交完成状态。",
     promptSnippet: "多步任务清单（plan/update/list）",
     promptGuidelines: [
       "≥3 步的活开工时用 todo plan 一次写全表（每步具体可验证，通常 3-7 条，别合成一个大任务）；1-2 步的活不用 todo。",
-      "同一时刻只留一个 in_progress，做完且验证通过后立刻标 completed；未完成或失败的不要标完成。",
+      "同一时刻只留一个 in_progress：要开始某个任务前先 update 它为 in_progress。",
+      "每做完并验证一个任务，立刻 update 这个任务 status=\"completed\"，再开始下一个。不要攒到最后用一次 plan 批量全勾——plan 也不允许把未完成的任务置为 completed，前端靠每次调用的快照逐条勾选。",
+      "做完的活用 update 逐条勾掉；需要作废/取消的才用 delete（delete 不是完成，complete 也不是删除）。",
     ],
     parameters: TodoParamsSchema,
     // Mutations must not run concurrently: each call consumes the previous

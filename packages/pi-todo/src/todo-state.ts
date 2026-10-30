@@ -107,6 +107,28 @@ function nonBlank(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** Key for statuses that may be carried over across a plan write. */
+function carryKey(status: TaskStatus, subject: string): string {
+  return `${status}\u0000${subject.trim()}`;
+}
+
+/**
+ * `plan` is a planning write, not a completion write. Letting it flip tasks to
+ * completed would batch every tick into one snapshot, so the frontend only ever
+ * sees the list checked off at the end. Carry-over keeps replanning cheap while
+ * forcing each real completion through a single-task `update` call.
+ */
+function planCompletionError(index: number, status: "completed" | "deleted"): string {
+  if (status === "deleted") {
+    return `tasks[${index}]: plan cannot delete a task. Use delete {id} instead (one task per call).`;
+  }
+  return (
+    `tasks[${index}]: plan cannot mark an unfinished task as completed. Resend plan without that status, ` +
+    `then call update {id, status:"completed"} for each task the moment it is verified (one task per call) ` +
+    `so every completion lands in its own snapshot and the UI ticks it off immediately.`
+  );
+}
+
 /** Apply one tool operation without mutating the input state. */
 export function applyMutation(state: TodoState, params: TodoParams): MutationResult {
   switch (params.action) {
@@ -133,6 +155,13 @@ export function applyMutation(state: TodoState, params: TodoParams): MutationRes
       // 1..N, so planning a full multi-step list costs a single tool call.
       if (!Array.isArray(params.tasks)) return error(state, "tasks array required for plan");
 
+      const carried = new Set<string>();
+      for (const task of state.tasks) {
+        if (task.status === "completed" || task.status === "deleted") {
+          carried.add(carryKey(task.status, task.subject));
+        }
+      }
+
       const tasks: Task[] = [];
       for (let index = 0; index < params.tasks.length; index++) {
         const raw: unknown = params.tasks[index];
@@ -141,6 +170,12 @@ export function applyMutation(state: TodoState, params: TodoParams): MutationRes
         if (!subject) return error(state, `tasks[${index}] requires a non-blank subject`);
         if (item.status !== undefined && !isTaskStatus(item.status)) {
           return error(state, `tasks[${index}] has invalid status: ${String(item.status)}`);
+        }
+        if (
+          (item.status === "completed" || item.status === "deleted") &&
+          !carried.has(carryKey(item.status, subject))
+        ) {
+          return error(state, planCompletionError(index, item.status));
         }
 
         const task: Task = { id: index + 1, subject, status: item.status ?? "pending" };
@@ -248,17 +283,45 @@ function formatTaskLines(state: TodoState, includeDeleted = false): string {
     .join("\n");
 }
 
+function startHint(task: Task): string {
+  return `Next: update {id: ${task.id}, status: "in_progress"} (${task.subject})`;
+}
+
 /**
- * Soft nudge for plan shapes that add bookkeeping without planning value.
- * Fires on create/plan when the visible list is exactly one still-pending
- * task, so the model gets a correction signal instead of silently keeping a
- * single umbrella task.
+ * Result-text nudges that keep the agent on the per-task loop. Two things go
+ * wrong without them: a single umbrella task gets planned instead of steps, and
+ * completions get deferred to one batch write at the end, which the task UI can
+ * only render as "everything ticked at once".
  */
 export function operationHint(operation: TodoOperation, state: TodoState): string | undefined {
-  if (operation.kind !== "create" && operation.kind !== "plan") return undefined;
   const visible = visibleTasks(state);
-  if (visible.length !== 1 || visible[0]!.status !== "pending") return undefined;
-  return "Tip: a single-task list adds tracking overhead without planning value. For multi-step work, call plan once with one task per step (typically 3-7); for simple work, skip todo.";
+
+  if (operation.kind === "create" || operation.kind === "plan") {
+    if (visible.length === 1 && visible[0]!.status === "pending") {
+      return "Tip: a single-task list adds tracking overhead without planning value. For multi-step work, call plan once with one task per step (typically 3-7); for simple work, skip todo.";
+    }
+    const startable = visible.find((task) => task.status !== "completed");
+    if (operation.kind === "plan" && visible.length > 1 && startable) {
+      return (
+        `${startHint(startable)} when you start it, then update it to "completed" the moment it is verified. ` +
+        `One task per call, one call per task: never batch completions into a later plan.`
+      );
+    }
+    return undefined;
+  }
+
+  if (operation.kind === "update" && operation.to === "completed" && operation.from !== "completed") {
+    const remaining = visible.filter((task) => task.status === "pending" || task.status === "in_progress");
+    if (remaining.length === 0) return undefined;
+    const next = remaining.find((task) => task.status === "pending") ?? remaining[0]!;
+    const step =
+      next.status === "in_progress"
+        ? `Next: #${next.id} (${next.subject}) is still in_progress — complete it as soon as it is verified.`
+        : `${startHint(next)}. Complete it right after it is verified.`;
+    return step;
+  }
+
+  return undefined;
 }
 
 export function formatOperation(operation: TodoOperation, state: TodoState, params: TodoParams): string {

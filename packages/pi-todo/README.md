@@ -7,6 +7,8 @@
 - 任务完全由 AI Agent 通过 `todo` 工具维护。
 - 提供 `plan` 批量 action：一次调用写入整个任务列表（对齐模型“todo = 整表规划”的既有习惯），让细粒度拆分成为成本最低的行为。
 - 单任务伞计划会被软纠正：create/plan 后列表只剩一个 pending 任务时，结果文本附加 Tip 提示拆分或不用 todo。
+- 完成状态必须逐条提交：`plan` 只做规划/重排，不能把未完成的任务直接置为 `completed`（只能沿用列表里已存在的完成/删除状态）；一个任务做完就单独 `update` 它。这样每次调用都产生一个只勾掉一条的快照，PiDeck 才能在任务真正完成时勾选，而不是最后一次性全勾。
+- 结果文本带下一步提示：多任务 plan 后指向首个任务的 `update`，某个任务完成后再指向下一个待办任务的 `update`，把“逐条循环”变成默认路径。
 - 每次调用返回完整的 `details.tasks` 和 `details.nextId` 快照。
 - session reload、compaction、tree navigation 后从当前 branch 恢复任务。
 - 按 session 隔离任务状态，避免并行 session 相互覆盖。
@@ -29,7 +31,7 @@ todo({
 
 关键 action：
 
-- `plan`：一次调用写入完整列表（`tasks` 数组，自动分配 id 1..N，空数组 = 清空）。修改计划时重发完整列表并保留各任务当前 `status`；`create` 仅用于追加单个任务。
+- `plan`：一次调用写入完整列表（`tasks` 数组，自动分配 id 1..N，空数组 = 清空）。用于开工规划和结构性重排；改计划时整表重发，`completed`/`deleted` 只能沿用当前列表里同 subject 任务的同名状态。想把某个任务勾掉，只能用 `update { id, status: "completed" }`（一次一个任务）；作废用 `delete { id }`。`create` 仅用于追加单个任务。
 - 其余 action 语义不变。
 
 任务字段：

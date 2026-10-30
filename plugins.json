@@ -331,9 +331,9 @@
     {
       "id": "pi-todo",
       "name": "任务列表",
-      "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；不包含终端 UI 和额外配置。",
+      "description": "轻量级 Agent 任务状态工具：任务快照持久化到 Pi session，供 PiDeck 等前端读取；完成状态必须逐个 update 提交，前端逐条勾选而不是最后一次性全勾；不包含终端 UI 和额外配置。",
       "icon": "📋",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Nick12138",
       "tags": [
         "todo",

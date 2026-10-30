@@ -70,8 +70,9 @@ equal(planned.state.nextId, 4, "plan next id");
 assert(formatOperation(planned.operation, planned.state, { action: "plan" }).startsWith("Planned 3 tasks:"), "plan summary");
 
 // plan replaces an existing list and preserves explicit statuses
+const doneFirst = apply(planned.state, { action: "update", id: 1, status: "completed" });
 const replanned = apply(
-  planned.state,
+  doneFirst,
   {
     action: "plan",
     tasks: [
@@ -83,8 +84,38 @@ const replanned = apply(
   },
 );
 equal(replanned.tasks.length, 4, "replan replaces list");
-equal(replanned.tasks[0]?.status, "completed", "replan keeps status");
+equal(replanned.tasks[0]?.status, "completed", "replan carries over completed status");
 equal(replanned.nextId, 5, "replan next id");
+
+// plan is not a completion write: it cannot flip unfinished tasks to completed/deleted
+const batchComplete = applyMutation(planned.state, {
+  action: "plan",
+  tasks: [
+    { subject: "Research auth requirements", status: "completed" },
+    { subject: "Implement login UI", status: "completed" },
+    { subject: "Wire the API" },
+  ],
+});
+equal(batchComplete.operation.kind, "error", "plan cannot complete tasks");
+if (batchComplete.operation.kind === "error") {
+  assert(batchComplete.operation.message.includes("update"), "plan completion error points at update");
+}
+jsonEqual(batchComplete.state, planned.state, "rejected plan keeps state");
+const batchDelete = applyMutation(planned.state, {
+  action: "plan",
+  tasks: [{ subject: "Research auth requirements", status: "deleted" }],
+});
+equal(batchDelete.operation.kind, "error", "plan cannot delete tasks");
+
+// completing one task nudges the next single-task update
+const firstDone = applyMutation(planned.state, { action: "update", id: 1, status: "completed" });
+const doneHint = operationHint(firstDone.operation, firstDone.state);
+assert(!!doneHint && doneHint.includes("id: 2"), "completion hint points at the next task");
+const allDone = apply(
+  apply(firstDone.state, { action: "update", id: 2, status: "completed" }),
+  { action: "update", id: 3, status: "completed" },
+);
+equal(operationHint({ kind: "update", id: 3, from: "pending", to: "completed", changed: true }, allDone), undefined, "no hint when the list is done");
 
 // plan with an empty array clears the list
 jsonEqual(apply(replanned, { action: "plan", tasks: [] }), EMPTY_STATE, "empty plan clears");

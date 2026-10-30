@@ -111,6 +111,45 @@ assert(
   "plan summary text",
 );
 assert(!((planned.content ?? [])[0] as { text?: string }).text!.includes("Tip:"), "no hint on a 3-task plan");
+assert(
+  ((planned.content ?? [])[0] as { text?: string }).text!.includes("id: 1"),
+  "multi-task plan nudges the first single-task update",
+);
+
+// completion must go through one update per task, never a batched plan write
+const planBatch = await todoTool.execute(
+  "call-plan-batch",
+  {
+    action: "plan",
+    tasks: [
+      { subject: "Research auth requirements", status: "completed" },
+      { subject: "Implement login UI", status: "completed" },
+      { subject: "Wire the API" },
+    ],
+  },
+  undefined,
+  undefined,
+  context,
+);
+const batchText = ((planBatch.content ?? [])[0] as { text?: string } | undefined)?.text ?? "";
+assert(batchText.includes("Error:"), "batched completion plan is rejected");
+jsonEqual(
+  planBatch.details.tasks.map((task) => (task as { status: string }).status),
+  ["pending", "pending", "pending"],
+  "rejected batch plan keeps the previous statuses",
+);
+
+// one completed task per call, each with its own snapshot, and a nudge to the next
+const tickOne = await todoTool.execute("call-tick-1", { action: "update", id: 1, status: "completed" }, undefined, undefined, context);
+jsonEqual(
+  tickOne.details.tasks.map((task) => (task as { status: string }).status),
+  ["completed", "pending", "pending"],
+  "incremental completion snapshot",
+);
+assert(
+  ((tickOne.content ?? [])[0] as { text?: string }).text!.includes("id: 2"),
+  "completion result points at the next task",
+);
 
 // a single-task plan gets a correction hint in the result text
 const singlePlan = await todoTool.execute(
