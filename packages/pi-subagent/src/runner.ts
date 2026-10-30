@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { RunResultData, RunTask } from "./types.ts";
 import { ensureRunDir, eventsPath, runDir, sessionDir, stderrPath } from "./store.ts";
 import { ENV_ORCHESTRATOR_SESSION_ID, channelDir } from "./supervisor-protocol.ts";
+import { splitProviderModel } from "./model-utils.ts";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -166,7 +167,17 @@ export function buildPiArgs(options: SpawnOptions): string[] {
 	// 注入子代理侧 supervisor 客户端扩展（contact_supervisor 工具，见 supervisor-client.ts）
 	const supervisorClient = path.join(MODULE_DIR, "supervisor-client.ts");
 	if (fs.existsSync(supervisorClient)) args.push("--extension", supervisorClient);
-	if (options.model) args.push("--model", options.model);
+	// 模型：`provider/id` 必须拆开、显式传 --provider。官方 --model 是模糊匹配（ID/名称），
+	// 不同 provider 可以有同名模型（本机多个 provider 都有 deepseek-v4.1-flash），只传整串
+	// provider/id 时 CLI 可能落到另一个 provider 上且静默无报错（实测子代理跑到 free、
+	// 主会话是 workbuddy）；只传裸 id 在多个 provider 同名时则直接报 ambiguous 失败。
+	// provider 段就是运行时 ctx.model.provider（本机现为数字 id，如 "13"），原样透传即可。
+	// **别把这段删成只传 --model**。切分失败（不含 / 或任一半为空）退回原行为，不传空字符串。
+	if (options.model) {
+		const split = splitProviderModel(options.model);
+		if (split) args.push("--provider", split.provider, "--model", split.modelId);
+		else args.push("--model", options.model);
+	}
 	if (options.thinking) args.push("--thinking", options.thinking);
 	if (options.projectTrusted === true) args.push("--approve");
 	else args.push("--no-approve");

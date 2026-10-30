@@ -21,6 +21,7 @@ import { startHttpServer } from "../src/http.ts";
 import { runSupervisorAction, startSupervisorPolling } from "../src/supervisor-channel.ts";
 import { channelDir, ensureSteerDirs, steerRequestPath, writeAtomicJson, type SteerRequest } from "../src/supervisor-protocol.ts";
 import { Notifier, enqueueUnnotified, type NotifyMessage } from "../src/notifier.ts";
+import { modelMismatchWarning } from "../src/model-utils.ts";
 import type { RunRecord, RunTask } from "../src/types.ts";
 import { DEFAULT_HTTP_PORT, DEFAULT_RETRY, MAX_RESUME_COUNT, STATUS_LABEL } from "../src/types.ts";
 
@@ -314,8 +315,10 @@ async function executeControl(
 		}
 		case "result": {
 			const result = readResult(runId);
+			// 实际模型可能与要求不一致（CLI 模糊匹配 / provider 撞车），显式告警
+			const mismatch = modelMismatchWarning(run.task.model, result?.model);
 			const body = result
-				? `「${run.task.title}」输出：\n\n${result.output || "(无输出)"}\n\n用法：${result.usage.turns} turns · ↑${result.usage.input} ↓${result.usage.output} · $${result.usage.cost.toFixed(4)}${result.model ? ` · ${result.model}` : ""}${result.errorMessage ? `\n错误：${result.errorMessage}` : ""}`
+				? `「${run.task.title}」输出：\n\n${result.output || "(无输出)"}\n\n用法：${result.usage.turns} turns · ↑${result.usage.input} ↓${result.usage.output} · $${result.usage.cost.toFixed(4)}${result.model ? ` · ${result.model}` : ""}${mismatch ? ` ${mismatch}` : ""}${result.errorMessage ? `\n错误：${result.errorMessage}` : ""}`
 				: `run ${runId} 尚未产生结果（状态：${STATUS_LABEL[run.status.status]}${operatorLabel(run.status.operator)}）。`;
 			return text(body);
 		}

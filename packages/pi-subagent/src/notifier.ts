@@ -13,6 +13,7 @@
  */
 import { readResult, readStatus, writeStatus } from "./store.ts";
 import { STATUS_LABEL } from "./types.ts";
+import { modelMismatchWarning } from "./model-utils.ts";
 import type { RunRecord } from "./types.ts";
 
 export const SUBAGENT_NOTIFY_MESSAGE_TYPE = "subagent-notify";
@@ -40,7 +41,9 @@ export function formatRunNotice(run: RunRecord, detail: boolean): string {
 	const duration = status.startedAt && status.finishedAt ? `${Math.round((status.finishedAt - status.startedAt) / 1000)}s` : "-";
 	const model = result?.model ?? task.model ?? "继承";
 	const who = operatorLabel(status.operator);
-	const meta = `（${task.agent} · ${duration} · ${model}${who}）`;
+	// 实际运行的模型可能与要求的不一致（CLI 模糊匹配 / provider 撞车），显式告警
+	const mismatch = modelMismatchWarning(task.model, result?.model);
+	const meta = `（${task.agent} · ${duration} · ${model}${who}）${mismatch ? ` ${mismatch}` : ""}`;
 	const lines = [`【子代理通知】「${task.title}」${label}${meta}`];
 	if (status.errorMessage) lines.push(`失败原因：${status.errorMessage}`);
 
