@@ -1,0 +1,18 @@
+{
+  "name": "pi-readall",
+  "version": "0.1.3",
+  "description": "ReadAll: unified reading layer for pi — OCR-first document & image reading. WPS OCR as the primary OCR engine, vision-model queue as fallback, anything in / text out. Tool: readall.",
+  "keywords": ["pi-package", "pi-extension", "ocr", "vision", "markdown", "document"],
+  "license": "MIT",
+  "author": "Nick12138",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
